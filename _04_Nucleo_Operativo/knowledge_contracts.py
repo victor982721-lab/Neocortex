@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from . import knowledge_contract_payloads as _contract_payloads
+from . import knowledge_contract_telemetry as _contract_telemetry
 from .knowledge_contract_validation import (
     optional_text as _contract_optional_text_impl,
     required_text as _contract_required_text_impl,
@@ -138,24 +139,13 @@ class KnowledgeTelemetryClock:
     signature: str = KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE
 
     def __post_init__(self) -> None:
-        if not callable(self.read_ns):
-            raise ValueError("Knowledge telemetry clock must be callable")
-        if not isinstance(self.signature, str):
-            raise ValueError("Knowledge telemetry clock signature must be text")
-        _required_text("Knowledge telemetry clock signature", self.signature)
-        if self.signature != self.signature.strip():
-            raise ValueError(
-                "Knowledge telemetry clock signature cannot have outer whitespace"
-            )
-        if len(self.signature) > MAX_KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE_CHARS:
-            raise ValueError("Knowledge telemetry clock signature is too long")
-        if (
-            self.signature == KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE
-            and self.read_ns is not time.perf_counter_ns
-        ):
-            raise ValueError(
-                "python-perf-counter-ns-v1 is reserved for time.perf_counter_ns"
-            )
+        _contract_telemetry.validate_telemetry_clock(
+            self,
+            required_text_fn=_required_text,
+            default_signature=KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE,
+            max_signature_chars=MAX_KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE_CHARS,
+            perf_counter_ns=time.perf_counter_ns,
+        )
 
     @classmethod
     def from_legacy(
@@ -164,16 +154,19 @@ class KnowledgeTelemetryClock:
     ) -> KnowledgeTelemetryClock:
         """Preserve callable injection without claiming an unidentified domain."""
 
-        if clock_ns is None or clock_ns is time.perf_counter_ns:
-            return cls()
-        return cls(
+        return _contract_telemetry.telemetry_clock_from_legacy(
+            cls,
             clock_ns,
-            KNOWLEDGE_TELEMETRY_UNIDENTIFIED_CLOCK_SIGNATURE,
+            perf_counter_ns=time.perf_counter_ns,
+            unidentified_signature=KNOWLEDGE_TELEMETRY_UNIDENTIFIED_CLOCK_SIGNATURE,
         )
 
     @property
     def identified(self) -> bool:
-        return self.signature != KNOWLEDGE_TELEMETRY_UNIDENTIFIED_CLOCK_SIGNATURE
+        return _contract_telemetry.telemetry_clock_identified(
+            self.signature,
+            unidentified_signature=KNOWLEDGE_TELEMETRY_UNIDENTIFIED_CLOCK_SIGNATURE,
+        )
 
     def compatible_with(
         self,
@@ -181,13 +174,15 @@ class KnowledgeTelemetryClock:
         *,
         trust_unidentified: bool = False,
     ) -> bool:
-        return self.signature == signature and (self.identified or trust_unidentified)
+        return _contract_telemetry.telemetry_clock_compatible(
+            self.signature,
+            signature,
+            identified=self.identified,
+            trust_unidentified=trust_unidentified,
+        )
 
     def now_ns(self) -> int:
-        value = self.read_ns()
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise RuntimeError("Knowledge telemetry clock returned an invalid value")
-        return value
+        return _contract_telemetry.telemetry_clock_now_ns(self.read_ns)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,85 +198,18 @@ class KnowledgePhaseTiming:
     executed: bool = True
 
     def __post_init__(self) -> None:
-        if not isinstance(self.phase, KnowledgeTimingPhase):
-            raise ValueError("Knowledge timing phase is invalid")
-        if (
-            isinstance(self.duration_ns, bool)
-            or not isinstance(self.duration_ns, int)
-            or self.duration_ns < 0
-        ):
-            raise ValueError("Knowledge timing duration_ns cannot be negative")
-        if (
-            isinstance(self.service_attempt, bool)
-            or not isinstance(self.service_attempt, int)
-            or not 0 <= self.service_attempt <= 2
-        ):
-            raise ValueError(
-                "Knowledge timing service_attempt must be zero, one or two"
-            )
-        if not isinstance(self.executed, bool):
-            raise ValueError("Knowledge timing executed must be boolean")
-        if self.owner is not None and not isinstance(self.owner, str):
-            raise ValueError("Knowledge timing owner must be text when present")
-        if self.snapshot_id is not None and not isinstance(self.snapshot_id, str):
-            raise ValueError("Knowledge timing snapshot_id must be text when present")
-        _optional_text("Knowledge timing owner", self.owner)
-        _optional_text("Knowledge timing snapshot_id", self.snapshot_id)
-        if self.owner is not None and len(self.owner) > (
-            MAX_KNOWLEDGE_TELEMETRY_NAME_CHARS
-        ):
-            raise ValueError("Knowledge timing owner is too long")
-        if self.snapshot_id is not None and len(self.snapshot_id) > (
-            MAX_KNOWLEDGE_TELEMETRY_SNAPSHOT_ID_CHARS
-        ):
-            raise ValueError("Knowledge timing snapshot_id is too long")
-        if not isinstance(self.ranking_names, tuple):
-            raise ValueError("Knowledge timing ranking_names must be a tuple")
-        if len(self.ranking_names) > (MAX_KNOWLEDGE_TELEMETRY_RANKINGS_PER_PHASE):
-            raise ValueError("Knowledge timing has too many ranking names")
-        for ranking_name in self.ranking_names:
-            if not isinstance(ranking_name, str):
-                raise ValueError("Knowledge timing ranking name must be text")
-            _required_text("Knowledge timing ranking name", ranking_name)
-            if len(ranking_name) > MAX_KNOWLEDGE_TELEMETRY_NAME_CHARS:
-                raise ValueError("Knowledge timing ranking name is too long")
-        if sum(len(ranking_name) for ranking_name in self.ranking_names) > (
-            MAX_KNOWLEDGE_TELEMETRY_RANKING_CHARS_PER_PHASE
-        ):
-            raise ValueError("Knowledge timing ranking names are too large")
-        if len(set(self.ranking_names)) != len(self.ranking_names):
-            raise ValueError("Knowledge timing ranking names must be unique")
-
-        attempt_phases = {
-            KnowledgeTimingPhase.SNAPSHOT_BEFORE,
-            KnowledgeTimingPhase.OWNER_RANKING,
-            KnowledgeTimingPhase.FUSION,
-            KnowledgeTimingPhase.BROKER,
-            KnowledgeTimingPhase.SNAPSHOT_AFTER,
-        }
-        if self.phase in attempt_phases and self.service_attempt not in {1, 2}:
-            raise ValueError(
-                "attempt-scoped Knowledge timing requires attempt one or two"
-            )
-        if self.phase not in attempt_phases and self.service_attempt != 0:
-            raise ValueError("operation-scoped Knowledge timing must use attempt zero")
-        if self.phase is KnowledgeTimingPhase.OWNER_RANKING:
-            if self.owner is None or not self.ranking_names:
-                raise ValueError(
-                    "owner_ranking timing requires owner and ranking names"
-                )
-        elif self.owner is not None or self.ranking_names:
-            raise ValueError(
-                "only owner_ranking timing may identify owners or rankings"
-            )
-        if self.phase in {
-            KnowledgeTimingPhase.SNAPSHOT_BEFORE,
-            KnowledgeTimingPhase.SNAPSHOT_AFTER,
-        }:
-            if self.snapshot_id is None:
-                raise ValueError("snapshot timing requires snapshot_id")
-        elif self.snapshot_id is not None:
-            raise ValueError("only snapshot timing may identify a snapshot")
+        _contract_telemetry.validate_phase_timing(
+            self,
+            timing_phase_type=KnowledgeTimingPhase,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+            max_name_chars=MAX_KNOWLEDGE_TELEMETRY_NAME_CHARS,
+            max_snapshot_id_chars=MAX_KNOWLEDGE_TELEMETRY_SNAPSHOT_ID_CHARS,
+            max_rankings_per_phase=MAX_KNOWLEDGE_TELEMETRY_RANKINGS_PER_PHASE,
+            max_ranking_chars_per_phase=(
+                MAX_KNOWLEDGE_TELEMETRY_RANKING_CHARS_PER_PHASE
+            ),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.knowledge_phase_timing_payload(self)
@@ -297,37 +225,15 @@ class KnowledgeQueryTelemetry:
     clock_signature: str = KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE
 
     def __post_init__(self) -> None:
-        if not isinstance(self.operation, KnowledgeTelemetryOperation):
-            raise ValueError("Knowledge telemetry operation is invalid")
-        if (
-            isinstance(self.total_duration_ns, bool)
-            or not isinstance(self.total_duration_ns, int)
-            or self.total_duration_ns < 0
-        ):
-            raise ValueError("Knowledge telemetry total_duration_ns cannot be negative")
-        if not isinstance(self.clock_signature, str):
-            raise ValueError("Knowledge telemetry clock signature must be text")
-        _required_text("Knowledge telemetry clock signature", self.clock_signature)
-        if len(self.clock_signature) > MAX_KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE_CHARS:
-            raise ValueError("Knowledge telemetry clock signature is too long")
-        if not isinstance(self.phases, tuple):
-            raise ValueError("Knowledge telemetry phases must be a tuple")
-        if not self.phases:
-            raise ValueError("Knowledge telemetry requires at least one phase")
-        if len(self.phases) > MAX_KNOWLEDGE_TELEMETRY_PHASES:
-            raise ValueError("Knowledge telemetry has too many phase records")
-        if any(not isinstance(phase, KnowledgePhaseTiming) for phase in self.phases):
-            raise ValueError("Knowledge telemetry phases are invalid")
-        context_phases = sum(
-            phase.phase is KnowledgeTimingPhase.CONTEXT_COMPILE for phase in self.phases
+        _contract_telemetry.validate_query_telemetry(
+            self,
+            telemetry_operation_type=KnowledgeTelemetryOperation,
+            phase_timing_type=KnowledgePhaseTiming,
+            timing_phase_type=KnowledgeTimingPhase,
+            required_text_fn=_required_text,
+            max_clock_signature_chars=MAX_KNOWLEDGE_TELEMETRY_CLOCK_SIGNATURE_CHARS,
+            max_phases=MAX_KNOWLEDGE_TELEMETRY_PHASES,
         )
-        if self.operation is KnowledgeTelemetryOperation.SEARCH and context_phases:
-            raise ValueError("search telemetry cannot contain context compilation")
-        if (
-            self.operation is KnowledgeTelemetryOperation.CONTEXT
-            and context_phases != 1
-        ):
-            raise ValueError("context telemetry requires one context compilation phase")
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.knowledge_query_telemetry_payload(
