@@ -16,6 +16,7 @@ from enum import StrEnum
 
 from . import knowledge_contract_payloads as _contract_payloads
 from . import knowledge_contract_references as _contract_references
+from . import knowledge_contract_snapshot as _contract_snapshot
 from . import knowledge_contract_telemetry as _contract_telemetry
 from .knowledge_contract_validation import (
     optional_text as _contract_optional_text_impl,
@@ -424,11 +425,11 @@ class PublicationHead:
     model_signature: str | None = None
 
     def __post_init__(self) -> None:
-        _required_text("publication scope", self.scope)
-        _required_text("publication_id", self.publication_id)
-        _optional_text("model_signature", self.model_signature)
-        if isinstance(self.generation, bool) or self.generation < 0:
-            raise ValueError("publication generation cannot be negative")
+        _contract_snapshot.validate_publication_head(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.publication_head_payload(self)
@@ -440,8 +441,9 @@ class LogicalWatermark:
     value: str
 
     def __post_init__(self) -> None:
-        _required_text("watermark name", self.name)
-        _required_text("watermark value", self.value)
+        _contract_snapshot.validate_logical_watermark(
+            self, required_text_fn=_required_text
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.logical_watermark_payload(self)
@@ -456,13 +458,7 @@ class ActiveModel:
     generation: int
 
     def __post_init__(self) -> None:
-        _required_text("model signature", self.signature)
-        _required_text("vector_space", self.vector_space)
-        _required_text("modality", self.modality)
-        if isinstance(self.dimensions, bool) or self.dimensions < 1:
-            raise ValueError("model dimensions must be positive")
-        if isinstance(self.generation, bool) or self.generation < 0:
-            raise ValueError("model generation cannot be negative")
+        _contract_snapshot.validate_active_model(self, required_text_fn=_required_text)
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.active_model_payload(self)
@@ -483,37 +479,16 @@ class OwnerSnapshot:
     identity_changed: bool = False
 
     def __post_init__(self) -> None:
-        _required_text("owner", self.owner)
-        if self.expected_schema_version < 1:
-            raise ValueError("expected schema version must be positive")
-        if (
-            self.observed_schema_version is not None
-            and self.observed_schema_version < 0
-        ):
-            raise ValueError("observed schema version cannot be negative")
-        if self.state is OwnerAvailability.AVAILABLE:
-            if self.observed_schema_version != self.expected_schema_version:
-                raise ValueError("available owner must expose its expected schema")
-        if self.data_version_before is not None and self.data_version_before < 0:
-            raise ValueError("data_version cannot be negative")
-        if self.data_version_after is not None and self.data_version_after < 0:
-            raise ValueError("data_version cannot be negative")
-        if not isinstance(self.identity_changed, bool):
-            raise ValueError("identity_changed must be boolean")
-        _optional_text("owner warning", self.warning)
-        _optional_text("owner error code", self.error_code)
-        if len({head.scope for head in self.publications}) != len(self.publications):
-            raise ValueError("publication scopes must be unique per owner")
-        if len({item.name for item in self.watermarks}) != len(self.watermarks):
-            raise ValueError("watermark names must be unique per owner")
+        _contract_snapshot.validate_owner_snapshot(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+            owner_availability_type=OwnerAvailability,
+        )
 
     @property
     def changed(self) -> bool:
-        return self.identity_changed or (
-            self.data_version_before is not None
-            and self.data_version_after is not None
-            and self.data_version_before != self.data_version_after
-        )
+        return _contract_snapshot.owner_snapshot_changed(self)
 
     def identity_dict(self) -> dict[str, object]:
         return _contract_payloads.owner_snapshot_identity_payload(self)
@@ -535,53 +510,12 @@ class KnowledgeSnapshot:
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        _required_text("source_version", self.source_version)
-        _required_text("captured_at_utc", self.captured_at_utc)
-        _required_text("snapshot_id", self.snapshot_id)
-        if not self.captured_at_utc.endswith("Z"):
-            raise ValueError("captured_at_utc must be an explicit UTC timestamp")
-        if self.captured_monotonic_ns < 0:
-            raise ValueError("captured monotonic time cannot be negative")
-        if isinstance(self.attempts, bool) or not 1 <= self.attempts <= 2:
-            raise ValueError("snapshot attempts must be one or two")
-        if len({owner.owner for owner in self.owners}) != len(self.owners):
-            raise ValueError("snapshot owners must be unique")
-        if len({model.signature for model in self.active_models}) != len(
-            self.active_models
-        ):
-            raise ValueError("active model signatures must be unique")
-        changed_owners = tuple(owner for owner in self.owners if owner.changed)
-        if self.consistency is SnapshotConsistency.STABLE and changed_owners:
-            raise ValueError("a stable snapshot cannot contain a changed owner")
-        if self.consistency is SnapshotConsistency.SNAPSHOT_CHANGED:
-            if self.attempts != 2:
-                raise ValueError("snapshot_changed requires exactly two attempts")
-            if not changed_owners:
-                raise ValueError("snapshot_changed requires at least one changed owner")
-        if self.active_models:
-            semantic_owner = next(
-                (owner for owner in self.owners if owner.owner == "semantic"),
-                None,
-            )
-            compatible_publications: set[tuple[str, int]] = set()
-            if (
-                semantic_owner is not None
-                and semantic_owner.state is OwnerAvailability.AVAILABLE
-            ):
-                compatible_publications = {
-                    (head.model_signature, head.generation)
-                    for head in semantic_owner.publications
-                    if head.model_signature is not None
-                }
-            if any(
-                (model.signature, model.generation) not in compatible_publications
-                for model in self.active_models
-            ):
-                raise ValueError(
-                    "active model must correspond to a compatible semantic publication"
-                )
-        for warning in self.warnings:
-            _required_text("snapshot warning", warning)
+        _contract_snapshot.validate_knowledge_snapshot(
+            self,
+            required_text_fn=_required_text,
+            snapshot_consistency_type=SnapshotConsistency,
+            owner_availability_type=OwnerAvailability,
+        )
 
     @classmethod
     def create(
@@ -596,36 +530,24 @@ class KnowledgeSnapshot:
         attempts: int = 1,
         warnings: tuple[str, ...] = (),
     ) -> KnowledgeSnapshot:
-        ordered_owners = tuple(sorted(owners, key=lambda owner: owner.owner))
-        ordered_models = tuple(sorted(active_models, key=lambda model: model.signature))
-        identity_payload: dict[str, object] = {
-            "schema_version": KNOWLEDGE_CONTRACT_SCHEMA_VERSION,
-            "source_version": source_version,
-            "owners": [owner.identity_dict() for owner in ordered_owners],
-            "active_models": [model.to_dict() for model in ordered_models],
-            "consistency": consistency.value,
-        }
-        fingerprint = fingerprint_text(canonical_json(identity_payload))
-        snapshot_id = (
-            "knowledge-snapshot-v1:"
-            f"{fingerprint.xxh3_128}:{fingerprint.byte_count}:"
-            f"{fingerprint.xxh3_64_guard}"
-        )
-        return cls(
+        return _contract_snapshot.create_knowledge_snapshot(
+            cls,
             source_version=source_version,
             captured_at_utc=captured_at_utc,
             captured_monotonic_ns=captured_monotonic_ns,
-            owners=ordered_owners,
-            active_models=ordered_models,
-            snapshot_id=snapshot_id,
+            owners=owners,
+            active_models=active_models,
             consistency=consistency,
             attempts=attempts,
             warnings=warnings,
+            schema_version=KNOWLEDGE_CONTRACT_SCHEMA_VERSION,
+            canonical_json_fn=canonical_json,
+            fingerprint_text_fn=fingerprint_text,
         )
 
     @property
     def changed_owners(self) -> tuple[str, ...]:
-        return tuple(owner.owner for owner in self.owners if owner.changed)
+        return _contract_snapshot.knowledge_snapshot_changed_owners(self)
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.knowledge_snapshot_payload(
