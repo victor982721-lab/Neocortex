@@ -426,6 +426,7 @@ class FrameworkActions:
                 str | None,
             ]
         ] = []
+        filtered_protected = 0
         mutation_guard = self._effective_mutation_guard()
         for item, planned, reference in zip(batch, expected, references, strict=True):
             path, _evidence = item
@@ -433,9 +434,14 @@ class FrameworkActions:
             if reason is None:
                 try:
                     mutation_guard.require_paths_allowed(path)
-                except ProtectedContentError as exc:
-                    reason = str(exc)
+                except ProtectedContentError:
+                    # A declared Protected Content root is outside the action
+                    # domain altogether; it must not acquire a file_actions row.
+                    filtered_protected += 1
+                    continue
             evaluated.append((item, planned, reference, reason))
+        if not evaluated:
+            return [], filtered_protected
 
         action_ids = self._state.begin_file_actions(
             self._run_id,
@@ -462,7 +468,9 @@ class FrameworkActions:
                 protected_by_reason.setdefault(reason, []).append(action_id)
         for reason, protected_ids in protected_by_reason.items():
             self._state.finish_file_actions(protected_ids, "skipped", reason)
-        protected = sum(len(action_ids) for action_ids in protected_by_reason.values())
+        protected = filtered_protected + sum(
+            len(action_ids) for action_ids in protected_by_reason.values()
+        )
         return eligible, protected
 
     def _preflight_trash_candidates(
