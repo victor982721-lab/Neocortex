@@ -30,7 +30,7 @@ contra el Python global:
 
 ```powershell
 $Repository = Join-Path $HOME 'Neocortex\Repository'
-$RuntimeId = '0.7.1-artifact-id' # sustituya por el identificador validado
+$RuntimeId = '0.7.2-artifact-id' # sustituya por el identificador validado
 $Venv = Join-Path $env:LOCALAPPDATA "Programs\Neocortex\versions\$RuntimeId\venv"
 py -3 -m venv $Venv
 Set-Location -LiteralPath $Repository
@@ -117,8 +117,8 @@ por su ruta exacta:
 instalación: en un entorno nuevo sin `framework.sqlite3` devuelve `2` de forma
 esperada y no crea la base.
 
-La versión fuente de esta entrega es `0.7.1`. Si el ejecutable exacto del
-runtime no informa `0.7.1` o no reconoce las opciones de esta guía, deténgase y
+La versión fuente de esta entrega es `0.7.2`. Si el ejecutable exacto del
+runtime no informa `0.7.2` o no reconoce las opciones de esta guía, deténgase y
 valide el artefacto en un entorno aislado antes de promover el launcher estable.
 
 ## Primer uso y rutas

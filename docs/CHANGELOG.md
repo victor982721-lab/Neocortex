@@ -4,7 +4,7 @@ Este archivo registra cambios observables del producto. Las cifras de pruebas,
 cobertura y rendimiento pertenecen al informe técnico fechado de cada auditoría;
 no se copian aquí para evitar que se conviertan en datos históricos sin contexto.
 
-## [Sin publicar] - 2026-07-29
+## [0.7.2] - 2026-07-31
 
 ### Añadido
 
@@ -36,6 +36,9 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   estado/autoanálisis bajo `%LOCALAPPDATA%\Neocortex`.
 - `InternalPathsPolicy` con identidades físicas y firma versionada para
   repositorio, runtime, datos de aplicación, autoanálisis y launcher.
+- Política de contenido protegido integrada en inventario, lectura y fronteras
+  de mutación para que rutas internas o reservadas permanezcan fuera de las
+  decisiones operativas sobre el corpus.
 
 ### Corregido
 
@@ -58,6 +61,15 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 - `CodeState.finalize_graph()` consulta cancelación mediante un progress handler
   limitado a su transacción, hace rollback antes de propagar y retira el handler
   al salir. La publicación generacional del grafo sigue fuera de este cambio.
+- Knowledge Plan conserva como requeridas las modalidades semánticas solicitadas,
+  liga cada ranking a su propietario y path SQLite exactos, respeta
+  `candidate_limit` y no permite que otro ranking del mismo canal sustituya una
+  evidencia requerida. Un ranking exacto truncado o requerido ausente fuerza
+  completitud parcial y warnings deterministas.
+- Los hotspots de Semantic Plan, Knowledge Planner, Knowledge Search y contratos
+  Knowledge se dividieron en módulos con DAG unidireccional; las dataclasses,
+  firmas públicas, `__module__`, pickle, JSON, IDs y excepciones permanecen en
+  las fachadas compatibles.
 
 ### Persistencia y seguridad
 
@@ -79,6 +91,10 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   `mode=ro&immutable=1`, `query_only` y fences pre/post. Cualquier sidecar,
   incluso vacío o desacoplado, o una cerca inestable en code, framework o Dedup
   causa abstención total con código `2`, sin vista parcial ni cambios de estado.
+- La promoción Windows retiene por handle los cuatro directorios autorizados
+  —launcher, receipts, backups y lock— sin `FILE_SHARE_DELETE`, valida identidad
+  y volumen en esos mismos handles y los libera en orden inverso después del
+  lock, preservando la primera `BaseException` y anotando fallos de cleanup.
 
 ### Compatibilidad y límites
 
@@ -90,9 +106,10 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   telemetría, texto renderizado, presupuestos ni schemas SQLite. Las fases
   anidadas no son aditivas y una campaña comparable aún debe fijar fixture,
   snapshot y condiciones de cache.
-- Este corte **no cambia la versión pública**: la fuente continúa en `0.7.1`.
-  El launcher estable sólo debe promoverse desde un runtime versionado después
-  de validar el artefacto exacto, dependencias, versión y ayuda.
+- La entrega eleva la versión pública de `0.7.1` a `0.7.2` sin cambiar los
+  schemas SQLite vigentes. El launcher estable sólo debe promoverse desde un
+  runtime versionado después de validar artefacto, dependencias, versión y
+  ayuda; el rollback operativo conserva el runtime 0.7.1 como destino explícito.
 - Los estados de autoanálisis pertenecen a árboles nuevos bajo
   `%LOCALAPPDATA%\Neocortex\self-analysis`, nunca dentro del repositorio; un
   mini-root no demuestra cobertura de la raíz canónica completa.

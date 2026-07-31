@@ -1,10 +1,10 @@
 # Arquitectura de NeoCortex
 
 > **Estado del documento.** Contrato derivado del árbol inspeccionado el
-> 29 de julio de 2026. Describe el comportamiento observado y separa los
+> 31 de julio de 2026. Describe el comportamiento observado y separa los
 > cambios previstos de los ya implementados. No certifica por sí solo la suite
 > completa ni la instalación empaquetada. El árbol auditado declara la versión
-> `0.7.1`; la versión instalada debe comprobarse con
+> `0.7.2`; la versión instalada debe comprobarse con
 > `Neocortex --version`.
 
 ## Finalidad y principios

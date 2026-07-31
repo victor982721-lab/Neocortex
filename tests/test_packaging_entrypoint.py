@@ -19,7 +19,7 @@ def test_project_metadata_uses_package_version_and_installed_command() -> None:
     assert metadata["tool"]["setuptools"]["dynamic"]["version"] == {
         "attr": "neocortex.__version__"
     }
-    assert neocortex.__version__ == "0.7.1"
+    assert neocortex.__version__ == "0.7.2"
 
 
 def test_source_manifest_includes_repository_instruction_files() -> None:

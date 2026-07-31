@@ -17,8 +17,8 @@ documenta en [KNOWLEDGE.md](KNOWLEDGE.md); no se duplican esos contratos aquí.
    Neocortex --help
    ```
 
-   Esta guía corresponde a la fuente `0.7.1`. Si `--version` no existe o no
-   informa `0.7.1`, el launcher operativo no coincide con esta entrega: no use
+   Esta guía corresponde a la fuente `0.7.2`. Si `--version` no existe o no
+   informa `0.7.2`, el launcher operativo no coincide con esta entrega: no use
    sus contratos nuevos sobre estado real hasta validar el artefacto correcto.
 
 3. Confirme la raíz exacta y que no sea un symlink, junction o punto de
@@ -479,7 +479,7 @@ downgrade de base atribuible a Knowledge; cualquier otra migración o cambio de
 estado realizado por comandos distintos conserva su propio contrato de
 recuperación.
 
-La fuente `0.7.1` declara framework v20 y Dedup v8. Framework 19→20 preserva
+La fuente `0.7.2` declara framework v20 y Dedup v8. Framework 19→20 preserva
 filas legacy como `normal`; Dedup 7→8 agrega la firma cruda de inventario a los
 scans, conserva scans/archivos/bytes e invalida checkpoints sin firma en vez de
 inventar evidencia. Ninguna migración ofrece downgrade. Abra bases vivas sólo

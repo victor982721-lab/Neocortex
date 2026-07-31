@@ -21,7 +21,7 @@ esperadas, deténgase: el launcher instalado y el árbol fuente no representan l
 misma entrega. No use una ruta nueva hasta actualizar y volver a comprobar el
 entrypoint.
 
-Esta fuente declara `0.7.1`. La fuente canónica está en
+Esta fuente declara `0.7.2`. La fuente canónica está en
 `%USERPROFILE%\Neocortex\Repository`; los runtimes versionados viven bajo
 `%LOCALAPPDATA%\Programs\Neocortex\versions` y el launcher estable es
 `%LOCALAPPDATA%\Programs\Neocortex\bin\Neocortex.exe`. Valide primero el
