@@ -466,6 +466,18 @@ def test_win32_device_namespace_template_is_not_treated_as_private_unc(
     assert tuple(member.path for member in report.members) == ("package/windows.py",)
 
 
+def test_escaped_sql_backslash_literal_is_not_treated_as_private_unc(
+    tmp_path: Path,
+) -> None:
+    escaped_backslash = bytes((92, 92))
+    payload = b"normalized = replace(column,'" + escaped_backslash + b"','/')\n"
+    path = _write_zip(tmp_path / "sql-literal.zip", {"package/query.py": payload})
+
+    report = inspect_archive(path)
+
+    assert tuple(member.path for member in report.members) == ("package/query.py",)
+
+
 @pytest.mark.parametrize("archive_kind", ["zip", "tar"])
 @pytest.mark.parametrize(
     "name",

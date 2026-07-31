@@ -64,6 +64,16 @@ def test_sdist_manifest_includes_active_docs_and_release_tools() -> None:
     )
 
 
+def test_svg_release_asset_has_canonical_lf_export() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    attributes = (project_root / ".gitattributes").read_text(encoding="utf-8")
+
+    assert (
+        "_05_Interfaz/assets/neocortex-app-icon.svg text eol=lf"
+        in attributes.splitlines()
+    )
+
+
 def test_installed_entrypoint_forwards_arguments_to_integrated_cli() -> None:
     with (
         patch("neocortex.cli._run_special_mode", return_value=None),

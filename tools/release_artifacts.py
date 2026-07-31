@@ -114,10 +114,11 @@ _COMPONENT_CATEGORIES: Final = (
     (_TEMP_COMPONENTS, "temporary"),
 )
 _UNC_COMPONENT: Final = r'[^<>:"/\\|?*\x00-\x1f\s]+'
+_UNC_HOST_COMPONENT: Final = r"[A-Za-z0-9][A-Za-z0-9._-]*"
 _PRIVATE_PATH = re.compile(
     r"(?:[A-Za-z]:[\\/](?:Users|Documents[ ]and[ ]Settings)[\\/]"
     r"|/(?:home|Users)/[A-Za-z0-9._-]+(?:/|\b)"
-    rf"|(?<!http:)(?<!https:)(?:\\\\|//)(?!\.[\\/]){_UNC_COMPONENT}"
+    rf"|(?<!http:)(?<!https:)(?:\\\\|//){_UNC_HOST_COMPONENT}"
     rf"[\\/]{_UNC_COMPONENT})",
     re.IGNORECASE,
 )
