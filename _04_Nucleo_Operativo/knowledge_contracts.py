@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from . import knowledge_contract_payloads as _contract_payloads
+from . import knowledge_contract_references as _contract_references
 from . import knowledge_contract_telemetry as _contract_telemetry
 from .knowledge_contract_validation import (
     optional_text as _contract_optional_text_impl,
@@ -257,10 +258,9 @@ class PhysicalIdentityRef:
     identity_version: int
 
     def __post_init__(self) -> None:
-        _required_text("physical identity scheme", self.scheme)
-        _required_text("physical identity value", self.value)
-        if isinstance(self.identity_version, bool) or self.identity_version < 1:
-            raise ValueError("physical identity version must be positive")
+        _contract_references.validate_physical_identity_ref(
+            self, required_text_fn=_required_text
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.physical_identity_ref_payload(self)
@@ -277,20 +277,12 @@ class ResourceRef:
     canonical_resource_id: str | None = None
 
     def __post_init__(self) -> None:
-        _required_text("resource_id", self.resource_id)
-        _required_text("source_kind", self.source_kind)
-        _required_text("owner", self.owner)
-        _optional_text("current_path", self.current_path)
-        _optional_text("canonical_resource_id", self.canonical_resource_id)
-        if self.disposition is ResourceDisposition.DUPLICATE:
-            _required_text(
-                "canonical_resource_id",
-                ""
-                if self.canonical_resource_id is None
-                else self.canonical_resource_id,
-            )
-        if self.canonical_resource_id == self.resource_id:
-            raise ValueError("a resource cannot name itself as its canonical resource")
+        _contract_references.validate_resource_ref(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+            resource_disposition_type=ResourceDisposition,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.resource_ref_payload(
@@ -309,15 +301,11 @@ class RevisionRef:
     observed_at_utc: str | None = None
 
     def __post_init__(self) -> None:
-        _required_text("resource_id", self.resource_id)
-        _required_text("revision_id", self.revision_id)
-        _required_text("producer", self.producer)
-        _required_text("processing_signature", self.processing_signature)
-        _optional_text("observed_at_utc", self.observed_at_utc)
-        if self.generation is not None and (
-            isinstance(self.generation, bool) or self.generation < 0
-        ):
-            raise ValueError("revision generation cannot be negative")
+        _contract_references.validate_revision_ref(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.revision_ref_payload(
@@ -352,94 +340,15 @@ class EvidenceRef:
     identifiers: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        _required_text("evidence_id", self.evidence_id)
-        _required_text("resource_id", self.resource_id)
-        _required_text("revision_id", self.revision_id)
-        for name, value in (
-            ("sheet", self.sheet),
-            ("cell_range", self.cell_range),
-            ("coordinate_space", self.coordinate_space),
-            ("symbol", self.symbol),
-            ("section_kind", self.section_kind),
-            ("section_id", self.section_id),
-            ("extractor", self.extractor),
-            ("extractor_version", self.extractor_version),
-        ):
-            _optional_text(name, value)
-        if self.page is not None and (isinstance(self.page, bool) or self.page < 0):
-            raise ValueError("page cannot be negative")
-        if (self.start_line is None) != (self.end_line is None):
-            raise ValueError("line locator requires both start and end")
-        if self.start_line is not None and (
-            isinstance(self.start_line, bool)
-            or isinstance(self.end_line, bool)
-            or self.start_line < 1
-            or self.end_line is None
-            or self.end_line < self.start_line
-        ):
-            raise ValueError("line locator is invalid")
-        if (self.start_ms is None) != (self.end_ms is None):
-            raise ValueError("time locator requires both start and end")
-        if self.start_ms is not None and (
-            isinstance(self.start_ms, bool)
-            or isinstance(self.end_ms, bool)
-            or self.start_ms < 0
-            or self.end_ms is None
-            or self.end_ms <= self.start_ms
-        ):
-            raise ValueError("time locator is invalid")
-        if (self.start_char is None) != (self.end_char is None):
-            raise ValueError("character locator requires both start and end")
-        if self.start_char is not None and (
-            isinstance(self.start_char, bool)
-            or isinstance(self.end_char, bool)
-            or self.start_char < 0
-            or self.end_char is None
-            or self.end_char <= self.start_char
-        ):
-            raise ValueError("character locator is invalid")
-        if self.bounding_box is not None:
-            left, top, right, bottom = self.bounding_box
-            if not all(math.isfinite(value) for value in self.bounding_box) or (
-                right <= left or bottom <= top
-            ):
-                raise ValueError("bounding box is invalid")
-            if self.coordinate_space is None:
-                raise ValueError("bounding box requires a coordinate space")
-        elif self.coordinate_space is not None:
-            raise ValueError("coordinate space requires a bounding box")
-        if self.snippet is not None and len(self.snippet) > MAX_KNOWLEDGE_SNIPPET_CHARS:
-            raise ValueError(
-                f"snippet cannot exceed {MAX_KNOWLEDGE_SNIPPET_CHARS} characters"
-            )
-        if self.symbol is not None and len(self.symbol) > MAX_EVIDENCE_SYMBOL_CHARS:
-            raise ValueError(
-                f"symbol cannot exceed {MAX_EVIDENCE_SYMBOL_CHARS} characters"
-            )
-        if self.generation is not None and (
-            isinstance(self.generation, bool) or self.generation < 0
-        ):
-            raise ValueError("evidence generation cannot be negative")
-        if len(self.identifiers) > MAX_EVIDENCE_IDENTIFIERS:
-            raise ValueError(
-                f"evidence cannot contain more than {MAX_EVIDENCE_IDENTIFIERS} "
-                "identifiers"
-            )
-        if len(set(self.identifiers)) != len(self.identifiers):
-            raise ValueError("evidence identifiers must be unique")
-        for namespace, value in self.identifiers:
-            if not isinstance(namespace, str) or not isinstance(value, str):
-                raise ValueError("evidence identifiers must contain strings")
-            _required_text("identifier namespace", namespace)
-            _required_text("identifier value", value)
-            if (
-                len(namespace) > MAX_EVIDENCE_IDENTIFIER_COMPONENT_CHARS
-                or len(value) > MAX_EVIDENCE_IDENTIFIER_COMPONENT_CHARS
-            ):
-                raise ValueError(
-                    "evidence identifier components cannot exceed "
-                    f"{MAX_EVIDENCE_IDENTIFIER_COMPONENT_CHARS} characters"
-                )
+        _contract_references.validate_evidence_ref(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+            max_snippet_chars=MAX_KNOWLEDGE_SNIPPET_CHARS,
+            max_symbol_chars=MAX_EVIDENCE_SYMBOL_CHARS,
+            max_identifiers=MAX_EVIDENCE_IDENTIFIERS,
+            max_identifier_component_chars=(MAX_EVIDENCE_IDENTIFIER_COMPONENT_CHARS),
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.evidence_ref_payload(
@@ -465,20 +374,11 @@ class RankingSignal:
     query_model_signature: str | None = None
 
     def __post_init__(self) -> None:
-        _required_text("ranking source", self.source)
-        _required_text("score_kind", self.score_kind)
-        _optional_text("model_signature", self.model_signature)
-        _optional_text("query_model_signature", self.query_model_signature)
-        if not math.isfinite(self.raw_score):
-            raise ValueError("ranking raw score must be finite")
-        if isinstance(self.source_rank, bool) or self.source_rank < 1:
-            raise ValueError("ranking source rank must be positive")
-        if self.generation is not None and (
-            isinstance(self.generation, bool) or self.generation < 0
-        ):
-            raise ValueError("ranking generation cannot be negative")
-        if self.contribution is not None and not math.isfinite(self.contribution):
-            raise ValueError("ranking contribution must be finite")
+        _contract_references.validate_ranking_signal(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.ranking_signal_payload(self)
@@ -497,29 +397,9 @@ class KnowledgeHit:
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if isinstance(self.rank, bool) or self.rank < 1:
-            raise ValueError("knowledge hit rank must be positive")
-        if not math.isfinite(self.fused_score):
-            raise ValueError("knowledge fused score must be finite")
-        if self.revision.resource_id != self.resource.resource_id:
-            raise ValueError("revision does not belong to hit resource")
-        if (
-            self.evidence.resource_id != self.resource.resource_id
-            or self.evidence.revision_id != self.revision.revision_id
-        ):
-            raise ValueError("evidence does not belong to hit revision")
-        if not self.signals:
-            raise ValueError("knowledge hit requires at least one ranking signal")
-        if not self.reasons:
-            raise ValueError("knowledge hit requires at least one retrieval reason")
-        for reason in self.reasons:
-            _required_text("retrieval reason", reason)
-        for warning in self.warnings:
-            _required_text("hit warning", warning)
-        if self.confidence is not None and (
-            not math.isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0
-        ):
-            raise ValueError("knowledge confidence must be between 0 and 1")
+        _contract_references.validate_knowledge_hit(
+            self, required_text_fn=_required_text
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.knowledge_hit_payload(
