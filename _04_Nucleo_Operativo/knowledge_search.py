@@ -787,6 +787,14 @@ def _required_semantic_ranking_names(plan: KnowledgePlan) -> frozenset[str]:
     )
 
 
+def _required_direct_ranking_names(plan: KnowledgePlan) -> frozenset[str]:
+    return frozenset(
+        step.ranking_name
+        for step in plan.steps
+        if step.required and step.channel not in {"exact", "lexical", "semantic"}
+    )
+
+
 def execute_knowledge_search(
     paths: KnowledgeStatePaths,
     plan: KnowledgePlan,
@@ -1071,6 +1079,7 @@ def execute_knowledge_search(
     required_channels = {step.channel for step in plan.steps if step.required}
     required_lexical = _required_lexical_ranking_names(plan)
     required_semantic = _required_semantic_ranking_names(plan)
+    required_direct = _required_direct_ranking_names(plan)
     unavailable_required: set[str] = set()
     incomplete_required: set[str] = set()
     reports_by_name = {report.name: report for report in reports}
@@ -1086,28 +1095,26 @@ def execute_knowledge_search(
             unavailable_required.add(name)
         elif not report.complete:
             incomplete_required.add(name)
+    for name in required_direct:
+        report = reports_by_name.get(name)
+        if report is None or not report.executed or not report.available:
+            unavailable_required.add(name)
+        elif not report.complete:
+            incomplete_required.add(name)
     if not duplicate_report.complete:
         incomplete_required.add(duplicate_report.name)
-    for channel in sorted(required_channels - {"lexical", "semantic"}):
-        channel_reports = tuple(
-            report for report in reports if report.channel == channel
+    if "exact" in required_channels:
+        required_exact_reports = tuple(
+            report for report in reports if report.channel == "exact"
         )
-        if channel == "exact" and channel_reports:
-            for report in channel_reports:
+        if required_exact_reports:
+            for report in required_exact_reports:
                 if not report.executed or not report.available:
                     unavailable_required.add(report.name)
                 elif not report.complete:
                     incomplete_required.add(report.name)
-            continue
-        successful = tuple(
-            report for report in channel_reports if report.executed and report.available
-        )
-        if not successful:
-            unavailable_required.update(report.name for report in channel_reports)
-            if not channel_reports:
-                unavailable_required.add(channel)
-        elif not any(report.complete for report in successful):
-            incomplete_required.update(report.name for report in successful)
+        else:
+            unavailable_required.add("exact")
     upstream_cutoffs = tuple(
         report
         for report in reports
@@ -1122,6 +1129,7 @@ def execute_knowledge_search(
         and not unavailable_required
         and not incomplete_required
         and omitted == 0
+        and not exact_truncated
     )
     partial_warnings = {
         f"ranking_partial:{report.name}:{(report.reason or 'incomplete').replace(' ', '_')}"

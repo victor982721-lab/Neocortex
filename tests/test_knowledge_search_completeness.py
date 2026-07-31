@@ -540,6 +540,9 @@ def test_code_only_required_semantic_failure_degrades_completeness(
     plan = plan_knowledge_query(
         KnowledgeQuery("definition breaker", source_kinds=("code",))
     )
+    assert knowledge_search._required_direct_ranking_names(plan) == frozenset(
+        {"code_structural"}
+    )
 
     result = execute_knowledge_search(
         KnowledgeStatePaths.from_directory(tmp_path / "state"),
@@ -554,6 +557,121 @@ def test_code_only_required_semantic_failure_degrades_completeness(
         "ranking_partial:semantic_text:fixture_modality_unavailable",
         "ranking_unavailable:semantic_text",
     )
+
+
+def test_exact_truncated_without_known_omissions_is_still_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_complete_lexical(monkeypatch)
+    _install_complete_catalog(monkeypatch)
+    monkeypatch.setattr(
+        knowledge_search,
+        "_semantic_rankings",
+        _ranking_stub(
+            (
+                _ranking(
+                    "semantic_text",
+                    "semantic",
+                    available=True,
+                    complete=True,
+                ),
+                _ranking(
+                    "semantic_image",
+                    "semantic",
+                    available=True,
+                    complete=True,
+                ),
+            )
+        ),
+    )
+
+    def truncated_exact(
+        *_args: object,
+        **_kwargs: object,
+    ) -> tuple[
+        dict[str, tuple[KnowledgeCandidate, ...]],
+        list[RankingExecution],
+        int,
+        bool,
+        tuple[object, ...],
+    ]:
+        return (
+            {},
+            [
+                _ranking(
+                    "exact_coverage",
+                    "exact",
+                    available=True,
+                    complete=True,
+                )
+            ],
+            0,
+            True,
+            (),
+        )
+
+    monkeypatch.setattr(knowledge_search, "_exact_rankings", truncated_exact)
+    plan = plan_knowledge_query(KnowledgeQuery("IEC-61850"))
+
+    result = execute_knowledge_search(
+        KnowledgeStatePaths.from_directory(tmp_path / "state"),
+        plan,
+        _snapshot(semantic=OwnerAvailability.AVAILABLE),
+    )
+
+    assert result.truncated
+    assert result.omitted_candidates == 0
+    assert not result.complete
+
+
+def test_required_direct_ranking_cannot_be_substituted_within_channel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_complete_lexical(monkeypatch)
+    monkeypatch.setattr(
+        knowledge_search,
+        "_semantic_rankings",
+        _ranking_stub(
+            (
+                _ranking(
+                    "semantic_text",
+                    "semantic",
+                    available=True,
+                    complete=True,
+                ),
+            )
+        ),
+    )
+
+    def sibling_code_ranking(
+        *_args: object,
+        **_kwargs: object,
+    ) -> tuple[tuple[KnowledgeCandidate, ...], RankingExecution]:
+        return (), _ranking(
+            "code_relations",
+            "structural_code",
+            available=True,
+            complete=True,
+        )
+
+    monkeypatch.setattr(knowledge_search, "_code_ranking", sibling_code_ranking)
+    plan = plan_knowledge_query(
+        KnowledgeQuery("definition breaker", source_kinds=("code",))
+    )
+
+    result = execute_knowledge_search(
+        KnowledgeStatePaths.from_directory(tmp_path / "state"),
+        plan,
+        _snapshot(
+            semantic=OwnerAvailability.AVAILABLE,
+            code=OwnerAvailability.AVAILABLE,
+        ),
+    )
+
+    assert not result.complete
+    assert result.warnings == ("ranking_unavailable:code_structural",)
 
 
 def test_semantic_outer_failure_reports_optional_planned_image_ranking(
