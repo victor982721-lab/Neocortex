@@ -418,14 +418,14 @@ class FrameworkActions:
         list[tuple[int, str, FileSnapshot | None, FileSnapshot | None]],
         int,
     ]:
-        admitted: list[
+        evaluated: list[
             tuple[
                 tuple[str, str],
                 FileSnapshot | None,
                 FileSnapshot | None,
+                str | None,
             ]
         ] = []
-        protected = 0
         mutation_guard = self._effective_mutation_guard()
         for item, planned, reference in zip(batch, expected, references, strict=True):
             path, _evidence = item
@@ -435,12 +435,7 @@ class FrameworkActions:
                     mutation_guard.require_paths_allowed(path)
                 except ProtectedContentError as exc:
                     reason = str(exc)
-            if reason is not None:
-                protected += 1
-                continue
-            admitted.append((item, planned, reference))
-        if not admitted:
-            return [], protected
+            evaluated.append((item, planned, reference, reason))
 
         action_ids = self._state.begin_file_actions(
             self._run_id,
@@ -453,14 +448,21 @@ class FrameworkActions:
                     evidence,
                     self._apply,
                 )
-                for (path, evidence), _planned, _reference in admitted
+                for (path, evidence), _planned, _reference, _reason in evaluated
             ),
         )
         eligible: list[tuple[int, str, FileSnapshot | None, FileSnapshot | None]] = []
-        for action_id, ((path, _evidence), planned, reference) in zip(
-            action_ids, admitted, strict=True
+        protected_by_reason: dict[str, list[int]] = {}
+        for action_id, ((path, _evidence), planned, reference, reason) in zip(
+            action_ids, evaluated, strict=True
         ):
-            eligible.append((action_id, path, planned, reference))
+            if reason is None:
+                eligible.append((action_id, path, planned, reference))
+            else:
+                protected_by_reason.setdefault(reason, []).append(action_id)
+        for reason, protected_ids in protected_by_reason.items():
+            self._state.finish_file_actions(protected_ids, "skipped", reason)
+        protected = sum(len(action_ids) for action_ids in protected_by_reason.values())
         return eligible, protected
 
     def _preflight_trash_candidates(
