@@ -452,6 +452,20 @@ def test_unc_payloads_are_rejected_as_private_paths(
         inspect_archive(path)
 
 
+def test_win32_device_namespace_template_is_not_treated_as_private_unc(
+    tmp_path: Path,
+) -> None:
+    device_template = bytes((92, 92, 46, 92)) + b"{drive}:"
+    path = _write_zip(
+        tmp_path / "win32-device.zip",
+        {"package/windows.py": b"device = rf'" + device_template + b"'\n"},
+    )
+
+    report = inspect_archive(path)
+
+    assert tuple(member.path for member in report.members) == ("package/windows.py",)
+
+
 @pytest.mark.parametrize("archive_kind", ["zip", "tar"])
 @pytest.mark.parametrize(
     "name",

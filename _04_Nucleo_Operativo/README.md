@@ -56,7 +56,7 @@ La ejecución predeterminada es una simulación: calcula y registra las acciones
 sin modificar archivos. Para aplicar el plan explícitamente:
 
 ```powershell
-Neocortex --root C:\Users\Victor --apply
+Neocortex --root C:\Corpus\Entrada --apply
 ```
 
 La política predeterminada `--dedup-policy fast` reduce candidatos mediante el
@@ -128,14 +128,14 @@ La ruta PDF ya está integrada como alternativa explícita después de la etapa
 común:
 
 ```powershell
-Neocortex --root C:\Users\Victor --route pdf
+Neocortex --root C:\Corpus\Entrada --route pdf
 ```
 
 La contraparte DOCX usa el mismo inventario vivo y se ejecuta como una ruta
 explícita, incremental y no destructiva:
 
 ```powershell
-Neocortex --root C:\Users\Victor --route docx
+Neocortex --root C:\Corpus\Entrada --route docx
 ```
 
 Extrae el cuerpo y las partes útiles del paquete OOXML (encabezados, pies,
@@ -189,7 +189,7 @@ La ruta `office` cubre hojas de cálculo XLSX, presentaciones PPTX y documentos
 ODT que el inventario ya identifica por contenido:
 
 ```powershell
-Neocortex --root C:\Users\Victor --route office
+Neocortex --root C:\Corpus\Entrada --route office
 Neocortex --office-search 'transformador AND mantenimiento'
 ```
 
@@ -212,7 +212,7 @@ reside en el proceso y se libera después de cerrar ese proceso, en vez de
 liberarse y volver a solicitarse entre cada audio:
 
 ```powershell
-Neocortex --root C:\Users\Victor --route audio
+Neocortex --root C:\Corpus\Entrada --route audio
 Neocortex --audio-search 'transformador AND mantenimiento'
 Neocortex --audio-doctor
 ```
@@ -914,7 +914,7 @@ La caché usa metadatos por defecto. La validación estricta vuelve a leer el PD
 y compara su XXH3 completo con el asociado a la extracción:
 
 ```powershell
-Neocortex --root C:\Users\Victor --route pdf --pdf-cache-validation full
+Neocortex --root C:\Corpus\Entrada --route pdf --pdf-cache-validation full
 ```
 
 Las operaciones administrativas son directas y no inician un inventario:
@@ -1159,7 +1159,7 @@ plano. Usa los cambios USN solo como señales y delega cada reconciliación a un
 corrida integrada nueva que conserva el checkpoint durable:
 
 ```powershell
-Neocortex --root C:\Users\Victor --watch --all
+Neocortex --root C:\Corpus\Entrada --watch --all
 Neocortex --root C:\Datos --watch --route pdf,image --watch-bootstrap if-needed
 Neocortex --watch --watch-poll-timeout-seconds 2 --watch-debounce-seconds 1 --watch-max-debounce-seconds 15
 ```

@@ -22,7 +22,7 @@ def test_project_metadata_uses_package_version_and_installed_command() -> None:
     assert neocortex.__version__ == "0.7.2"
 
 
-def test_source_manifest_includes_repository_instruction_files() -> None:
+def test_source_manifest_excludes_release_internal_material() -> None:
     project_root = Path(__file__).resolve().parents[1]
     manifest_lines = {
         line.strip()
@@ -31,11 +31,16 @@ def test_source_manifest_includes_repository_instruction_files() -> None:
         .splitlines()
     }
 
-    assert "include AGENTS.md" in manifest_lines
-    assert "include NeoCortex_AGENTS.md" in manifest_lines
+    assert "include AGENTS.md" not in manifest_lines
+    assert "include NeoCortex_AGENTS.md" not in manifest_lines
+    assert "recursive-include tests *.py" not in manifest_lines
+    assert "recursive-include tests/fixtures/knowledge *.json" not in manifest_lines
+    assert "include docs/KNOWLEDGE_EVOLUTION_*.md" not in manifest_lines
+    assert "include docs/TECHNICAL_AUDIT_*.md" not in manifest_lines
+    assert "include docs/TECHNICAL_EVOLUTION_*.md" not in manifest_lines
 
 
-def test_sdist_manifest_includes_audit_and_python_test_support_only() -> None:
+def test_sdist_manifest_includes_active_docs_and_release_tools() -> None:
     project_root = Path(__file__).resolve().parents[1]
     manifest_lines = {
         line.strip()
@@ -44,21 +49,9 @@ def test_sdist_manifest_includes_audit_and_python_test_support_only() -> None:
         .splitlines()
     }
 
-    assert "include docs/TECHNICAL_EVOLUTION_*.md" in manifest_lines
     assert "include docs/SELF_ANALYSIS.md" in manifest_lines
-    assert "recursive-include tests *.py" in manifest_lines
-    assert "recursive-include tests/fixtures/knowledge *.json" in manifest_lines
-    assert tuple((project_root / "docs").glob("TECHNICAL_EVOLUTION_*.md"))
-
-    expected_helpers = {
-        "audit_lab_guard.py",
-        "conftest.py",
-        "mutation_containment.py",
-        "semantic_test_backend.py",
-        "synthetic_usn.py",
-    }
-    packaged_test_python = {path.name for path in (project_root / "tests").glob("*.py")}
-    assert expected_helpers <= packaged_test_python
+    assert "include tools/__init__.py" in manifest_lines
+    assert "recursive-include tools release_*.py" in manifest_lines
 
     with (project_root / "pyproject.toml").open("rb") as stream:
         metadata = tomllib.load(stream)

@@ -1,6 +1,4 @@
 include constraints.txt
-include AGENTS.md
-include NeoCortex_AGENTS.md
 include _02_Deduplicacion/README.md
 include _04_Nucleo_Operativo/README.md
 include docs/ARCHITECTURE.md
@@ -8,7 +6,6 @@ include docs/AUDIT_REPORTING_STANDARD.md
 include docs/CHANGELOG.md
 include docs/CLI.md
 include docs/KNOWLEDGE.md
-include docs/KNOWLEDGE_EVOLUTION_*.md
 include docs/OPERATIONS.md
 include docs/OFFLINE_INSTALLATION.md
 include docs/PERSISTENCE.md
@@ -16,7 +13,5 @@ include docs/RECOVERY.md
 include docs/SELF_ANALYSIS.md
 include docs/SECURITY.md
 include docs/THIRD_PARTY_LICENSE_INVENTORY.md
-include docs/TECHNICAL_AUDIT_*.md
-include docs/TECHNICAL_EVOLUTION_*.md
-recursive-include tests *.py
-recursive-include tests/fixtures/knowledge *.json
+include tools/__init__.py
+recursive-include tools release_*.py

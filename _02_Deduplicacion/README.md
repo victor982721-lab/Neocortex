@@ -20,7 +20,7 @@ No elimina, mueve ni renombra archivos.
 from _02_Deduplicacion import DedupIndex, DedupPlanner
 
 with DedupIndex(r"C:\ruta\estado\dedup.sqlite3") as index:
-    scan = index.scan(r"C:\Users\Victor")
+    scan = index.scan(r"C:\Corpus\Entrada")
     plan = DedupPlanner(index).plan(scan.scan_id)
 
 for group in plan.groups:
@@ -33,13 +33,13 @@ La deduplicación se ejecuta mediante el comando integrado y comparte inventario
 estado, bloqueo operativo y políticas de seguridad con las demás rutas:
 
 ```powershell
-Neocortex --root C:\Users\Victor
+Neocortex --root C:\Corpus\Entrada
 ```
 
 Para inspeccionar únicamente los 10 grupos de mayor ahorro potencial:
 
 ```powershell
-Neocortex --root C:\Users\Victor --show-groups 10
+Neocortex --root C:\Corpus\Entrada --show-groups 10
 ```
 
 El estado usa la base integrada `dedup.sqlite3` dentro del directorio de estado
