@@ -376,6 +376,27 @@ defecto. No introduzcas abstracciones sin un uso actual. Evita nuevas
 dependencias si la biblioteca estándar o el stack instalado resuelven el
 contrato.
 
+## Flujo de trabajo y checkpoints
+
+- Git local es el control de cambios principal. Antes de editar, revisa
+  `git status`, preserva cambios preexistentes e identifica propietarios.
+- Git y la red están disponibles sin autorización rutinaria. El alcance vigente
+  decide si corresponden remotes, push, despliegues u otras escrituras externas.
+- Haz commits pequeños y cohesionados en límites de fase o corrección.
+- Para escritores paralelos, usa branches o worktrees aislados, asigna archivos
+  sin solapamiento y deja la integración y verificación al agente principal.
+- Los subagentes son opcionales: úsalos sólo cuando el trabajo sea independiente
+  y no dupliques investigación, auditorías ni pruebas.
+- `apply_patch` es preferible para cambios pequeños; usa movimientos,
+  generadores, reemplazos atómicos u otra herramienta cuando sea más segura y
+  revisa siempre el diff.
+- Crea snapshots externos sólo antes de fases de alto riesgo, operaciones
+  irreversibles, instalación/promoción, rollback o evidencia que Git no conserve.
+- En trabajos largos mantén un handoff con checkpoint, pruebas conocidas,
+  riesgos y siguiente acción; no repitas auditorías sin una razón concreta.
+- Conserva intactos corpus, bases y state vivos, contenido protegido, instalación
+  versionada y rollback. Ningún control de cambios sustituye estas protecciones.
+
 ## Evaluación de calidad agéntica
 
 La suite funcional no sustituye una evaluación de recuperación. Mantén un
@@ -416,8 +437,8 @@ golden queries críticas deben tener evidencia humana o determinista.
   auditoría o test.
 - Toda mutación debe usar fixtures creados dentro de una raíz de laboratorio
   validada.
-- No habilites red, descargues modelos ni instales globalmente sin autorización
-  explícita.
+- La red está habilitada. Úsala cuando aporte valor, sin transmitir corpus,
+  secretos ni state; instala dependencias dentro del alcance y verifica procedencia.
 - No limpies `%TEMP%` ni elementos externos de procedencia incierta.
 - No uses Papelera path-bound ni restaures fallbacks inseguros.
 - Conserva eventos, decisiones y evidencia append-only donde el contrato lo
@@ -449,8 +470,9 @@ como launcher canónico una vez verificado.
 - No impongas un `.venv` permanente al flujo operativo. Para validar wheel,
   sdist o instalación puede crearse un entorno aislado y temporal dentro del
   laboratorio; no debe modificar ni sustituir la instalación global.
-- Usa herramientas ya disponibles. Si falta una dependencia o un wheel, registra
-  el bloqueo exacto en vez de descargar o alterar el entorno global.
+- Si falta una herramienta o dependencia necesaria, instálala y verifícala con
+  alcance de proyecto cuando sea posible; no alteres launcher, runtime ni state
+  de Neocortex salvo que la fase vigente lo autorice.
 
 ## Compatibilidad, schemas y documentación
 
@@ -467,6 +489,10 @@ como launcher canónico una vez verificado.
   semver justifique un cambio.
 
 ## Barrera mínima de validación
+
+Durante una fase intermedia ejecuta sólo gates focales proporcionales. Reserva
+la barrera completa para el cierre o promoción correspondiente y no repitas una
+barrera ya documentada sin una razón concreta.
 
 Después de los incrementos focales y antes de cerrar:
 

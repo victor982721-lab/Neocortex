@@ -1,0 +1,22 @@
+# Safe Git is always available. More specific destructive rules override this.
+prefix_rule(
+    pattern = ["git"],
+    decision = "allow",
+    justification = "Git is the normal local change-control mechanism.",
+)
+
+prefix_rule(pattern = ["git", "reset"], decision = "forbidden", justification = "Create a checkpoint or a new commit; do not rewrite or discard work.")
+prefix_rule(pattern = ["git", "clean"], decision = "forbidden", justification = "Inspect and preserve untracked files instead of deleting them.")
+prefix_rule(pattern = ["git", "rebase"], decision = "forbidden", justification = "Use additive commits or a non-rewriting merge.")
+prefix_rule(pattern = ["git", "filter-branch"], decision = "forbidden", justification = "History rewriting is prohibited.")
+prefix_rule(pattern = ["git", "filter-repo"], decision = "forbidden", justification = "History rewriting is prohibited.")
+prefix_rule(pattern = ["git", "restore"], decision = "forbidden", justification = "Preserve work and use a corrective commit.")
+prefix_rule(pattern = ["git", "checkout", "--"], decision = "forbidden", justification = "Do not discard file changes through checkout.")
+prefix_rule(pattern = ["git", "branch", "-d"], decision = "forbidden", justification = "Do not delete branches with potentially unintegrated work.")
+prefix_rule(pattern = ["git", "branch", "-D"], decision = "forbidden", justification = "Do not force-delete branches.")
+prefix_rule(pattern = ["git", "stash", "drop"], decision = "forbidden", justification = "Do not delete saved work.")
+prefix_rule(pattern = ["git", "stash", "clear"], decision = "forbidden", justification = "Do not delete saved work.")
+prefix_rule(pattern = ["git", "worktree", "remove"], decision = "forbidden", justification = "Verify integration before removing a worktree.")
+prefix_rule(pattern = ["git", "push", "--force"], decision = "forbidden", justification = "Force push is prohibited.")
+prefix_rule(pattern = ["git", "push", "--force-with-lease"], decision = "forbidden", justification = "History rewriting by push is prohibited.")
+prefix_rule(pattern = ["git", "push", "-f"], decision = "forbidden", justification = "Force push is prohibited.")
