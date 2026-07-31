@@ -1,0 +1,52 @@
+{
+  "schema": "neocortex-0.7.2-pause-handoff-v1",
+  "created_at": "2026-07-30T19:13:13-06:00",
+  "status": "paused_incomplete_waiting_for_explicit_resume",
+  "repository": "C:\\Users\\Victor\\Neocortex\\Repository",
+  "branch": "neocortex-0.7.2-work",
+  "head_at_authoring": "8951ba6649cd7df0242feedd900430d727da0fa2",
+  "commits": [
+    {
+      "sha": "90d2b711b1f81de7d6e67f871fc40b7b6e5aec42",
+      "message": "checkpoint: preserve paused Neocortex 0.7.2 work"
+    },
+    {
+      "sha": "8951ba6649cd7df0242feedd900430d727da0fa2",
+      "message": "chore: modernize Codex workflow and Git policy"
+    },
+    {
+      "sha": null,
+      "message": "docs: record Neocortex 0.7.2 pause handoff",
+      "note": "assigned when this handoff is sealed"
+    }
+  ],
+  "checkpoint": {
+    "path": "C:\\Users\\Victor\\Neocortex\\Checkpoints\\2026-07-30_0.7.2_pause_183043",
+    "manifest_sha256": "4FFB729ED0B25E71A9D5E3FDD63BA2C27645D208A814193B4FFC83C2D0FAC8BD",
+    "verification_sha256": "7CD55E5C4D16E2871AEAEFD9EBA8D2A496DDC0A734A6B054938EABB521EA9FA0",
+    "manifest_rows": 510,
+    "sources_compared": 506,
+    "mismatches": 0
+  },
+  "current_phase": "P2.4 CL6b catalog extraction tests-first",
+  "next_action": "Implement only knowledge_search_catalog.py and late-bound facade wrappers.",
+  "resume_command": "py -3 -B -m pytest -q tests/test_knowledge_search_catalog_extraction_contract.py",
+  "advance_criterion": "49/49 focal green, Knowledge Search regressions green, focal Ruff and mypy green, diff check clean, cohesive commit.",
+  "known_green": {
+    "cl6a_focal": "80/80",
+    "cl6a_adversarial": "30/30",
+    "broad": "906/906",
+    "w1_4": "130/130"
+  },
+  "expected_red": {
+    "cl6b": "27 failed, 22 passed",
+    "w2": "14 failed, 41 passed before two oracle corrections"
+  },
+  "launcher_touched": false,
+  "runtime_touched": false,
+  "state_touched": false,
+  "corpus_touched": false,
+  "codex_reload_required": true,
+  "network_access": "always enabled",
+  "remotes": []
+}
