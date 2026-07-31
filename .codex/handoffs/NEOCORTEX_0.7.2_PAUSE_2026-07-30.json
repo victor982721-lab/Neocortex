@@ -1,52 +1,116 @@
 {
-  "schema": "neocortex-0.7.2-pause-handoff-v1",
-  "created_at": "2026-07-30T19:13:13-06:00",
-  "status": "paused_incomplete_waiting_for_explicit_resume",
+  "schema": "neocortex-0.7.2-pause-handoff-v2",
+  "updated_at": "2026-07-31T17:29:12-06:00",
+  "status": "paused_release_closure_waiting_for_quota_and_acl_patch_authorization",
   "repository": "C:\\Users\\Victor\\Neocortex\\Repository",
   "branch": "neocortex-0.7.2-work",
-  "head_at_authoring": "8951ba6649cd7df0242feedd900430d727da0fa2",
-  "commits": [
+  "source_head": "5cce0cf1ac43de9859f2d51dd836fe5a0493b206",
+  "git_clean_before_handoff_update": true,
+  "implementation_complete": true,
+  "next_action": "Ask Victor for explicit authorization to canonicalize only SE_DACL_AUTO_INHERITED 0x0400, then apply the documented two-file patch and validate it.",
+  "pending_patch": {
+    "authorized": false,
+    "production_file": "tools/release_windows_ntfs_native.py",
+    "test_file": "tests/test_release_windows_ntfs.py",
+    "ignored_control_bit": "0x0400",
+    "symbol": "SE_DACL_AUTO_INHERITED",
+    "preserve_exactly": [
+      "owner",
+      "group",
+      "DACL",
+      "SACL",
+      "all_other_control_bits",
+      "content",
+      "physical identity and CAS contracts"
+    ]
+  },
+  "known_green": {
+    "full_coverage_suite": "3063 passed, 89 subtests passed",
+    "freeze_suite": "3063 passed, 89 subtests passed",
+    "line_combined_percent": 83.408,
+    "branch_percent": 72.281,
+    "mypy_sources": 252,
+    "artifact_matrix": "118 passed"
+  },
+  "artifacts_before_pending_patch": {
+    "directory": "C:\\Users\\Victor\\Neocortex\\Laboratory\\release-0.7.2-20260731-04\\final",
+    "wheel_sha256": "AD38C60C97E75ED870700C617FFF9B6058BE21BE94C985AC3C5530B5E76556F9",
+    "wheel_payload_sha256": "1081636cd6de8500d57e3e1d1ff83952e516822bcd82385785555e00751ef0f7",
+    "sdist_sha256": "A751615E8BCCCB48E365B9464825147D71A34B85E5DCC9AE97F375CD9B1C1176",
+    "sdist_payload_sha256": "09d2dbad549a50a39e4994169fd7f7f262a93ccb5b9b64286d03a2bafb49fbd4",
+    "rebuild_required_after_patch": true,
+    "reason": "MANIFEST.in includes tools/release_*.py in the sdist"
+  },
+  "runtime_0_7_2": {
+    "id": "0.7.2-wheel-xxh3_128-7bf6b6ae7b480bdcccc946df711cf014",
+    "root": "C:\\Users\\Victor\\AppData\\Local\\Programs\\Neocortex\\versions\\0.7.2-wheel-xxh3_128-7bf6b6ae7b480bdcccc946df711cf014",
+    "version": "Neocortex 0.7.2",
+    "full_package_count": 52,
+    "launcher_sha256": "87503D628E10BA20C6F6D6021AC7E73AA85E2EA80736E2F5D08663D48F44D142"
+  },
+  "stable_launcher": {
+    "path": "C:\\Users\\Victor\\AppData\\Local\\Programs\\Neocortex\\bin\\Neocortex.exe",
+    "version": "Neocortex 0.7.1",
+    "sha256": "1D4FC0C654ACF0B34D300ABEC99839C5D263B44F05AA499947F44B12215716B1",
+    "owner": "SYNAPSIS\\Victor",
+    "owner_only_normalization_completed": true,
+    "promoted": false
+  },
+  "immutable_0_7_2_launcher": {
+    "path": "C:\\Users\\Victor\\AppData\\Local\\Programs\\Neocortex\\bin\\Neocortex-0.7.2-7bf6b6ae7b480bdcccc946df711cf014.exe",
+    "sha256": "87503D628E10BA20C6F6D6021AC7E73AA85E2EA80736E2F5D08663D48F44D142",
+    "length": 46080
+  },
+  "release_layout_for_resume": {
+    "receipts": "C:\\Users\\Victor\\AppData\\Local\\Neocortex\\release\\receipts",
+    "backup": "C:\\Users\\Victor\\AppData\\Local\\Programs\\Neocortex\\release-backups",
+    "lock": "C:\\Users\\Victor\\AppData\\Local\\Neocortex\\release\\locks\\launcher.lock",
+    "latest_chain_result": "C:\\Users\\Victor\\AppData\\Local\\Neocortex\\release\\receipts\\e0a181355fed34802d6b62142fcc5decd36a22befafafdd8a03ace130eb1b334.result.json",
+    "latest_chain_sha256": "9CF52EC4B5916BB986F35693D4499E6A613980F2F8B8592863D0E23821EC5E75",
+    "pending_intents": 0,
+    "material_backups": 0
+  },
+  "failed_transitions": [
     {
-      "sha": "90d2b711b1f81de7d6e67f871fc40b7b6e5aec42",
-      "message": "checkpoint: preserve paused Neocortex 0.7.2 work"
+      "id": "f4d42a79bde26228deac1278dc7ff4b5df526e3de57b67a056ea164705a860a7",
+      "result_sha256": "21BAD5E3EB6A8D117AAD1D9A84EC3383904790E7AE0C5B9498B6C8154EFB6069",
+      "status": "no_effect",
+      "cause": "WinError 1307 copying orphaned owner SID"
     },
     {
-      "sha": "8951ba6649cd7df0242feedd900430d727da0fa2",
-      "message": "chore: modernize Codex workflow and Git policy"
+      "id": "5f8cf23ddd5f2e422edb30d3d3f1a38fbba21771d783d77cfcdb88cdaceae75c",
+      "result_sha256": "6A9BB4CC3070D673D88BBD34E53281061FAFA3CACB99C32E9049E7CAEAD8870F",
+      "status": "no_effect",
+      "cause": "backup directory inherited a DACL different from bin"
     },
     {
-      "sha": null,
-      "message": "docs: record Neocortex 0.7.2 pause handoff",
-      "note": "assigned when this handoff is sealed"
+      "id": "e0a181355fed34802d6b62142fcc5decd36a22befafafdd8a03ace130eb1b334",
+      "result_sha256": "9CF52EC4B5916BB986F35693D4499E6A613980F2F8B8592863D0E23821EC5E75",
+      "status": "no_effect",
+      "cause": "Windows cleared only SE_DACL_AUTO_INHERITED after exact descriptor copy"
     }
   ],
-  "checkpoint": {
-    "path": "C:\\Users\\Victor\\Neocortex\\Checkpoints\\2026-07-30_0.7.2_pause_183043",
-    "manifest_sha256": "4FFB729ED0B25E71A9D5E3FDD63BA2C27645D208A814193B4FFC83C2D0FAC8BD",
-    "verification_sha256": "7CD55E5C4D16E2871AEAEFD9EBA8D2A496DDC0A734A6B054938EABB521EA9FA0",
-    "manifest_rows": 510,
-    "sources_compared": 506,
-    "mismatches": 0
+  "acl_probe": {
+    "source_control": "0x8404",
+    "target_control": "0x8004",
+    "only_difference": "0x0400",
+    "owner_equal": true,
+    "group_equal": true,
+    "dacl_equal": true,
+    "sacl_absent_both": true
   },
-  "current_phase": "P2.4 CL6b catalog extraction tests-first",
-  "next_action": "Implement only knowledge_search_catalog.py and late-bound facade wrappers.",
-  "resume_command": "py -3 -B -m pytest -q tests/test_knowledge_search_catalog_extraction_contract.py",
-  "advance_criterion": "49/49 focal green, Knowledge Search regressions green, focal Ruff and mypy green, diff check clean, cohesive commit.",
-  "known_green": {
-    "cl6a_focal": "80/80",
-    "cl6a_adversarial": "30/30",
-    "broad": "906/906",
-    "w1_4": "130/130"
-  },
-  "expected_red": {
-    "cl6b": "27 failed, 22 passed",
-    "w2": "14 failed, 41 passed before two oracle corrections"
-  },
-  "launcher_touched": false,
-  "runtime_touched": false,
-  "state_touched": false,
+  "user_path_bin_occurrences": 0,
+  "required_live_sequence": [
+    "authorize and validate ACL canonicalization patch",
+    "rebuild and revalidate wheel and sdist from post-patch HEAD",
+    "promote 0.7.2",
+    "rollback to 0.7.1",
+    "repromote 0.7.2",
+    "append bin exactly once to user PATH",
+    "verify a fresh child session resolves Neocortex 0.7.2",
+    "update final handoff and leave Git clean"
+  ],
+  "live_state_touched": false,
   "corpus_touched": false,
-  "codex_reload_required": true,
-  "network_access": "always enabled",
-  "remotes": []
+  "watcher_or_reprocess_run": false
 }

@@ -1,4 +1,333 @@
-# Neocortex 0.7.2 — handoff de pausa controlada
+# Neocortex 0.7.2 — handoff operativo actualizado
+
+> **Checkpoint autoritativo: 2026-07-31, cierre diferido por cuota semanal.**
+> Esta actualización sustituye operativamente las secciones históricas del
+> handoff original que aparece después del separador “Apéndice histórico”. No
+> retomar CL6b, CL7, P2.5 ni W2: esas fases ya terminaron. La única tarea abierta
+> es corregir y validar una canonicalización ACL de Windows, reconstruir el sdist
+> y cerrar promoción/rollback/PATH sin abrir el state vivo.
+
+## A. Estado ejecutivo actual
+
+- Repositorio: `C:\Users\Victor\Neocortex\Repository`.
+- Branch: `neocortex-0.7.2-work`.
+- HEAD de fuente y artefactos aceptados antes de este handoff:
+  `5cce0cf1ac43de9859f2d51dd836fe5a0493b206`.
+- Estado Git al capturar este checkpoint: limpio.
+- Implementación funcional 0.7.2: completa.
+- Barreras de código, suite, cobertura, estática, packaging e instalación aislada:
+  completas antes de la incidencia ACL descrita abajo.
+- Runtime vivo versionado 0.7.2 `[full]`: instalado y válido.
+- Launcher estable: continúa deliberadamente en 0.7.1; nunca fue reemplazado.
+- Promoción/rollback/re-promoción: pendientes.
+- PATH de usuario: pendiente; la ruta `bin` aparece cero veces.
+- State vivo y corpus: no abiertos, migrados, reprocesados ni modificados.
+- No hay intents de release pendientes: los tres intentos fallidos quedaron cerrados
+  como `no_effect`, `performed=false`, `recovered=true`.
+- El parche ACL propuesto **no se aplicó**. Git estaba limpio al iniciar la edición
+  de este handoff.
+
+## B. Autorizaciones y límite exacto
+
+Victor autorizó explícitamente estas cuatro operaciones:
+
+1. crear/instalar el runtime versionado bajo
+   `%LOCALAPPDATA%\Programs\Neocortex\versions`;
+2. instalar el extra `[full]` con `uv`;
+3. promover, probar rollback a 0.7.1 y re-promover 0.7.2;
+4. añadir `%LOCALAPPDATA%\Programs\Neocortex\bin` al PATH de usuario.
+
+Las dos primeras ya terminaron. También autorizó normalizar únicamente el
+propietario del launcher 0.7.1 a `SYNAPSIS\Victor`; esa normalización terminó y
+conservó bytes, grupo y DACL.
+
+Falta una autorización nueva y específica: modificar la validación NTFS para
+canonicalizar sólo `SE_DACL_AUTO_INHERITED` (`0x0400`). El revisor bloqueó la
+aplicación del parche hasta obtener esa autorización después de explicar el
+riesgo. Victor eligió crear este handoff y continuar cuando se restablezca la
+cuota. La siguiente sesión debe pedir esa autorización; no debe inferirla.
+
+## C. Evidencia de implementación y barreras ya completadas
+
+- Suite completa con cobertura: `3063 passed, 89 subtests passed` en 1271.67 s.
+- Cobertura branch-aware: 41,829 statements; 36,354 líneas cubiertas;
+  83.408 % combinado; 13,168 branches; 9,518 cubiertos; 72.281 % branch.
+- Freeze exacto de HEAD: `3063 passed, 89 subtests passed` en 808.77 s.
+- Ruff check global: verde.
+- Ruff format: los 24 archivos Python cambiados por la campaña conformes; el árbol
+  conserva 62 archivos legacy que Ruff reformatearía y no fueron alterados.
+- mypy: 252 fuentes, cero errores.
+- compileall y `uv pip check` del entorno dev: verdes.
+- Matriz focal de artefactos después de los últimos ajustes: 118 pruebas verdes.
+- Fases completadas: P2.5, W2 parent guards, versión 0.7.2, documentación y
+  contratos de release/artifact policy.
+
+Commits terminales relevantes antes del handoff:
+
+- `55aad32` — `fix: retain NTFS release parent guards`
+- `22251e4` — `release: declare Neocortex 0.7.2`
+- `49ba592` — `fix: restore release barrier contracts`
+- `be94413` — `fix: distinguish protected action domains`
+- `cdc198e` — `style: format packaging contract tests`
+- `95c8922` — `fix: align release manifest with artifact policy`
+- `7524c08` — `fix: make artifact validation source-aware`
+- `5cce0cf` — `fix: prune internal sources from sdist`
+
+## D. Artefactos aceptados antes del parche ACL
+
+Directorio:
+`C:\Users\Victor\Neocortex\Laboratory\release-0.7.2-20260731-04\final`
+
+- Wheel `neocortex_framework-0.7.2-py3-none-any.whl`
+  - SHA-256: `AD38C60C97E75ED870700C617FFF9B6058BE21BE94C985AC3C5530B5E76556F9`
+  - dos builds byte-idénticos;
+  - 264 miembros;
+  - payload lógico SHA-256:
+    `1081636cd6de8500d57e3e1d1ff83952e516822bcd82385785555e00751ef0f7`.
+- Sdist `neocortex_framework-0.7.2.tar.gz`
+  - SHA-256: `A751615E8BCCCB48E365B9464825147D71A34B85E5DCC9AE97F375CD9B1C1176`
+  - dos payloads lógicos independientes idénticos y publicación canonical;
+  - 291 miembros;
+  - payload lógico SHA-256:
+    `09d2dbad549a50a39e4994169fd7f7f262a93ccb5b9b64286d03a2bafb49fbd4`.
+
+El wheel probablemente no cambiará con el parche porque `tools/` no forma parte
+del wheel. El sdist **sí debe reconstruirse** porque `MANIFEST.in` contiene
+`recursive-include tools release_*.py`. No declarar finales los hashes anteriores
+después del parche sin reconstrucción y validación reproducible.
+
+## E. Runtime vivo 0.7.2 ya instalado
+
+- Runtime ID:
+  `0.7.2-wheel-xxh3_128-7bf6b6ae7b480bdcccc946df711cf014`.
+- Raíz:
+  `C:\Users\Victor\AppData\Local\Programs\Neocortex\versions\0.7.2-wheel-xxh3_128-7bf6b6ae7b480bdcccc946df711cf014`.
+- Venv: subdirectorio `venv`.
+- Instalación: wheel 0.7.2 con `[full]` y `constraints.txt` mediante `uv`.
+- Paquetes instalados verificados: 52.
+- `uv pip check`: verde.
+- `Neocortex --version`: `Neocortex 0.7.2`.
+- `--help`: exit 0.
+- Probe Knowledge de estado ausente: exit 0 y no creó state.
+- Launcher del runtime y copia inmutable en `bin`:
+  SHA-256 `87503D628E10BA20C6F6D6021AC7E73AA85E2EA80736E2F5D08663D48F44D142`,
+  longitud 46,080 bytes.
+
+Copia inmutable autorizada para promoción:
+`C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex-0.7.2-7bf6b6ae7b480bdcccc946df711cf014.exe`.
+
+## F. Launcher estable y normalización ya ejecutada
+
+- Ruta: `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
+- Versión actual: `Neocortex 0.7.1`.
+- SHA-256 actual:
+  `1D4FC0C654ACF0B34D300ABEC99839C5D263B44F05AA499947F44B12215716B1`.
+- Propietario anterior: SID huérfano
+  `S-1-5-21-770980993-4136550973-192376083-1003`.
+- Propietario actual: `SYNAPSIS\Victor`.
+- La normalización fue autorizada y verificada: hash, bytes, grupo y DACL no
+  cambiaron; sólo cambió el propietario.
+
+## G. Tres intentos fallidos, todos sin efecto
+
+No se invocó con éxito `ReplaceFileW` en ninguno. El launcher estable permaneció
+0.7.1 con el mismo hash. No quedan intents pendientes ni backups materiales.
+
+1. `f4d42a79bde26228deac1278dc7ff4b5df526e3de57b67a056ea164705a860a7`
+   - causa: `WinError 1307`; el SID propietario huérfano no podía reasignarse al
+     backup;
+   - result SHA-256:
+     `21BAD5E3EB6A8D117AAD1D9A84EC3383904790E7AE0C5B9498B6C8154EFB6069`;
+   - `no_effect`, `performed=false`, `recovered=true`.
+2. `5f8cf23ddd5f2e422edb30d3d3f1a38fbba21771d783d77cfcdb88cdaceae75c`
+   - causa: después de normalizar owner, el backup bajo
+     `%LOCALAPPDATA%\Neocortex\release\backups` heredaba una DACL distinta de
+     `bin`; la verificación exacta rechazó la copia;
+   - result SHA-256:
+     `6A9BB4CC3070D673D88BBD34E53281061FAFA3CACB99C32E9049E7CAEAD8870F`;
+   - `no_effect`, `performed=false`, `recovered=true`.
+3. `e0a181355fed34802d6b62142fcc5decd36a22befafafdd8a03ace130eb1b334`
+   - se creó el directorio externo ACL-compatible
+     `C:\Users\Victor\AppData\Local\Programs\Neocortex\release-backups`, hermano
+     de `bin`, y se verificó que su DACL coincide con la de `bin`;
+   - aun así, Windows eliminó un flag informativo al reaplicar el descriptor y la
+     comparación binaria volvió a rechazar la copia;
+   - result SHA-256:
+     `9CF52EC4B5916BB986F35693D4499E6A613980F2F8B8592863D0E23821EC5E75`;
+   - `no_effect`, `performed=false`, `recovered=true`.
+
+Recibos:
+`C:\Users\Victor\AppData\Local\Neocortex\release\receipts`.
+
+Lock:
+`C:\Users\Victor\AppData\Local\Neocortex\release\locks\launcher.lock`.
+
+Directorio de backup que debe usarse al reanudar:
+`C:\Users\Victor\AppData\Local\Programs\Neocortex\release-backups`.
+
+El directorio anterior `%LOCALAPPDATA%\Neocortex\release\backups` existe y está
+vacío. No borrarlo por rutina.
+
+## H. Diagnóstico ACL concluyente
+
+Una sonda temporal creada mediante el mismo adaptador fue eliminada por identidad
+antes de terminar. Comparó el descriptor del launcher con el descriptor de la copia:
+
+- tamaño total: 680 bytes en ambos;
+- propietario: mismo SHA-256
+  `b5d94797172bcdb7279adb35fa56fc3f7f299598867f036ab3ef822c6fa593f2`;
+- grupo: mismo SHA-256
+  `91f6d7a81e653166da4381a220df27bef5cdbc443b49ef953036471517e675c1`;
+- DACL: 604 bytes y mismo SHA-256
+  `9232bf378f2bee03221c61e066a8f30c5280910dd51f2385f961a71ac4fdf10e`;
+- SACL: ausente en ambos;
+- control origen: 33796 (`0x8404`);
+- control copia: 32772 (`0x8004`);
+- única diferencia: `0x0400`, `SE_DACL_AUTO_INHERITED`.
+
+Windows no conserva ese bit al aplicar mediante `SetKernelObjectSecurity` un
+descriptor con owner, group y DACL idénticos. Es metadata derivada de herencia,
+no un ACE ni un permiso. La comparación actual en
+`tools/release_windows_ntfs.py::_finish_copy` compara bytes crudos y produce un
+falso negativo.
+
+## I. Parche exacto pendiente de autorización
+
+Archivos previstos, todavía sin cambios:
+
+- `tools/release_windows_ntfs_native.py`
+- `tests/test_release_windows_ntfs.py`
+
+Cambio mínimo previsto:
+
+1. declarar `_SE_DACL_AUTO_INHERITED = 0x0400` y tamaño de header autorrelativo 20;
+2. añadir `_canonical_security_descriptor(descriptor: bytes) -> bytes` que:
+   - rechace descriptores menores de 20 bytes;
+   - copie el buffer;
+   - lea `control` little-endian en bytes 2:4;
+   - limpie **sólo** `0x0400`;
+   - preserve todos los demás bytes;
+3. hacer que `_security_descriptor()` retorne el descriptor canonicalizado;
+4. añadir dos pruebas:
+   - sólo cambia `0x0400`, preserva el resto e idempotencia;
+   - un header de 19 bytes se rechaza.
+
+No limpiar `SE_DACL_PROTECTED`, `SE_DACL_AUTO_INHERIT_REQ`, owner, group, SACL,
+DACL ni ningún otro flag. No relajar `_safe_source`, CAS, identidad física,
+hashes de contenido, parent guards, recibos ni `ReplaceFileW`.
+
+El intento de aplicar este parche fue rechazado por el revisor **antes de editar**.
+No hay hunk parcial, `.rej`, `.orig` ni archivo modificado por ese intento.
+
+## J. Secuencia obligatoria al reanudar
+
+1. Leer esta actualización completa y comprobar en vivo:
+
+   ```powershell
+   Set-Location -LiteralPath 'C:\Users\Victor\Neocortex\Repository'
+   git status --short --branch
+   git rev-parse HEAD
+   & 'C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe' --version
+   ```
+
+2. Pedir autorización explícita a Victor para el parche exacto de la sección I.
+3. Aplicar sólo ese parche, revisar `git diff` y `git diff --check`.
+4. Ejecutar primero las dos regresiones focales. Para la suite NTFS completa,
+   crear un laboratorio nuevo bajo `C:\Users\Victor\Neocortex\Laboratory`, con
+   subdirectorios precreados para `TEMP`, `TMP`, `TMPDIR`,
+   `PYTHONPYCACHEPREFIX`, pytest basetemp y cache, y definir
+   `NEOCORTEX_AUDIT_LAB_ROOT` a esa raíz. No reutilizar state vivo.
+5. Ejecutar como mínimo:
+
+   ```powershell
+   py -3 -B -m pytest -q tests/test_release_windows_ntfs.py -k 'security_descriptor_canonicalization'
+   py -3 -B -m pytest -q tests/test_release_windows.py tests/test_release_windows_ntfs.py tests/test_release_artifacts.py
+   py -3 -B -m ruff check tools/release_windows_ntfs_native.py tests/test_release_windows_ntfs.py
+   py -3 -B -m ruff format --check tools/release_windows_ntfs_native.py tests/test_release_windows_ntfs.py
+   py -3 -B -m mypy tools/release_windows_ntfs_native.py
+   ```
+
+6. Ejecutar de nuevo la barrera completa/freeze porque cambia fuente de release.
+7. Crear un commit cohesionado del fix ACL.
+8. Reconstruir dos wheels y dos sdists independientes desde el nuevo HEAD usando
+   `py -3 -m build --no-isolation --outdir <directorio> .`; validar cada artefacto
+   con `tools.release_artifacts.validate_release_artifact`, comparar payloads con
+   `compare_logical_payloads` y publicar el sdist mediante `canonicalize_sdist`.
+   Usar una raíz nueva de Laboratory; no sobrescribir el build aceptado `-04`.
+9. Confirmar que el wheel nuevo es byte/payload idéntico al instalado. Si cambia,
+   no mutar el runtime existente: crear otro runtime versionado e instalar `[full]`
+   con `uv` y `constraints.txt`. Si no cambia, conservar el runtime actual.
+10. Confirmar cero intents pendientes y reanudar la cadena desde:
+    - result path:
+      `C:\Users\Victor\AppData\Local\Neocortex\release\receipts\e0a181355fed34802d6b62142fcc5decd36a22befafafdd8a03ace130eb1b334.result.json`;
+    - SHA-256:
+      `9CF52EC4B5916BB986F35693D4499E6A613980F2F8B8592863D0E23821EC5E75`.
+11. Construir `ReleaseLayout` con:
+    - stable: `...\Programs\Neocortex\bin\Neocortex.exe`;
+    - receipts: `...\Neocortex\release\receipts`;
+    - backup: `...\Programs\Neocortex\release-backups`;
+    - lock: `...\Neocortex\release\locks\launcher.lock`.
+12. Ejecutar secuencialmente y encadenar cada `TransitionResult`:
+    - `promote` hacia la copia inmutable 0.7.2;
+    - `rollback` usando `promoted.external_backup_path`;
+    - `repromote` hacia la misma copia inmutable 0.7.2.
+13. Después de cada transición verificar por handle, SHA-256 y `--version`:
+    - promoción: 0.7.2 / `87503D...D142`;
+    - rollback: 0.7.1 / `1D4FC...16B1`;
+    - re-promoción final: 0.7.2 / `87503D...D142`.
+14. Si una transición falla antes de `ReplaceFileW`, usar únicamente
+    `recover_pending_transition` para clasificarla; no reintentar ciegamente. Si
+    el efecto de `ReplaceFileW` queda incierto, recuperar desde intent/recibos y
+    evidencia física antes de cualquier otra mutación.
+15. Sólo después de la re-promoción final:
+    - guardar evidencia del PATH de usuario previo;
+    - añadir exactamente una vez
+      `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin` al PATH de usuario;
+    - no tocar PATH de máquina;
+    - verificar una sesión hija con PATH reconstruido desde Machine + User;
+    - confirmar `Get-Command Neocortex` y `Neocortex --version` = 0.7.2.
+16. No abrir ni migrar `%LOCALAPPDATA%\Neocortex\state`; no ejecutar reproceso,
+    watcher, daemon ni recorrido de corpus.
+17. Actualizar este handoff con hashes/recibos finales, crear commit documental,
+    verificar Git limpio y sólo entonces marcar el objetivo completo.
+
+## K. Criterio terminal de aceptación
+
+No declarar 0.7.2 cerrada hasta que todos sean ciertos:
+
+- parche `0x0400` autorizado, probado y commiteado;
+- suite/freeze y estática verdes en el HEAD posterior al parche;
+- wheel/sdist reconstruidos y reproducibles; hashes finales registrados;
+- runtime `[full]` coherente con el wheel final y `uv pip check` verde;
+- promote, rollback y repromote con tres resultados `success` encadenados;
+- launcher estable final 0.7.2 con hash exacto;
+- backup 0.7.1 y recibos conservados fuera de `bin`;
+- PATH de usuario contiene `bin` exactamente una vez y una sesión nueva resuelve
+  `Neocortex 0.7.2`;
+- state vivo y corpus permanecen intactos;
+- handoff final actualizado y Git limpio.
+
+## L. Riesgos y prohibiciones
+
+- No sustituir el mecanismo NTFS por `Copy-Item`, `Move-Item`, `os.replace` o un
+  reemplazo manual del launcher.
+- No borrar recibos, backups, el runtime 0.7.1, el runtime 0.7.2 ni directorios de
+  evidencia para “limpiar”.
+- No modificar ACL globales ni permisos de padres. El único cambio ACL ya hecho
+  fue el owner del archivo estable, autorizado y verificado.
+- No usar `%LOCALAPPDATA%\Neocortex\release\backups` para la siguiente transición;
+  su herencia DACL difiere de `bin`.
+- No aceptar como equivalentes artefactos construidos desde HEAD distintos.
+- No presentar los tres `no_effect` como promoción parcial: no hubo reemplazo.
+- No repetir auditorías P0–P2.5/W2 ya aceptadas salvo regresión concreta.
+
+---
+
+## Apéndice histórico — handoff original del 30 de julio
+
+El contenido siguiente se conserva como evidencia cronológica. Sus apartados de
+“fase actual”, “trabajo pendiente” y “siguiente acción” están supersedidos por las
+secciones A–L anteriores.
 
 - Creado: 2026-07-30T19:13:13-06:00
 - Repositorio: `C:\Users\Victor\Neocortex\Repository`
