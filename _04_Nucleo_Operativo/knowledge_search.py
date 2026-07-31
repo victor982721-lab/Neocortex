@@ -64,6 +64,11 @@ from .knowledge_search_content import (
     revision_identity as _content_revision_identity,
     semantic_rankings as _content_semantic_rankings,
 )
+from .knowledge_search_catalog import (
+    catalog_identifiers as _catalog_identifiers_impl,
+    catalog_ranking as _catalog_ranking_impl,
+    escape_like as _catalog_escape_like_impl,
+)
 from .knowledge_search_inventory import (
     apply_inventory_dispositions as _inventory_apply_inventory_dispositions,
     inventory_identity_blob as _inventory_identity_blob_impl,
@@ -621,25 +626,11 @@ def _code_ranking(
 
 
 def _escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return _catalog_escape_like_impl(value)
 
 
 def _catalog_identifiers(value: object) -> tuple[tuple[str, str], ...]:
-    try:
-        decoded = json.loads(str(value))
-    except (TypeError, ValueError):
-        return ()
-    if not isinstance(decoded, list):
-        return ()
-    identifiers: list[tuple[str, str]] = []
-    for item in decoded[:64]:
-        if isinstance(item, str) and item.strip():
-            identifiers.append(("standard_identifier", item.strip()))
-        elif isinstance(item, dict):
-            identifier = item.get("identifier")
-            if isinstance(identifier, str) and identifier.strip():
-                identifiers.append(("standard_identifier", identifier.strip()))
-    return tuple(dict.fromkeys(identifiers))
+    return _catalog_identifiers_impl(value, json_loads_fn=json.loads)
 
 
 def _catalog_ranking(
@@ -649,254 +640,39 @@ def _catalog_ranking(
     *,
     cancellation_check: Callable[[], None] | None = None,
 ) -> tuple[tuple[KnowledgeCandidate, ...], RankingExecution]:
-    available = _owner_available(snapshot, "catalog")
-    if not available:
-        return (), RankingExecution(
-            "catalog_metadata",
-            "catalog",
-            False,
-            False,
-            True,
-            0,
-            reason="catalog_owner_unavailable",
-        )
-
-    owner = next(item for item in snapshot.owners if item.owner == "catalog")
-    heads = tuple((head.scope, head.generation) for head in owner.publications)
-    if not heads:
-        return (), RankingExecution(
-            "catalog_metadata",
-            "catalog",
-            False,
-            False,
-            False,
-            0,
-            reason="catalog_has_no_publication_heads",
-        )
-    expected_values = ",".join("(?,?)" for _ in heads)
-    clauses = ["g.status='published'", "d.active=1", "d.catalog_status<>'error'"]
-    parameters: list[object] = []
-    if plan.source_kinds:
-        expanded_source_kinds: set[str] = set()
-        for value in plan.source_kinds:
-            if value == "office":
-                expanded_source_kinds.update(_LEXICAL_OWNER_FORMATS["office"])
-            elif value == "audio":
-                expanded_source_kinds.update(_LEXICAL_OWNER_FORMATS["audio"])
-            else:
-                expanded_source_kinds.add(value)
-        placeholders = ",".join("?" for _ in expanded_source_kinds)
-        clauses.append(f"d.source_kind COLLATE NOCASE IN ({placeholders})")
-        parameters.extend(sorted(expanded_source_kinds))
-    if plan.formats:
-        format_clauses: list[str] = []
-        for value in plan.formats:
-            extension = value.casefold().lstrip(".")
-            format_clauses.append("lower(d.path) LIKE ? ESCAPE '\\'")
-            parameters.append(f"%.{_escape_like(extension)}")
-        clauses.append(f"({' OR '.join(format_clauses)})")
-    if plan.project is not None:
-        clauses.append(
-            "(d.primary_project=? COLLATE NOCASE "
-            "OR EXISTS(SELECT 1 FROM json_each("
-            "CASE WHEN json_valid(d.projects_json) THEN d.projects_json "
-            "ELSE '[]' END) project WHERE "
-            "CASE WHEN project.type='text' THEN CAST(project.value AS TEXT) "
-            "ELSE COALESCE(json_extract(project.value,'$.label'),"
-            "json_extract(project.value,'$.project')) END=? COLLATE NOCASE))"
-        )
-        parameters.extend((plan.project, plan.project))
-    target_limit = _planned_candidate_limit(plan, "catalog")
-    requested_limit = min(MAX_KNOWLEDGE_CANDIDATES, target_limit + 1)
-    cancellation = SQLiteCancellationBridge(cancellation_check)
-    try:
-        with document_catalog_database(paths.catalog, readonly=True) as connection:
-            with sqlite_cancellation_scope(connection, cancellation):
-                materialized_rows = connection.execute(
-                    f"""WITH expected(source_kind,generation_id) AS (
-                    VALUES {expected_values})
-                    SELECT d.source_kind,d.file_key,d.path,d.volume_id,d.file_id,
-                    d.birthtime_ns,d.size,d.mtime_ns,d.processing_signature,
-                    d.classifier_signature,d.primary_kind,d.primary_subtype,
-                    d.primary_project,d.confidence,d.uncertainty,
-                    d.standard_references_json,d.source_status,d.catalog_status,
-                    d.updated_ns,
-                    d.last_seen_catalog_run_id,g.generation_id
-                    FROM expected e JOIN catalog_publications p
-                    ON p.source_kind=e.source_kind
-                    AND p.generation_id=e.generation_id
-                    JOIN catalog_generations g ON g.generation_id=p.generation_id
-                    JOIN catalog_generation_documents d
-                    ON d.generation_id=p.generation_id
-                    AND d.source_kind=p.source_kind
-                    WHERE {" AND ".join(clauses)}
-                    ORDER BY d.confidence DESC,d.source_kind,d.path COLLATE NOCASE
-                    LIMIT ?""",
-                    (
-                        *(value for head in heads for value in head),
-                        *parameters,
-                        requested_limit,
-                    ),
-                ).fetchall()
-    except (RuntimeError, sqlite3.Error) as exc:
-        cancellation.reraise_if_captured(exc)
-        return (), RankingExecution(
-            "catalog_metadata",
-            "catalog",
-            True,
-            True,
-            False,
-            0,
-            reason=f"owner_read_failed:{type(exc).__name__}",
-        )
-
-    candidate_window_reached = (
-        len(materialized_rows) > target_limit
-        or target_limit == MAX_KNOWLEDGE_CANDIDATES
-        and len(materialized_rows) >= target_limit
-    )
-    rows = materialized_rows[:target_limit]
-    candidates: list[KnowledgeCandidate] = []
-    invalid_rows = 0
-    partial_rows = 0
-    for source_rank, row in enumerate(rows, 1):
-        source_kind = str(row["source_kind"])
-        file_key = str(row["file_key"])
-        try:
-            identity = FileIdentity(
-                _decimal_identity_value(row["volume_id"]),
-                _decimal_identity_value(row["file_id"]),
-            )
-            if (
-                FileIdentity.decode(
-                    file_key,
-                    encoding=FileIdentityEncoding.AUTO,
-                )
-                != identity
-            ):
-                raise FileIdentityError(
-                    "catalog file_key disagrees with neutral identity fields"
-                )
-        except (FileIdentityError, ValueError):
-            invalid_rows += 1
-            continue
-        resource, identity_warnings = _direct_resource_ref(
-            source_kind=source_kind,
-            owner="catalog",
-            source_identity=file_key,
-            identity=identity,
-            birthtime_ns=row["birthtime_ns"],
-            path=str(row["path"]),
-        )
-        resource_id = resource.resource_id
-        revision_payload = {
-            "source_kind": source_kind,
-            "file_key": file_key,
-            "processing_signature": str(row["processing_signature"]),
-            "size": int(row["size"]),
-            "mtime_ns": int(row["mtime_ns"]),
-        }
-        revision_fingerprint = fingerprint_text(canonical_json(revision_payload))
-        revision_id = f"revision:catalog:{revision_fingerprint.xxh3_128}"
-        generation = int(row["generation_id"])
-        source_status = str(row["source_status"]).casefold()
-        catalog_status = str(row["catalog_status"]).casefold()
-        uncertainty = str(row["uncertainty"]).casefold()
-        partial = (
-            source_status not in {"complete", "done"}
-            or catalog_status != "classified"
-            or uncertainty == "alta"
-        )
-        if partial:
-            partial_rows += 1
-        revision = RevisionRef(
-            resource_id,
-            revision_id,
-            "document-catalog-v6",
-            str(row["processing_signature"]),
-            generation,
-            RevisionState.PARTIAL if partial else RevisionState.CURRENT,
-        )
-        identifiers = _catalog_identifiers(row["standard_references_json"])
-        subtype = row["primary_subtype"]
-        project = row["primary_project"]
-        snippet_parts = [f"kind={row['primary_kind']}"]
-        if subtype is not None:
-            snippet_parts.append(f"subtype={subtype}")
-        if project is not None:
-            snippet_parts.append(f"project={project}")
-        if identifiers:
-            snippet_parts.append(
-                "identifiers=" + ", ".join(value for _, value in identifiers)
-            )
-        snippet_parts.append(f"uncertainty={row['uncertainty']}")
-        evidence = EvidenceRef(
-            f"evidence:catalog:{generation}:{source_kind}:{row['file_key']}",
-            resource_id,
-            revision_id,
-            EvidenceMethod.INFERRED,
-            section_kind="catalog_classification",
-            section_id=str(row["primary_kind"]),
-            snippet="; ".join(snippet_parts)[:4_096],
-            extractor="document-catalog",
-            extractor_version="6",
-            generation=generation,
-            identifiers=identifiers,
-        )
-        confidence = float(row["confidence"])
-        catalog_warnings = set(identity_warnings)
-        if source_status not in {"complete", "done"}:
-            catalog_warnings.add(f"catalog_source_status:{source_status}")
-        if catalog_status != "classified":
-            catalog_warnings.add(f"catalog_status:{catalog_status}")
-        if uncertainty == "alta":
-            catalog_warnings.add("catalog_uncertainty:alta")
-        candidates.append(
-            KnowledgeCandidate(
-                resource,
-                revision,
-                evidence,
-                RankingSignal(
-                    "catalog_metadata",
-                    "catalog_confidence",
-                    confidence,
-                    source_rank,
-                    model_signature=str(row["classifier_signature"]),
-                    generation=generation,
-                ),
-                "published catalog metadata satisfied explicit filters",
-                confidence=confidence,
-                warnings=tuple(sorted(catalog_warnings)),
-            )
-        )
-    return tuple(candidates), RankingExecution(
-        "catalog_metadata",
-        "catalog",
-        True,
-        True,
-        not (plan.date_from or plan.date_to)
-        and invalid_rows == 0
-        and partial_rows == 0
-        and not candidate_window_reached,
-        len(candidates),
-        rows_scanned=len(materialized_rows),
-        reason=(
-            "catalog_identity_invalid"
-            if invalid_rows
-            else (
-                "catalog_partial_or_review"
-                if partial_rows
-                else (
-                    "catalog_content_date_filter_unsupported"
-                    if plan.date_from or plan.date_to
-                    else (
-                        "catalog_candidate_limit_reached"
-                        if candidate_window_reached
-                        else None
-                    )
-                )
-            )
-        ),
+    return _catalog_ranking_impl(
+        paths,
+        plan,
+        snapshot,
+        cancellation_check=cancellation_check,
+        owner_available_fn=_owner_available,
+        ranking_execution_type=RankingExecution,
+        lexical_owner_formats=_LEXICAL_OWNER_FORMATS,
+        escape_like_fn=_escape_like,
+        planned_candidate_limit_fn=_planned_candidate_limit,
+        max_candidates=MAX_KNOWLEDGE_CANDIDATES,
+        cancellation_bridge_type=SQLiteCancellationBridge,
+        document_catalog_database_fn=document_catalog_database,
+        sqlite_cancellation_scope_fn=sqlite_cancellation_scope,
+        sqlite_error_type=sqlite3.Error,
+        reraise_captured_cancellation_fn=_reraise_captured_cancellation,
+        cleanup_preserving_primary_fn=_cleanup_preserving_primary,
+        decimal_identity_value_fn=_decimal_identity_value,
+        file_identity_type=FileIdentity,
+        file_identity_encoding=FileIdentityEncoding.AUTO,
+        file_identity_error_type=FileIdentityError,
+        value_error_type=ValueError,
+        direct_resource_ref_fn=_direct_resource_ref,
+        canonical_json_fn=canonical_json,
+        fingerprint_text_fn=fingerprint_text,
+        revision_ref_type=RevisionRef,
+        revision_state_type=RevisionState,
+        catalog_identifiers_fn=_catalog_identifiers,
+        json_loads_fn=json.loads,
+        evidence_ref_type=EvidenceRef,
+        evidence_method_type=EvidenceMethod,
+        knowledge_candidate_type=KnowledgeCandidate,
+        ranking_signal_type=RankingSignal,
     )
 
 
