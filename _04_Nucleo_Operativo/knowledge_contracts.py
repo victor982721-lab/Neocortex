@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from . import knowledge_contract_payloads as _contract_payloads
 from .knowledge_contract_validation import (
     optional_text as _contract_optional_text_impl,
     required_text as _contract_required_text_impl,
@@ -112,14 +113,17 @@ def _optional_text(name: str, value: str | None) -> str | None:
 
 
 def _base_payload(kind: str) -> dict[str, object]:
-    return {
-        "schema_version": KNOWLEDGE_CONTRACT_SCHEMA_VERSION,
-        "kind": kind,
-    }
+    return _contract_payloads.base_payload(
+        kind,
+        schema_version=KNOWLEDGE_CONTRACT_SCHEMA_VERSION,
+    )
 
 
 def _canonical_output(payload: Mapping[str, object]) -> str:
-    return canonical_json(payload)
+    return _contract_payloads.canonical_output(
+        payload,
+        canonical_json_fn=canonical_json,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,19 +284,7 @@ class KnowledgePhaseTiming:
             raise ValueError("only snapshot timing may identify a snapshot")
 
     def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "phase": self.phase.value,
-            "duration_ns": self.duration_ns,
-            "service_attempt": self.service_attempt,
-            "executed": self.executed,
-        }
-        if self.owner is not None:
-            payload["owner"] = self.owner
-        if self.ranking_names:
-            payload["ranking_names"] = list(self.ranking_names)
-        if self.snapshot_id is not None:
-            payload["snapshot_id"] = self.snapshot_id
-        return payload
+        return _contract_payloads.knowledge_phase_timing_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,14 +330,9 @@ class KnowledgeQueryTelemetry:
             raise ValueError("context telemetry requires one context compilation phase")
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "schema_version": KNOWLEDGE_TELEMETRY_SCHEMA_VERSION,
-            "kind": "knowledge_query_telemetry",
-            "operation": self.operation.value,
-            "clock_signature": self.clock_signature,
-            "total_duration_ns": self.total_duration_ns,
-            "phases": [phase.to_dict() for phase in self.phases],
-        }
+        return _contract_payloads.knowledge_query_telemetry_payload(
+            self, telemetry_schema_version=KNOWLEDGE_TELEMETRY_SCHEMA_VERSION
+        )
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -370,11 +357,7 @@ class PhysicalIdentityRef:
             raise ValueError("physical identity version must be positive")
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "scheme": self.scheme,
-            "value": self.value,
-            "identity_version": self.identity_version,
-        }
+        return _contract_payloads.physical_identity_ref_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,23 +387,9 @@ class ResourceRef:
             raise ValueError("a resource cannot name itself as its canonical resource")
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("resource_ref")
-        payload.update(
-            {
-                "resource_id": self.resource_id,
-                "source_kind": self.source_kind,
-                "owner": self.owner,
-            }
+        return _contract_payloads.resource_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.physical_identity is not None:
-            payload["physical_identity"] = self.physical_identity.to_dict()
-        if self.current_path is not None:
-            payload["current_path"] = self.current_path
-        if self.disposition is not None:
-            payload["disposition"] = self.disposition.value
-        if self.canonical_resource_id is not None:
-            payload["canonical_resource_id"] = self.canonical_resource_id
-        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -445,21 +414,9 @@ class RevisionRef:
             raise ValueError("revision generation cannot be negative")
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("revision_ref")
-        payload.update(
-            {
-                "resource_id": self.resource_id,
-                "revision_id": self.revision_id,
-                "producer": self.producer,
-                "processing_signature": self.processing_signature,
-                "state": self.state.value,
-            }
+        return _contract_payloads.revision_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.generation is not None:
-            payload["generation"] = self.generation
-        if self.observed_at_utc is not None:
-            payload["observed_at_utc"] = self.observed_at_utc
-        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -579,45 +536,9 @@ class EvidenceRef:
                 )
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("evidence_ref")
-        payload.update(
-            {
-                "evidence_id": self.evidence_id,
-                "resource_id": self.resource_id,
-                "revision_id": self.revision_id,
-                "method": self.method.value,
-            }
+        return _contract_payloads.evidence_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        optional: tuple[tuple[str, object | None], ...] = (
-            ("page", self.page),
-            ("start_line", self.start_line),
-            ("end_line", self.end_line),
-            ("sheet", self.sheet),
-            ("cell_range", self.cell_range),
-            ("start_ms", self.start_ms),
-            ("end_ms", self.end_ms),
-            ("coordinate_space", self.coordinate_space),
-            ("start_char", self.start_char),
-            ("end_char", self.end_char),
-            ("symbol", self.symbol),
-            ("section_kind", self.section_kind),
-            ("section_id", self.section_id),
-            ("snippet", self.snippet),
-            ("extractor", self.extractor),
-            ("extractor_version", self.extractor_version),
-            ("generation", self.generation),
-        )
-        for name, value in optional:
-            if value is not None:
-                payload[name] = value
-        if self.bounding_box is not None:
-            payload["bounding_box"] = list(self.bounding_box)
-        if self.identifiers:
-            payload["identifiers"] = [
-                {"namespace": namespace, "value": value}
-                for namespace, value in self.identifiers
-            ]
-        return payload
 
 
 # endregion [02]
@@ -654,21 +575,7 @@ class RankingSignal:
             raise ValueError("ranking contribution must be finite")
 
     def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "source": self.source,
-            "score_kind": self.score_kind,
-            "raw_score": self.raw_score,
-            "source_rank": self.source_rank,
-        }
-        if self.model_signature is not None:
-            payload["model_signature"] = self.model_signature
-        if self.query_model_signature is not None:
-            payload["query_model_signature"] = self.query_model_signature
-        if self.generation is not None:
-            payload["generation"] = self.generation
-        if self.contribution is not None:
-            payload["contribution"] = self.contribution
-        return payload
+        return _contract_payloads.ranking_signal_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -709,23 +616,9 @@ class KnowledgeHit:
             raise ValueError("knowledge confidence must be between 0 and 1")
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("knowledge_hit")
-        payload.update(
-            {
-                "rank": self.rank,
-                "resource": self.resource.to_dict(),
-                "revision": self.revision.to_dict(),
-                "evidence": self.evidence.to_dict(),
-                "signals": [signal.to_dict() for signal in self.signals],
-                "fused_score": self.fused_score,
-                "reasons": list(self.reasons),
-            }
+        return _contract_payloads.knowledge_hit_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.confidence is not None:
-            payload["confidence"] = self.confidence
-        if self.warnings:
-            payload["warnings"] = list(self.warnings)
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -752,14 +645,7 @@ class PublicationHead:
             raise ValueError("publication generation cannot be negative")
 
     def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "scope": self.scope,
-            "publication_id": self.publication_id,
-            "generation": self.generation,
-        }
-        if self.model_signature is not None:
-            payload["model_signature"] = self.model_signature
-        return payload
+        return _contract_payloads.publication_head_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -772,7 +658,7 @@ class LogicalWatermark:
         _required_text("watermark value", self.value)
 
     def to_dict(self) -> dict[str, object]:
-        return {"name": self.name, "value": self.value}
+        return _contract_payloads.logical_watermark_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -793,13 +679,7 @@ class ActiveModel:
             raise ValueError("model generation cannot be negative")
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "signature": self.signature,
-            "vector_space": self.vector_space,
-            "modality": self.modality,
-            "dimensions": self.dimensions,
-            "generation": self.generation,
-        }
+        return _contract_payloads.active_model_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -850,36 +730,10 @@ class OwnerSnapshot:
         )
 
     def identity_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "owner": self.owner,
-            "state": self.state.value,
-            "expected_schema_version": self.expected_schema_version,
-            "publications": [
-                item.to_dict()
-                for item in sorted(self.publications, key=lambda value: value.scope)
-            ],
-            "watermarks": [
-                item.to_dict()
-                for item in sorted(self.watermarks, key=lambda value: value.name)
-            ],
-        }
-        if self.observed_schema_version is not None:
-            payload["observed_schema_version"] = self.observed_schema_version
-        if self.error_code is not None:
-            payload["error_code"] = self.error_code
-        if self.identity_changed:
-            payload["identity_changed"] = True
-        return payload
+        return _contract_payloads.owner_snapshot_identity_payload(self)
 
     def to_dict(self) -> dict[str, object]:
-        payload = self.identity_dict()
-        if self.data_version_before is not None:
-            payload["data_version_before"] = self.data_version_before
-        if self.data_version_after is not None:
-            payload["data_version_after"] = self.data_version_after
-        if self.warning is not None:
-            payload["warning"] = self.warning
-        return payload
+        return _contract_payloads.owner_snapshot_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -988,24 +842,9 @@ class KnowledgeSnapshot:
         return tuple(owner.owner for owner in self.owners if owner.changed)
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("knowledge_snapshot")
-        payload.update(
-            {
-                "source_version": self.source_version,
-                "captured_at_utc": self.captured_at_utc,
-                "captured_monotonic_ns": self.captured_monotonic_ns,
-                "owners": [owner.to_dict() for owner in self.owners],
-                "active_models": [model.to_dict() for model in self.active_models],
-                "snapshot_id": self.snapshot_id,
-                "consistency": self.consistency.value,
-                "attempts": self.attempts,
-            }
+        return _contract_payloads.knowledge_snapshot_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.changed_owners:
-            payload["changed_owners"] = list(self.changed_owners)
-        if self.warnings:
-            payload["warnings"] = list(self.warnings)
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1079,17 +918,9 @@ class ContextPlanStepRef:
             raise ValueError("context plan step required must be a bool")
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_plan_step_ref")
-        payload.update(
-            {
-                "channel": self.channel,
-                "ranking_name": self.ranking_name,
-                "reason": self.reason,
-                "candidate_limit": self.candidate_limit,
-                "required": self.required,
-            }
+        return _contract_payloads.context_plan_step_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1180,33 +1011,9 @@ class ContextPlanRef:
             raise ValueError("context plan steps are invalid")
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_plan_ref")
-        payload.update(
-            {
-                "plan_id": self.plan_id,
-                "normalized_query": self.normalized_query,
-                "retrieval_mode": self.retrieval_mode,
-                "intents": list(self.intents),
-                "exact_terms": list(self.exact_terms),
-                "source_kinds": list(self.source_kinds),
-                "formats": list(self.formats),
-                "include_history": self.include_history,
-                "limit": self.limit,
-                "max_per_resource": self.max_per_resource,
-                "min_section_distance": self.min_section_distance,
-                "max_vectors": self.max_vectors,
-                "steps": [step.to_dict() for step in self.steps],
-            }
+        return _contract_payloads.context_plan_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.project is not None:
-            payload["project"] = self.project
-        if self.date_from is not None:
-            payload["date_from"] = self.date_from
-        if self.date_to is not None:
-            payload["date_to"] = self.date_to
-        if self.notices:
-            payload["notices"] = list(self.notices)
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1244,16 +1051,7 @@ class ContextGraphBudget:
         return self.omitted_identifiers + self.omitted_entities + self.omitted_relations
 
     def to_dict(self) -> dict[str, object]:
-        return {
-            "identifiers_considered": self.identifiers_considered,
-            "entities_included": self.entities_included,
-            "relations_included": self.relations_included,
-            "omitted_identifiers": self.omitted_identifiers,
-            "omitted_entities": self.omitted_entities,
-            "omitted_relations": self.omitted_relations,
-            "identifier_limit_per_evidence": self.identifier_limit_per_evidence,
-            "measurement_scope": self.measurement_scope,
-        }
+        return _contract_payloads.context_graph_budget_payload(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1284,17 +1082,7 @@ class ContextBudget:
             raise ValueError("truncated evidence identifiers must be unique")
 
     def to_dict(self) -> dict[str, object]:
-        payload: dict[str, object] = {
-            "character_limit": self.character_limit,
-            "characters_used": self.characters_used,
-            "estimated_tokens": self.estimated_tokens,
-            "estimator_signature": self.estimator_signature,
-            "omitted_candidates": self.omitted_candidates,
-            "measurement_scope": self.measurement_scope,
-        }
-        if self.truncated_evidence_ids:
-            payload["truncated_evidence_ids"] = list(self.truncated_evidence_ids)
-        return payload
+        return _contract_payloads.context_budget_payload(self)
 
 
 def _validate_context_references(
@@ -1325,17 +1113,9 @@ class ContextEntityRef:
         _validate_context_references("entity resource", self.resource_ids)
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_entity_ref")
-        payload.update(
-            {
-                "entity_id": self.entity_id,
-                "entity_kind": self.entity_kind,
-                "label": self.label,
-                "evidence_ids": list(self.evidence_ids),
-                "resource_ids": list(self.resource_ids),
-            }
+        return _contract_payloads.context_entity_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1423,18 +1203,9 @@ class ContextContradictionRef:
         )
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_contradiction_ref")
-        payload.update(
-            {
-                "contradiction_id": self.contradiction_id,
-                "contradiction_kind": self.contradiction_kind,
-                "topic": self.topic,
-                "values": list(self.values),
-                "summary": self.summary,
-                "citation_ids": list(self.citation_ids),
-            }
+        return _contract_payloads.context_contradiction_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1483,21 +1254,9 @@ class ContextRelationRef:
         _validate_context_references("relation evidence", self.evidence_ids)
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_relation_ref")
-        payload.update(
-            {
-                "relation_id": self.relation_id,
-                "source_entity_id": self.source_entity_id,
-                "target_entity_id": self.target_entity_id,
-                "relation_kind": self.relation_kind,
-                "method": self.method.value,
-                "provenance": list(self.provenance),
-                "evidence_ids": list(self.evidence_ids),
-            }
+        return _contract_payloads.context_relation_ref_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.confidence is not None:
-            payload["confidence"] = self.confidence
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
@@ -1719,38 +1478,9 @@ class ContextBundle:
             )
 
     def to_dict(self) -> dict[str, object]:
-        payload = _base_payload("context_bundle")
-        payload.update(
-            {
-                "normalized_query": self.normalized_query,
-                "intents": list(self.intents),
-                "plan_id": self.plan_id,
-                "plan": self.plan.to_dict(),
-                "snapshot": self.snapshot.to_dict(),
-                "selected_hits": [hit.to_dict() for hit in self.selected_hits],
-                "citation_ids": [
-                    {"citation_id": citation_id, "evidence_id": evidence_id}
-                    for citation_id, evidence_id in self.citation_ids
-                ],
-                "entities": [entity.to_dict() for entity in self.entities],
-                "relations": [relation.to_dict() for relation in self.relations],
-                "graph_budget": self.graph_budget.to_dict(),
-                "budget": self.budget.to_dict(),
-                "rendered_context": self.rendered_context,
-                "completeness": self.completeness.value,
-            }
+        return _contract_payloads.context_bundle_payload(
+            self, base_payload_fn=_base_payload
         )
-        if self.contradictions:
-            payload["contradictions"] = [
-                contradiction.to_dict() for contradiction in self.contradictions
-            ]
-        if self.missing_information:
-            payload["missing_information"] = list(self.missing_information)
-        if self.warnings:
-            payload["warnings"] = list(self.warnings)
-        if self.telemetry is not None:
-            payload["telemetry"] = self.telemetry.to_dict()
-        return payload
 
     def to_json(self) -> str:
         return _canonical_output(self.to_dict())
