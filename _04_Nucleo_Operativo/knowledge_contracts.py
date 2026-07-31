@@ -7,13 +7,12 @@ when an owner cannot prove it.
 
 from __future__ import annotations
 
-import json
-import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from . import knowledge_contract_context as _contract_context
 from . import knowledge_contract_payloads as _contract_payloads
 from . import knowledge_contract_references as _contract_references
 from . import knowledge_contract_snapshot as _contract_snapshot
@@ -565,31 +564,14 @@ class KnowledgeSnapshot:
 
 
 def _validate_context_plan_values(name: str, values: tuple[str, ...]) -> None:
-    if not isinstance(values, tuple):
-        raise ValueError(f"context plan {name} must be a tuple")
-    if len(values) > MAX_CONTEXT_PLAN_VALUES:
-        raise ValueError(
-            f"context plan {name} cannot contain more than "
-            f"{MAX_CONTEXT_PLAN_VALUES} values"
-        )
-    if len(set(values)) != len(values):
-        raise ValueError(f"context plan {name} must be unique")
-    total_characters = 0
-    for value in values:
-        if not isinstance(value, str):
-            raise ValueError(f"context plan {name} must contain strings")
-        _required_text(f"context plan {name} value", value)
-        if len(value) > MAX_CONTEXT_PLAN_VALUE_CHARS:
-            raise ValueError(
-                f"context plan {name} values cannot exceed "
-                f"{MAX_CONTEXT_PLAN_VALUE_CHARS} characters"
-            )
-        total_characters += len(value)
-    if total_characters > MAX_CONTEXT_PLAN_TOTAL_VALUE_CHARS:
-        raise ValueError(
-            f"context plan {name} cannot exceed "
-            f"{MAX_CONTEXT_PLAN_TOTAL_VALUE_CHARS} total characters"
-        )
+    _contract_context.validate_context_plan_values(
+        name,
+        values,
+        required_text_fn=_required_text,
+        max_values=MAX_CONTEXT_PLAN_VALUES,
+        max_value_chars=MAX_CONTEXT_PLAN_VALUE_CHARS,
+        max_total_value_chars=MAX_CONTEXT_PLAN_TOTAL_VALUE_CHARS,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,29 +583,11 @@ class ContextPlanStepRef:
     required: bool
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("channel", self.channel),
-            ("ranking_name", self.ranking_name),
-            ("reason", self.reason),
-        ):
-            if not isinstance(value, str):
-                raise ValueError(f"context plan step {name} must be a string")
-            _required_text(f"context plan step {name}", value)
-            if len(value) > MAX_CONTEXT_PLAN_VALUE_CHARS:
-                raise ValueError(
-                    f"context plan step {name} cannot exceed "
-                    f"{MAX_CONTEXT_PLAN_VALUE_CHARS} characters"
-                )
-        if (
-            isinstance(self.candidate_limit, bool)
-            or not isinstance(self.candidate_limit, int)
-            or not 1 <= self.candidate_limit <= 1_000
-        ):
-            raise ValueError(
-                "context plan step candidate_limit must be between 1 and 1000"
-            )
-        if not isinstance(self.required, bool):
-            raise ValueError("context plan step required must be a bool")
+        _contract_context.validate_context_plan_step_ref(
+            self,
+            required_text_fn=_required_text,
+            max_value_chars=MAX_CONTEXT_PLAN_VALUE_CHARS,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_plan_step_ref_payload(
@@ -655,68 +619,15 @@ class ContextPlanRef:
     notices: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("plan_id", self.plan_id),
-            ("normalized_query", self.normalized_query),
-        ):
-            if not isinstance(value, str):
-                raise ValueError(f"context plan {name} must be a string")
-            _required_text(f"context plan {name}", value)
-            if len(value) > MAX_CONTEXT_PLAN_VALUE_CHARS:
-                raise ValueError(
-                    f"context plan {name} cannot exceed "
-                    f"{MAX_CONTEXT_PLAN_VALUE_CHARS} characters"
-                )
-        if self.retrieval_mode not in {"discovery", "evidence"}:
-            raise ValueError("context plan retrieval_mode is invalid")
-        for name, values in (
-            ("intents", self.intents),
-            ("exact_terms", self.exact_terms),
-            ("source_kinds", self.source_kinds),
-            ("formats", self.formats),
-            ("notices", self.notices),
-        ):
-            _validate_context_plan_values(name, values)
-        for name, option_value in (
-            ("project", self.project),
-            ("date_from", self.date_from),
-            ("date_to", self.date_to),
-        ):
-            if option_value is not None and not isinstance(option_value, str):
-                raise ValueError(f"context plan {name} must be a string when present")
-            _optional_text(f"context plan {name}", option_value)
-            if (
-                option_value is not None
-                and len(option_value) > MAX_CONTEXT_PLAN_VALUE_CHARS
-            ):
-                raise ValueError(
-                    f"context plan {name} cannot exceed "
-                    f"{MAX_CONTEXT_PLAN_VALUE_CHARS} characters"
-                )
-        if not isinstance(self.include_history, bool):
-            raise ValueError("context plan include_history must be a bool")
-        for name, numeric_value, minimum, maximum in (
-            ("limit", self.limit, 1, 1_000),
-            ("max_per_resource", self.max_per_resource, 1, 100),
-            ("min_section_distance", self.min_section_distance, 0, 1_000_000),
-            ("max_vectors", self.max_vectors, 1, 10_000_000),
-        ):
-            if (
-                isinstance(numeric_value, bool)
-                or not isinstance(numeric_value, int)
-                or not minimum <= numeric_value <= maximum
-            ):
-                raise ValueError(
-                    f"context plan {name} must be between {minimum} and {maximum}"
-                )
-        if not isinstance(self.steps, tuple):
-            raise ValueError("context plan steps must be a tuple")
-        if len(self.steps) > MAX_CONTEXT_PLAN_STEPS:
-            raise ValueError(
-                f"context plan cannot contain more than {MAX_CONTEXT_PLAN_STEPS} steps"
-            )
-        if not all(isinstance(step, ContextPlanStepRef) for step in self.steps):
-            raise ValueError("context plan steps are invalid")
+        _contract_context.validate_context_plan_ref(
+            self,
+            required_text_fn=_required_text,
+            optional_text_fn=_optional_text,
+            validate_values_fn=_validate_context_plan_values,
+            max_value_chars=MAX_CONTEXT_PLAN_VALUE_CHARS,
+            max_steps=MAX_CONTEXT_PLAN_STEPS,
+            plan_step_type=ContextPlanStepRef,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_plan_ref_payload(
@@ -739,24 +650,14 @@ class ContextGraphBudget:
     measurement_scope: str = "selected_evidence_graph"
 
     def __post_init__(self) -> None:
-        for name, value in (
-            ("identifiers_considered", self.identifiers_considered),
-            ("entities_included", self.entities_included),
-            ("relations_included", self.relations_included),
-            ("omitted_identifiers", self.omitted_identifiers),
-            ("omitted_entities", self.omitted_entities),
-            ("omitted_relations", self.omitted_relations),
-        ):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"context graph {name} cannot be negative")
-        if self.identifier_limit_per_evidence != MAX_EVIDENCE_IDENTIFIERS:
-            raise ValueError("context graph identifier limit is invalid")
-        if self.measurement_scope != "selected_evidence_graph":
-            raise ValueError("context graph measurement_scope is invalid")
+        _contract_context.validate_context_graph_budget(
+            self,
+            max_evidence_identifiers=MAX_EVIDENCE_IDENTIFIERS,
+        )
 
     @property
     def omitted_total(self) -> int:
-        return self.omitted_identifiers + self.omitted_entities + self.omitted_relations
+        return _contract_context.context_graph_omitted_total(self)
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_graph_budget_payload(self)
@@ -773,21 +674,7 @@ class ContextBudget:
     measurement_scope: str = "rendered_context"
 
     def __post_init__(self) -> None:
-        if isinstance(self.character_limit, bool) or self.character_limit < 1:
-            raise ValueError("context character limit must be positive")
-        if not 0 <= self.characters_used <= self.character_limit:
-            raise ValueError("context characters used exceed the limit")
-        if self.estimated_tokens < 0:
-            raise ValueError("estimated token count cannot be negative")
-        if self.omitted_candidates < 0:
-            raise ValueError("omitted candidate count cannot be negative")
-        _required_text("estimator signature", self.estimator_signature)
-        if self.measurement_scope != "rendered_context":
-            raise ValueError(
-                "context budget measurement_scope must be rendered_context"
-            )
-        if len(set(self.truncated_evidence_ids)) != len(self.truncated_evidence_ids):
-            raise ValueError("truncated evidence identifiers must be unique")
+        _contract_context.validate_context_budget(self, required_text_fn=_required_text)
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_budget_payload(self)
@@ -797,12 +684,11 @@ def _validate_context_references(
     name: str,
     references: tuple[str, ...],
 ) -> None:
-    if not references:
-        raise ValueError(f"context {name} requires at least one reference")
-    if len(set(references)) != len(references):
-        raise ValueError(f"context {name} references must be unique")
-    for reference in references:
-        _required_text(f"context {name} reference", reference)
+    _contract_context.validate_context_references(
+        name,
+        references,
+        required_text_fn=_required_text,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -814,11 +700,11 @@ class ContextEntityRef:
     resource_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _required_text("context entity_id", self.entity_id)
-        _required_text("context entity kind", self.entity_kind)
-        _required_text("context entity label", self.label)
-        _validate_context_references("entity evidence", self.evidence_ids)
-        _validate_context_references("entity resource", self.resource_ids)
+        _contract_context.validate_context_entity_ref(
+            self,
+            required_text_fn=_required_text,
+            validate_references_fn=_validate_context_references,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_entity_ref_payload(
@@ -843,16 +729,12 @@ class ContextContradictionRef:
         topic: str,
         values: tuple[str, ...],
     ) -> str:
-        identity = {
-            "contradiction_kind": contradiction_kind,
-            "topic": topic.casefold(),
-            "values": [value.casefold() for value in values],
-        }
-        fingerprint = fingerprint_text(canonical_json(identity))
-        return (
-            "context-contradiction-v1:"
-            f"{fingerprint.xxh3_128}:{fingerprint.byte_count}:"
-            f"{fingerprint.xxh3_64_guard}"
+        return _contract_context.context_contradiction_stable_id(
+            contradiction_kind,
+            topic,
+            values,
+            canonical_json_fn=canonical_json,
+            fingerprint_text_fn=fingerprint_text,
         )
 
     @classmethod
@@ -864,51 +746,24 @@ class ContextContradictionRef:
         values: tuple[str, ...],
         citation_ids: tuple[str, ...],
     ) -> "ContextContradictionRef":
-        ordered_values = tuple(sorted(values, key=str.casefold))
-        return cls(
-            contradiction_id=cls._stable_id(
-                contradiction_kind,
-                topic,
-                ordered_values,
-            ),
+        return _contract_context.create_context_contradiction(
+            cls,
             contradiction_kind=contradiction_kind,
             topic=topic,
-            values=ordered_values,
+            values=values,
             citation_ids=citation_ids,
         )
 
     def __post_init__(self) -> None:
-        _required_text("context contradiction_id", self.contradiction_id)
-        _required_text("context contradiction kind", self.contradiction_kind)
-        _required_text("context contradiction topic", self.topic)
-        _validate_context_references("contradiction value", self.values)
-        if len({value.casefold() for value in self.values}) < 2:
-            raise ValueError(
-                "context contradictions require at least two distinct values"
-            )
-        if self.values != tuple(sorted(self.values, key=str.casefold)):
-            raise ValueError("context contradiction values must be canonically ordered")
-        _validate_context_references("contradiction citation", self.citation_ids)
-        if len(self.citation_ids) < 2:
-            raise ValueError(
-                "context contradictions require at least two distinct citations"
-            )
-        expected_id = self._stable_id(
-            self.contradiction_kind,
-            self.topic,
-            self.values,
+        _contract_context.validate_context_contradiction(
+            self,
+            required_text_fn=_required_text,
+            validate_references_fn=_validate_context_references,
         )
-        if self.contradiction_id != expected_id:
-            raise ValueError("context contradiction_id does not match its identity")
 
     @property
     def summary(self) -> str:
-        return (
-            "Structured claim "
-            f"{json.dumps(self.topic, ensure_ascii=False, allow_nan=False)} "
-            "has conflicting values: "
-            f"{', '.join(json.dumps(value, ensure_ascii=False, allow_nan=False) for value in self.values)}."
-        )
+        return _contract_context.context_contradiction_summary(self)
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_contradiction_ref_payload(
@@ -931,35 +786,14 @@ class ContextRelationRef:
     confidence: float | None = None
 
     def __post_init__(self) -> None:
-        _required_text("context relation_id", self.relation_id)
-        _required_text("context relation source", self.source_entity_id)
-        _required_text("context relation target", self.target_entity_id)
-        _required_text("context relation kind", self.relation_kind)
-        if not isinstance(self.method, EvidenceMethod):
-            raise ValueError("context relation method is invalid")
-        _validate_context_references("relation provenance", self.provenance)
-        if len(self.provenance) > MAX_CONTEXT_RELATION_PROVENANCE_ITEMS:
-            raise ValueError(
-                "context relation provenance cannot contain more than "
-                f"{MAX_CONTEXT_RELATION_PROVENANCE_ITEMS} items"
-            )
-        if sum(len(item) for item in self.provenance) > (
-            MAX_CONTEXT_RELATION_PROVENANCE_CHARS
-        ):
-            raise ValueError(
-                "context relation provenance cannot exceed "
-                f"{MAX_CONTEXT_RELATION_PROVENANCE_CHARS} total characters"
-            )
-        if self.confidence is not None and (
-            isinstance(self.confidence, bool)
-            or not isinstance(self.confidence, (int, float))
-            or not math.isfinite(self.confidence)
-            or not 0.0 <= self.confidence <= 1.0
-        ):
-            raise ValueError("context relation confidence must be between 0 and 1")
-        if self.source_entity_id == self.target_entity_id:
-            raise ValueError("context relations require different entities")
-        _validate_context_references("relation evidence", self.evidence_ids)
+        _contract_context.validate_context_relation_ref(
+            self,
+            required_text_fn=_required_text,
+            validate_references_fn=_validate_context_references,
+            evidence_method_type=EvidenceMethod,
+            max_provenance_items=MAX_CONTEXT_RELATION_PROVENANCE_ITEMS,
+            max_provenance_chars=MAX_CONTEXT_RELATION_PROVENANCE_CHARS,
+        )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_relation_ref_payload(
@@ -995,195 +829,13 @@ class ContextBundle:
     )
 
     def __post_init__(self) -> None:
-        _required_text("normalized query", self.normalized_query)
-        _required_text("plan_id", self.plan_id)
-        for intent in self.intents:
-            _required_text("intent", intent)
-        if self.plan.plan_id != self.plan_id:
-            raise ValueError("context plan_id must match the normalized plan")
-        if self.plan.normalized_query != self.normalized_query:
-            raise ValueError("context query must match the normalized plan")
-        if self.plan.intents != self.intents:
-            raise ValueError("context intents must match the normalized plan")
-        selected_evidence_ids = tuple(
-            hit.evidence.evidence_id for hit in self.selected_hits
+        _contract_context.validate_context_bundle(
+            self,
+            required_text_fn=_required_text,
+            knowledge_completeness_type=KnowledgeCompleteness,
+            telemetry_type=KnowledgeQueryTelemetry,
+            telemetry_operation_type=KnowledgeTelemetryOperation,
         )
-        evidence_ids = set(selected_evidence_ids)
-        evidence_resources: dict[str, set[str]] = {}
-        for hit in self.selected_hits:
-            grounded_resources = evidence_resources.setdefault(
-                hit.evidence.evidence_id,
-                set(),
-            )
-            grounded_resources.add(hit.resource.resource_id)
-            for namespace, value in hit.evidence.identifiers:
-                if namespace.casefold() in {
-                    "planned_duplicate_of",
-                    "code_relation_source_resource",
-                    "code_relation_target_resource",
-                }:
-                    grounded_resources.add(value)
-        resource_ids = {
-            resource_id
-            for grounded_resources in evidence_resources.values()
-            for resource_id in grounded_resources
-        }
-        if len(evidence_ids) != len(selected_evidence_ids):
-            raise ValueError(
-                "selected hits require unique evidence identifiers for citations"
-            )
-        citation_names: set[str] = set()
-        cited_evidence_ids: set[str] = set()
-        for citation_id, evidence_id in self.citation_ids:
-            _required_text("citation_id", citation_id)
-            if citation_id in citation_names:
-                raise ValueError("citation identifiers must be unique")
-            citation_names.add(citation_id)
-            if evidence_id not in evidence_ids:
-                raise ValueError("citation must reference selected evidence")
-            cited_evidence_ids.add(evidence_id)
-        if (
-            len(self.citation_ids) != len(selected_evidence_ids)
-            or cited_evidence_ids != evidence_ids
-        ):
-            raise ValueError(
-                "each selected hit must have exactly one citation by evidence_id"
-            )
-        entity_ids = [entity.entity_id for entity in self.entities]
-        if len(set(entity_ids)) != len(entity_ids):
-            raise ValueError("context entity identifiers must be unique")
-        for entity in self.entities:
-            if not set(entity.evidence_ids).issubset(cited_evidence_ids):
-                raise ValueError("context entities must reference cited evidence")
-            if not set(entity.resource_ids).issubset(resource_ids):
-                raise ValueError("context entities must reference a grounded resource")
-            grounded_resources = {
-                resource_id
-                for evidence_id in entity.evidence_ids
-                for resource_id in evidence_resources.get(evidence_id, set())
-            }
-            if not set(entity.resource_ids).issubset(grounded_resources):
-                raise ValueError(
-                    "context entity resources must be grounded by its evidence references"
-                )
-        relation_ids = [relation.relation_id for relation in self.relations]
-        if len(set(relation_ids)) != len(relation_ids):
-            raise ValueError("context relation identifiers must be unique")
-        logical_relations = [
-            (
-                relation.source_entity_id,
-                relation.target_entity_id,
-                relation.relation_kind,
-                relation.method,
-                relation.provenance,
-                relation.evidence_ids,
-                relation.confidence,
-            )
-            for relation in self.relations
-        ]
-        if len(set(logical_relations)) != len(logical_relations):
-            raise ValueError("logical context relations must be unique")
-        known_entity_ids = set(entity_ids)
-        entities_by_id = {entity.entity_id: entity for entity in self.entities}
-        for relation in self.relations:
-            if not {
-                relation.source_entity_id,
-                relation.target_entity_id,
-            }.issubset(known_entity_ids):
-                raise ValueError("context relations must reference existing entities")
-            if not set(relation.evidence_ids).issubset(cited_evidence_ids):
-                raise ValueError("context relations must reference cited evidence")
-            relation_evidence = set(relation.evidence_ids)
-            source_evidence = set(
-                entities_by_id[relation.source_entity_id].evidence_ids
-            )
-            target_evidence = set(
-                entities_by_id[relation.target_entity_id].evidence_ids
-            )
-            if not relation_evidence.issubset(
-                source_evidence.intersection(target_evidence)
-            ):
-                raise ValueError("context relation evidence must ground both endpoints")
-        identifiers_considered = sum(
-            len(hit.evidence.identifiers) for hit in self.selected_hits
-        )
-        if self.graph_budget.identifiers_considered != identifiers_considered:
-            raise ValueError(
-                "context graph identifier count must match selected evidence"
-            )
-        if self.graph_budget.entities_included != len(self.entities):
-            raise ValueError("context graph entity count must match entities")
-        if self.graph_budget.relations_included != len(self.relations):
-            raise ValueError("context graph relation count must match relations")
-        if (
-            self.graph_budget.omitted_total
-            and self.completeness is KnowledgeCompleteness.COMPLETE
-        ):
-            raise ValueError("omitted context graph data requires partial completeness")
-        for entity in self.entities:
-            if entity.to_json() not in self.rendered_context:
-                raise ValueError(
-                    "context entities must be rendered inside the character budget"
-                )
-        for relation in self.relations:
-            if relation.to_json() not in self.rendered_context:
-                raise ValueError(
-                    "context relations must be rendered inside the character budget"
-                )
-        contradiction_ids: set[str] = set()
-        logical_contradictions: set[tuple[str, str, tuple[str, ...]]] = set()
-        for contradiction in self.contradictions:
-            if contradiction.contradiction_id in contradiction_ids:
-                raise ValueError("context contradiction identifiers must be unique")
-            contradiction_ids.add(contradiction.contradiction_id)
-            if not set(contradiction.citation_ids).issubset(citation_names):
-                raise ValueError(
-                    "contradictions require at least two existing citations"
-                )
-            rendered_citations = f"[{', '.join(contradiction.citation_ids)}]"
-            if (
-                contradiction.summary not in self.rendered_context
-                or rendered_citations not in self.rendered_context
-            ):
-                raise ValueError(
-                    "context contradictions must be rendered inside the character budget"
-                )
-            logical_contradiction = (
-                contradiction.contradiction_kind,
-                contradiction.topic.casefold(),
-                tuple(value.casefold() for value in contradiction.values),
-            )
-            if logical_contradiction in logical_contradictions:
-                raise ValueError("logical context contradictions must be unique")
-            logical_contradictions.add(logical_contradiction)
-        for item in (*self.missing_information, *self.warnings):
-            _required_text("context notice", item)
-        if self.graph_budget.omitted_total:
-            graph_notices = tuple(
-                item
-                for item in (*self.missing_information, *self.warnings)
-                if "graph" in item.casefold() and "omit" in item.casefold()
-            )
-            if not graph_notices or not any(
-                notice in self.rendered_context for notice in graph_notices
-            ):
-                raise ValueError(
-                    "omitted context graph data requires a rendered visible notice"
-                )
-        if len(self.rendered_context) != self.budget.characters_used:
-            raise ValueError("rendered context and budget character count disagree")
-        if self.telemetry is not None and not isinstance(
-            self.telemetry,
-            KnowledgeQueryTelemetry,
-        ):
-            raise ValueError("context telemetry is invalid")
-        if (
-            self.telemetry is not None
-            and self.telemetry.operation is not KnowledgeTelemetryOperation.CONTEXT
-        ):
-            raise ValueError(
-                "ContextBundle telemetry must describe a context operation"
-            )
 
     def to_dict(self) -> dict[str, object]:
         return _contract_payloads.context_bundle_payload(
