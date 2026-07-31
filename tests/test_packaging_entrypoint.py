@@ -33,11 +33,17 @@ def test_source_manifest_excludes_release_internal_material() -> None:
 
     assert "include AGENTS.md" not in manifest_lines
     assert "include NeoCortex_AGENTS.md" not in manifest_lines
+    assert "exclude AGENTS.md" in manifest_lines
+    assert "exclude NeoCortex_AGENTS.md" in manifest_lines
+    assert "prune tests" in manifest_lines
     assert "recursive-include tests *.py" not in manifest_lines
     assert "recursive-include tests/fixtures/knowledge *.json" not in manifest_lines
     assert "include docs/KNOWLEDGE_EVOLUTION_*.md" not in manifest_lines
     assert "include docs/TECHNICAL_AUDIT_*.md" not in manifest_lines
     assert "include docs/TECHNICAL_EVOLUTION_*.md" not in manifest_lines
+    assert "recursive-exclude docs KNOWLEDGE_EVOLUTION_*.md" in manifest_lines
+    assert "recursive-exclude docs TECHNICAL_AUDIT_*.md" in manifest_lines
+    assert "recursive-exclude docs TECHNICAL_EVOLUTION_*.md" in manifest_lines
 
 
 def test_sdist_manifest_includes_active_docs_and_release_tools() -> None:
