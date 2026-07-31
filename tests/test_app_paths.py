@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from _04_Nucleo_Operativo.app_paths import (
+    default_state_directory,
+    default_ui_settings_path,
+    local_application_data_directory,
+    program_installation_directory,
+    self_analysis_data_directory,
+    source_repository_directory,
+    stable_launcher_path,
+)
+from _04_Nucleo_Operativo.cli_parser import build_parser
+
+
+class ApplicationPathTests(unittest.TestCase):
+    def test_canonical_user_paths_share_the_expected_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            profile = temporary_root / "profile"
+            local_appdata = profile / "AppData" / "Local"
+            with (
+                patch.dict(os.environ, {"LOCALAPPDATA": str(local_appdata)}),
+                patch.object(Path, "home", return_value=profile),
+            ):
+                self.assertEqual(
+                    source_repository_directory(),
+                    profile / "Neocortex" / "Repository",
+                )
+                self.assertEqual(
+                    program_installation_directory(),
+                    local_appdata / "Programs" / "Neocortex",
+                )
+                self.assertEqual(
+                    self_analysis_data_directory(),
+                    local_appdata / "Neocortex" / "self-analysis",
+                )
+                self.assertEqual(
+                    stable_launcher_path(),
+                    local_appdata / "Programs" / "Neocortex" / "bin" / "Neocortex.exe",
+                )
+
+    def test_relative_local_appdata_is_rejected(self) -> None:
+        with patch.dict(os.environ, {"LOCALAPPDATA": "relative-local-appdata"}):
+            with self.assertRaisesRegex(
+                ValueError,
+                "local application data path must be absolute",
+            ):
+                local_application_data_directory()
+
+    def test_state_and_ui_settings_use_fixed_local_appdata_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"LOCALAPPDATA": directory}):
+                base = Path(directory) / "Neocortex"
+                self.assertEqual(default_state_directory(), base / "state")
+                self.assertEqual(default_ui_settings_path(), base / "ui.ini")
+
+    def test_cli_keeps_fixed_default_and_only_mentions_protected_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"LOCALAPPDATA": directory}):
+                parser = build_parser()
+                parsed = parser.parse_args([])
+                self.assertEqual(
+                    parsed.state_directory,
+                    Path(directory) / "Neocortex" / "state",
+                )
+                help_text = parser.format_help()
+                self_analysis = parser._option_string_actions["--self-analysis"]
+                self.assertIn(
+                    "requires explicit --root and --state-directory",
+                    self_analysis.help,
+                )
+                self.assertNotIn("\n  --state-directory", help_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

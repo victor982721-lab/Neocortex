@@ -1,0 +1,98 @@
+"""Installed command entry point for the integrated NeoCortex application."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from collections.abc import Sequence
+
+
+_CAPABILITIES_COMMAND = ("doctor", "capabilities")
+_CAPABILITIES_FLAT_FLAG = "--doctor-capabilities"
+_CAPABILITIES_JSON_FLAT_FLAG = "--doctor-capabilities-json"
+
+
+def _is_capabilities_command(arguments: Sequence[str]) -> bool:
+    return tuple(arguments[:2]) == _CAPABILITIES_COMMAND
+
+
+def _canonical_help_requested(arguments: Sequence[str]) -> bool:
+    if not _is_capabilities_command(arguments):
+        return False
+    for token in arguments[2:]:
+        if token == "--":
+            return False
+        if token in {"-h", "--help"}:
+            return True
+    return False
+
+
+def _print_capabilities_help() -> None:
+    parser = argparse.ArgumentParser(
+        prog="Neocortex doctor capabilities",
+        description=(
+            "Inspect declared runtime capabilities without importing optional "
+            "engines, loading models or creating state."
+        ),
+        allow_abbrev=False,
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit one canonical JSON capability report",
+    )
+    parser.print_help()
+
+
+def _translate_canonical_arguments(arguments: Sequence[str]) -> list[str]:
+    """Translate one exact canonical facade into hidden flat compatibility flags."""
+
+    forwarded = list(arguments)
+    if not _is_capabilities_command(forwarded):
+        return forwarded
+    translated = [_CAPABILITIES_FLAT_FLAG]
+    translate_options = True
+    for token in forwarded[2:]:
+        if token == "--":
+            translate_options = False
+            translated.append(token)
+        elif translate_options and token == "--json":
+            translated.append(_CAPABILITIES_JSON_FLAT_FLAG)
+        else:
+            translated.append(token)
+    return translated
+
+
+def _run_special_mode(arguments: Sequence[str]) -> int | None:
+    if arguments and arguments[0] == "--ui":
+        from _05_Interfaz.app import main as run_ui
+
+        return run_ui(arguments[1:])
+    if arguments and arguments[0] == "--gui-worker":
+        from _05_Interfaz.worker import main as run_worker
+
+        return run_worker(arguments[1:])
+    return None
+
+
+def entrypoint(arguments: Sequence[str] | None = None) -> int:
+    """Run one CLI, desktop, or supervised-worker invocation."""
+
+    forwarded = list(sys.argv[1:] if arguments is None else arguments)
+    try:
+        special_exit_code = _run_special_mode(forwarded)
+        if special_exit_code is not None:
+            return special_exit_code
+        if _canonical_help_requested(forwarded):
+            _print_capabilities_help()
+            return 0
+        forwarded = _translate_canonical_arguments(forwarded)
+        from _04_Nucleo_Operativo.cli_app import main as run_cli
+
+        return run_cli(forwarded)
+    except KeyboardInterrupt:
+        print("\nEjecución cancelada por el usuario.", file=sys.stderr)
+        return 130
+
+
+__all__ = ["entrypoint"]

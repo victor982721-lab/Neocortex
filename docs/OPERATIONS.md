@@ -1,0 +1,493 @@
+# Guía operativa
+
+Esta guía cubre ejecución normal, watcher, recursos, cancelación, diagnóstico y
+mantenimiento. La estructura de componentes se describe en
+[ARCHITECTURE.md](ARCHITECTURE.md) y los propietarios y versiones de las bases
+en [PERSISTENCE.md](PERSISTENCE.md). La consulta cross-owner de solo lectura se
+documenta en [KNOWLEDGE.md](KNOWLEDGE.md); no se duplican esos contratos aquí.
+
+## Condiciones previas
+
+1. Confirme que no haya otra ejecución de NeoCortex usando el mismo directorio
+   de estado.
+2. Verifique el launcher y la ayuda:
+
+   ```powershell
+   Neocortex --version
+   Neocortex --help
+   ```
+
+   Esta guía corresponde a la fuente `0.7.1`. Si `--version` no existe o no
+   informa `0.7.1`, el launcher operativo no coincide con esta entrega: no use
+   sus contratos nuevos sobre estado real hasta validar el artefacto correcto.
+
+3. Confirme la raíz exacta y que no sea un symlink, junction o punto de
+   reanálisis.
+4. Para enumeración NTFS/USN, use un volumen NTFS local y los permisos de lectura
+   requeridos. Las rutas UNC y otros sistemas de archivos no ofrecen el mismo
+   contrato.
+5. Antes de una actualización, migración o acción sobre archivos, siga
+   [RECOVERY.md](RECOVERY.md).
+
+La topología canónica por usuario es:
+
+```text
+Fuente:       %USERPROFILE%\Neocortex\Repository
+Runtime:      %LOCALAPPDATA%\Programs\Neocortex\versions\<runtime-id>\venv
+Launcher:     %LOCALAPPDATA%\Programs\Neocortex\bin\Neocortex.exe
+Estado:       %LOCALAPPDATA%\Neocortex\state
+Autoanálisis: %LOCALAPPDATA%\Neocortex\self-analysis
+```
+
+El launcher de `bin` se promueve sólo después de validar el runtime exacto. No
+copie, sustituya ni compacte bases mientras exista un writer activo.
+
+## Flujo normal no mutador del corpus
+
+Una corrida sin `--apply` puede leer el corpus y escribir inventario, cachés,
+eventos y planes; no es una consulta de sólo lectura. Empiece con un conjunto
+acotado:
+
+```powershell
+$Root = 'C:\Datos'
+if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+    throw "La raíz no existe o no es un directorio: $Root"
+}
+Neocortex --root $Root --route pdf --MaxCount 25 --strict-exit-codes
+```
+
+La frontera normal captura `InternalPathsPolicy`: una raíz situada dentro del
+repositorio, runtime, datos de aplicación o laboratorio interno se rechaza; si
+esos árboles son descendientes del corpus se excluyen del inventario. El estado
+no puede ser igual ni ancestro del corpus, porque esa exclusión podaría la raíz
+completa. Framework persiste la firma efectiva que combina la firma cruda de
+exclusión con la identidad de esas rutas internas.
+
+Después inspeccione la ejecución:
+
+```powershell
+Neocortex --status
+Neocortex --status --status-json
+```
+
+Para varias rutas, especifique la lista o use `--all`. `--all` selecciona PDF,
+DOCX, Office, audio, imagen y código, actualiza el catálogo técnico y puede
+consumir recursos considerables:
+
+```powershell
+Neocortex --root $Root --route pdf,docx,image --strict-exit-codes
+```
+
+No use una corrida amplia como prueba de instalación. Ayuda, versión y doctors
+son la barrera inicial apropiada.
+
+## Autoanálisis protegido en laboratorio
+
+Use un mini-root sintético y un estado hermano, nunca contenido dentro de la
+raíz analizada:
+
+```powershell
+$Lab = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\fixtures'
+$MiniRoot = Join-Path $Lab 'mini-root'
+$MiniState = Join-Path $Lab 'mini-state'
+
+Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState --code-max-count 100
+Neocortex --state-directory $MiniState --code-status --code-json
+```
+
+El manifest guarda `Neocortex` como primer elemento de su argv canónico. Antes
+de promover el launcher estable, use la ruta exacta del runtime versionado para
+validar `--version`, `--help` y este preset.
+
+La corrida escribe bases en `$MiniState`, pero omite acciones, candidatos MIME,
+catálogo y organización. El status es read-only: cualquier `-wal`, `-shm` o
+`-journal`, incluso vacío o desacoplado, junto a `code.sqlite3`,
+`framework.sqlite3` o `dedup.sqlite3`, o una cerca inestable en cualquiera de
+ellas, causa abstención total con código `2` sin tocar el estado. Consulte
+[SELF_ANALYSIS.md](SELF_ANALYSIS.md) para preflight, policy/firma, puerta
+incremental, manifest y conteos cero.
+
+Un smoke de la raíz canónica debe analizar
+`%USERPROFILE%\Neocortex\Repository` con un estado externo nuevo bajo
+`%LOCALAPPDATA%\Neocortex\self-analysis\smokes`; el mini-root no demuestra
+cobertura del repositorio completo.
+
+## Reanudación
+
+`--status` muestra runs, rutas y fases con un límite predeterminado de cinco. Se
+puede ampliar hasta 1000:
+
+```powershell
+Neocortex --status --status-limit 20
+Neocortex --status --status-run 40 --status-json
+```
+
+Para continuar fases incompletas de un run cuyo snapshot siga retenido:
+
+```powershell
+Neocortex --resume-run 40
+```
+
+La reanudación implica `--route-only`. No ejecuta el inventario común ni
+acciones de archivos. Si el snapshot falta, es incompatible o quedó obsoleto,
+la operación debe abstenerse; no reconstruya filas SQLite manualmente.
+
+Code puede reutilizar directamente un inventario durable aunque el snapshot
+conserve cero candidatos MIME:
+
+```powershell
+$State = 'C:\Estado\Neocortex'
+Neocortex --root $Root --state-directory $State --route code --route-only
+Neocortex --root $Root --state-directory $State --route code --route-only --candidate-run 40
+Neocortex --root $Root --state-directory $State --resume-run 40
+```
+
+Sin `--candidate-run`, se examina el owner durable más reciente de la raíz
+exacta y se exige modo `normal`; una discrepancia falla sin retroceder a un run
+histórico por tener candidatos. Cero candidatos sólo se
+admite cuando **todas** las rutas seleccionadas declaran
+`input_source=inventory_snapshot`; una ruta MIME o selección mixta falla antes
+de crear o ejecutar el nuevo run. `--self-analysis` continúa rechazando
+route-only/resume por diseño.
+
+Un run actual se vuelve reanudable sólo después de que terminó de generar todos
+los candidatos y publicó atómicamente su `scan_id`, conteos y evento de
+enrutamiento. Al abrirlo de nuevo se validan raíz normalizada, identidad física
+de la raíz, scan completo sin errores y conteo de archivos. Para un run legacy
+interrumpido sin vínculo se exige además evidencia de inventario única y al
+menos un `route_run` durable; si una comprobación falla, ejecute una corrida
+nueva en vez de forzar la reanudación.
+
+## Watcher incremental en primer plano
+
+El watcher vive exclusivamente en el proceso y terminal actuales. No instala
+servicios, tareas programadas ni procesos desprendidos.
+
+```powershell
+Neocortex --root $Root --watch --route pdf,image
+```
+
+Opciones y valores predeterminados:
+
+| Opción | Predeterminado | Contrato |
+|---|---:|---|
+| `--watch-bootstrap` | `if-needed` | Bootstrap siempre, cuando sea necesario o nunca. |
+| `--watch-poll-timeout-seconds` | `1` | De 1 a 300 segundos. |
+| `--watch-debounce-seconds` | `2` | Puede ser cero. |
+| `--watch-max-debounce-seconds` | `30` | Positivo y no menor que debounce. |
+| `--watch-error-backoff-initial-seconds` | `1` | Puede ser cero. |
+| `--watch-error-backoff-max-seconds` | `60` | No menor que el inicial. |
+| `--watch-error-backoff-multiplier` | `2` | Mínimo 1. |
+
+Ejemplo con política explícita:
+
+```powershell
+Neocortex --root $Root --watch --all `
+  --watch-bootstrap if-needed `
+  --watch-poll-timeout-seconds 2 `
+  --watch-debounce-seconds 1 `
+  --watch-max-debounce-seconds 15
+```
+
+El watcher rechaza `--apply`, `--route-only`, `--resume-run` y
+`--candidate-run`. Los cambios USN actúan como señales para nuevas corridas;
+no convierten el journal en un backup ni prueban por sí solos que una
+exploración parcial sea completa.
+
+Durante toda su vida adquiere un lease del sistema operativo por la combinación
+canónica de raíz y directorio de estado. El archivo
+`watcher-life-xxh3-128-<digest>.lock` conserva metadatos acotados de PID, tiempo
+de creación, host, versión, argv, raíz/estado e inicio. Un segundo watcher con
+la misma identidad se abstiene y devuelve `2`; otra raíz puede operar sin
+colisión. El byte lock, no el JSON, determina ownership y se libera al cerrar o
+caer el proceso. No borre el archivo: un owner stale se reemplaza sólo después
+de que el nuevo proceso adquiere el lock. Esta exclusión no mata procesos ni
+reemplaza `framework.lock`, que sigue protegiendo cada corrida integrada.
+En el fixture sintético comparable, adquirir y persistir el lease costó
+aproximadamente 11.86 ms una sola vez al iniciar el watcher; no es una medición
+del corpus vivo.
+
+### Cancelación del watcher
+
+- El primer `Ctrl+C` solicita cancelación cooperativa y despierta las esperas de
+  recursos.
+- Un segundo `Ctrl+C` vuelve a interrumpir el hilo principal si el cierre no
+  concluye.
+- La cancelación interactiva termina con código `130`.
+- Errores de fuente o corridas fallidas retenidas producen código `2`.
+
+No cierre procesos por coincidencia amplia de nombre. Si fuera indispensable
+intervenir, confirme PID, proceso padre y línea de comandos y actúe sólo sobre
+el proceso propio.
+
+## Límites y recursos
+
+Los valores siguientes son contratos predeterminados del parser/configuración,
+no promesas de RSS real. Los presupuestos son admisión estimada; bibliotecas
+nativas y procesos hijos también consumen memoria.
+
+| Ruta | Límites predeterminados relevantes |
+|---|---|
+| PDF | 4 workers y 2 permisos OCR; render máximo 40 000 000 píxeles por página; texto máximo 5 000 000 caracteres por página; timeout base 600 s en modo adaptativo, máximo 1200 s; reserva mínima 512 MiB por worker; máximo 2 documentos sobre 128 MiB. No hay límite predeterminado de cantidad, tamaño ni páginas. |
+| DOCX | Texto máximo 20 000 000 caracteres; presupuesto 512 MiB; margen físico y de commit de 1024 MiB; espera 60 s. Sin límite predeterminado de tamaño o cantidad. |
+| Office | Texto máximo 20 000 000 caracteres; presupuesto 512 MiB; margen físico y de commit de 1024 MiB; espera 60 s. Sin límite predeterminado de tamaño o cantidad. |
+| Imagen | 4 workers; presupuesto 512 MiB; margen físico y de commit de 1024 MiB; espera 60 s; timeout de worker 120 s y OCR documental 12 s. Sin límite predeterminado de tamaño o cantidad. |
+| Audio | Duración máxima 6 h; transcripción máxima 5 000 000 caracteres y 100 000 segmentos; timeout por archivo 3600 s; arranque de worker 1800 s; reserva declarada de worker 4096 MiB, presupuesto de ruta 2048 MiB, márgenes físico/commit de 2048 MiB y espera 300 s. Sin límite predeterminado de tamaño o cantidad. |
+| Código | Archivo máximo 8 MiB; texto máximo 4 000 000 caracteres; chunks de 12 000 caracteres; sin límite predeterminado de cantidad; incluye generado y vendorizado salvo override. |
+
+El coordinador global usa por defecto un máximo de carga CPU del 90 % y una
+espera de recursos de 300 s; los presupuestos globales de memoria, commit y
+slots CPU se calculan cuando no se fijan explícitamente.
+
+Para una primera ejecución use límites de tamaño/cantidad compatibles con la
+ruta. Los valores `--*-max-mb` usan megabytes decimales; en PDF `1000` equivale
+a 1 GB:
+
+```powershell
+Neocortex --root $Root --route pdf --MaxMB 1000 --MaxCount 25
+Neocortex --root $Root --route image --image-max-mb 100 --image-max-count 100
+Neocortex --root $Root --route code --code-max-count 500
+```
+
+No reduzca OCR, límites de texto o validación de caché para declarar éxito sin
+registrar que cambió la carga y el contrato de resultados.
+
+En PDF e imagen, el productor que abre el stream de candidatos debe consumirlo
+y cerrarlo en su propio thread. Un fallo de admisión, una excepción o una
+cancelación se desenrollan mediante el `finally` de ese productor; el
+coordinador no debe cerrar el generator desde otro thread.
+
+### Ruta code: cache y grafo estable
+
+Un hit con la misma ruta actualiza presencia y observación, pero ejecuta cero
+DML sobre `code_fts`. Si cambia la ruta, no es un hit: se procesa una versión
+sucesora y la anterior queda como historia. Los hits de resultados `partial` o
+`error` conservan esos contadores; `--retry-code-errors` solicita reprocesarlos.
+
+El fastpath del grafo sólo aplica a una corrida completa de `code`, sin
+`--code-max-count` ni filtros de selección. Primero se ejecuta `mark_missing`;
+si no hubo invalidaciones ni trabajo nuevo, todos los candidatos fueron hits
+compatibles con el runtime y el run completo inmediatamente anterior publicó el
+fence tipado exacto con `resolver_signature=code-graph-resolver-v3`, se reutiliza
+el conteo de proyectos. Esa versión resuelve símbolos y dependencias mediante
+conjuntos temporales indexados y sincroniza los labels FTS distintos en una
+pasada, no con una consulta o actualización por relación o versión. Una
+base existente sin fence, un run intermedio, un manifest/move o cualquier
+evidencia malformada fuerzan `finalize_graph` y reconstruyen membresías y FTS.
+
+La primera corrida completa posterior a esta actualización puede por ello
+realizar una finalización larga; las siguientes sólo prueban estado estable si
+usan el mismo corpus, configuración y firma. El esquema sigue en 2. Durante
+`finalize_graph`, un progress handler SQLite acotado consulta cancelación dentro
+de la transacción, revierte antes de propagar la excepción original y se retira
+al salir; esto no convierte el grafo en una publicación generacional.
+
+## Modelos y herramientas externas
+
+```powershell
+Neocortex --pdf-doctor
+Neocortex --audio-doctor
+Neocortex --code-doctor
+```
+
+- Tesseract y los idiomas `spa`/`eng` son externos a Python.
+- FFprobe se requiere para el sondeo de audio; FFmpeg se informa en el
+  diagnóstico de audio.
+- qpdf es opcional y sólo participa en recuperación estructural PDF.
+- La primera transcripción puede descargar el modelo Whisper. Use
+  `--audio-local-models-only` para prohibir descargas.
+- Los modelos semánticos sólo se adquieren mediante
+  `--semantic-prepare-models`; indexar y clasificar son pasos separados.
+
+Durante `--semantic-index text`, cada fuente usa una sola sesión SQLite y
+confirma staging en lotes de hasta 128 items o chunks. Una cancelación o fallo
+revierte el lote en curso; el prefijo confirmado permanece en la generación
+`building`, no sustituye el head y puede reanudarse sin duplicar filas. No hay
+opciones CLI ni campos JSON nuevos.
+
+El worker agota la reutilización exacta antes de cada claim. Así, un payload
+creado por el batch anterior satisface duplicados que aún no fueron reclamados.
+Ante `RuntimeError`, `KeyboardInterrupt` o cualquier `BaseException`, registra o
+libera los leases todavía propios y conserva la generación sin publicar. Esta
+revisión cerró 180 pruebas Semantic. Permanecen duplicados dentro del mismo
+batch y operaciones SQLite N+1 al completar o fallar jobs; no presente esta
+corrección como eliminación total de inferencia o I/O redundantes.
+
+El microbenchmark sintético inicial de esta frontera midió `57.24x` y redujo
+conexiones de escritura de `1201` a `1`. Esa medición aísla staging SQLite: la
+corrida sobre el corpus vivo seguía en curso al documentarla y no demuestra ni
+cuantifica una aceleración end-to-end real.
+
+No ejecute herramientas externas ni descargue modelos para validar una
+instalación básica.
+
+## Cancelación de una corrida normal
+
+El primer `Ctrl+C` solicita cierre cooperativo. La corrida se registra como
+`cancelled`, distinta de `failed`, y el launcher devuelve `130`. Espere la
+liberación de workers y procesos hijos antes de iniciar otra corrida con el
+mismo estado.
+
+En Windows, los procesos iniciados por la frontera acotada de subprocess y los
+workers aislados se asocian por handle exacto a Job Objects kill-on-close. Un
+timeout, overflow o excepción termina ese árbol propio, espera al hijo directo
+y cierra pipes/handles; no sustituya este contrato con terminaciones amplias por
+nombre de ejecutable.
+
+Si se interrumpió una operación autorizada sobre archivos, **no la repita
+automáticamente**. Siga la sección de acciones inciertas de
+[RECOVERY.md](RECOVERY.md).
+
+En `0.7.0`, los rename y movimientos admitidos son únicamente de archivos
+regulares con un hard link en NTFS local y mismo volumen, mediante handles
+retenidos y sin reemplazo. Los demás casos se abstienen. La aplicación de
+candidatos de Papelera está deshabilitada; el dry-run continúa registrando el
+plan y un `--apply` los marca `skipped` sin llamar a `Send2Trash`.
+
+## Diagnóstico operativo
+
+Orden recomendado, sin modificar el corpus:
+
+```powershell
+Neocortex --version
+Neocortex --status --status-limit 20
+Neocortex --pdf-doctor
+Neocortex --audio-doctor
+Neocortex --code-status
+Neocortex --semantic-status
+Neocortex --knowledge-status
+Neocortex --action-recovery-status --action-recovery-limit 100
+Neocortex --retention-status
+py -3 -m pip check
+```
+
+`pip check` sólo comprueba requisitos de la distribución instalada; no prueba
+que su versión coincida con el árbol fuente ni que wheel/entrypoint estén
+actualizados.
+
+Preserve la salida exacta, código de salida, hora, versión y `run_id`. No adjunte
+contenido confidencial del corpus a diagnósticos sin autorización.
+
+`--action-recovery-status` abre sólo la base existente y clasifica
+`applying`/`recovery_required` sin escribir ni repetir operaciones. Use
+`--action-recovery-after` para paginar, `--action-recovery-run` para acotar y
+`--action-recovery-json` para JSON Lines. Devuelve `2` si una fila es ambigua o
+imposible de comprobar; `confirmed` y `not_performed` siguen requiriendo una
+decisión humana antes de cualquier cambio persistente.
+
+Para conservar la observación, no la mutación, use después un `record`
+explícito con actor y confirmación:
+
+```powershell
+Neocortex --action-recovery-record 42 --action-recovery-actor "Victor" --confirm-reconciliation-record --action-recovery-json
+```
+
+El evento es append-only e idempotente; `--action-recovery-expected-event`
+protege una observación posterior mediante CAS. Un código `2` puede acompañar
+un registro correcto si la clasificación sigue ambigua o imposible. Verifique
+la salida y el `event_id`. No existe todavía un comando de recuperación o
+verificación y ningún evento autoriza por sí mismo una mutación.
+
+Los planes documentales `recovery_required` tampoco se reintentan y conservan
+reservado su destino:
+
+```powershell
+Neocortex --organization-preview 100 --organization-preview-status recovery_required
+```
+
+## Crecimiento y mantenimiento
+
+Obtenga primero un plan de sólo lectura. La edad es deliberadamente explícita;
+si se omite, no se declara elegibilidad por antigüedad:
+
+```powershell
+Neocortex --retention-status
+Neocortex --retention-status --retention-store semantic --retention-store catalog --retention-min-age-days 30 --retention-batch-size 100
+```
+
+El resultado protege como mínimo las publicaciones vigente y anterior,
+builders y leases vivos, bases de generaciones, checkpoints, el último run
+`completed` de framework aunque haya runs fallidos o cancelados posteriores, y
+evidencia humana o incierta. Una referencia desde `semantic_evidence` es un
+hold y bloquea la elegibilidad de esa generación. Se pagina con cursores
+`--retention-<store>-after`. Los bytes son una cota inferior del payload SQLite
+y el snapshot no es atómico entre bases. Un store con deriva queda `blocked` y
+el comando devuelve `2`.
+
+`--retention-status` es exclusivamente read-only/dry-run. No existen comandos
+productivos `--retention-prepare`, `--retention-apply` ni
+`--retention-verify`; el plan tampoco autoriza `DELETE` manuales. La ejecución
+genérica permanece bloqueada hasta que las referencias cross-DB tengan holds
+write-ahead durables y cada propietario disponga de journal reanudable e
+idempotente. SQLite no proporciona una transacción atómica entre esas bases.
+
+- Las rutas podan determinadas cachés obsoletas sólo después de una corrida
+  satisfactoria; no todas las tablas históricas tienen una política global de
+  retención demostrada.
+- La poda legacy del inventario es una operación específica del propietario,
+  separada de `--retention-status`. El coordinador debe entregarle todos los
+  holds cross-store explícitos; si no puede hacerlo, falla cerrado sin borrar.
+  Conserva siempre la publicación actual y la anterior de cada raíz, además de
+  builders, candidatos y scans referenciados.
+- Catálogo v6 y semántica v6 preservan la generación publicada durante staging,
+  fallo o cancelación. Existe un planificador dry-run, pero no una poda ni
+  enforcement de cuotas para generaciones fallidas, canceladas, superseded,
+  `ready_partial` o builds abandonados.
+- Supervise tamaño de `.sqlite3`, `-wal`, cachés de modelos y espacio libre.
+- No elimine generaciones, runs, modelos, WAL o SHM por antigüedad aparente.
+- No ejecute `VACUUM`, checkpoints, cambios de `journal_mode` ni manipulación
+  de `PRAGMA user_version` como mantenimiento rutinario.
+- Antes de cualquier intervención, detenga writers y cree un backup mediante la
+  API SQLite según [RECOVERY.md](RECOVERY.md).
+- Un WAL que crece requiere identificar primero el writer/lector que impide el
+  checkpoint; no se corrige borrando el archivo.
+
+## Actualización y rollback
+
+1. Termine sólo los procesos propios de NeoCortex y confirme que no quede un
+   watcher activo.
+2. Capture `Neocortex --version` y `Neocortex --status --status-json`.
+3. Cree un backup consistente de todas las bases.
+4. Instale el artefacto ya validado conforme al README de la entrega.
+5. Compruebe versión, ayuda, dependencias y doctors antes de abrir estado real.
+6. Permita migraciones únicamente con la versión compatible y conserve el
+   backup previo.
+7. Si la actualización falla, no reduzca números de esquema. Restaure el paquete
+   compatible y las bases completas siguiendo [RECOVERY.md](RECOVERY.md).
+
+Una instalación limpia en un entorno temporal valida el paquete, pero no
+actualiza por sí sola el launcher operativo del sistema. Compruebe ambos de
+forma independiente.
+
+La actualización `0.5.0` eleva `framework.sqlite3` 17→18,
+`semantic.sqlite3` 5→6 y `document_catalog.sqlite3` 5→6. Las migraciones
+preservan datos y se abstienen ante contratos v5/v17 desconocidos, pero no
+ofrecen downgrade. El rollback exige restaurar el conjunto respaldado y el
+paquete compatible; nunca edite los números de esquema.
+
+La actualización `0.6.0` eleva únicamente `framework.sqlite3` 18→19 y agrega
+el log de conciliación vacío. La operación `--action-recovery-record` puede
+aplicar esta migración aditiva a una base existente después de la confirmación;
+`status` y retención nunca migran. El rollback sigue requiriendo restaurar la
+copia consistente y el paquete 0.5.0, no editar `schema_version`.
+
+La actualización `0.7.0` no eleva ningún esquema ni crea una base Knowledge.
+Sus comandos `--knowledge-status`, `--knowledge-search` y
+`--knowledge-context` abren únicamente los propietarios ya existentes en modo
+de solo lectura. Por tanto, un rollback del paquete a `0.6.0` no requiere un
+downgrade de base atribuible a Knowledge; cualquier otra migración o cambio de
+estado realizado por comandos distintos conserva su propio contrato de
+recuperación.
+
+La fuente `0.7.1` declara framework v20 y Dedup v8. Framework 19→20 preserva
+filas legacy como `normal`; Dedup 7→8 agrega la firma cruda de inventario a los
+scans, conserva scans/archivos/bytes e invalida checkpoints sin firma en vez de
+inventar evidencia. Ninguna migración ofrece downgrade. Abra bases vivas sólo
+con el runtime versionado validado; el rollback exige paquete compatible y
+backup completo, nunca editar `schema_version`.
+
+## Auditorías técnicas
+
+Toda auditoría nueva debe conservar los informes anteriores y seguir
+[AUDIT_REPORTING_STANDARD.md](AUDIT_REPORTING_STANDARD.md) para evidencia,
+manifiesto, barrera y cierre visible.

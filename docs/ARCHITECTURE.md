@@ -1,0 +1,836 @@
+# Arquitectura de NeoCortex
+
+> **Estado del documento.** Contrato derivado del árbol inspeccionado el
+> 29 de julio de 2026. Describe el comportamiento observado y separa los
+> cambios previstos de los ya implementados. No certifica por sí solo la suite
+> completa ni la instalación empaquetada. El árbol auditado declara la versión
+> `0.7.1`; la versión instalada debe comprobarse con
+> `Neocortex --version`.
+
+## Finalidad y principios
+
+NeoCortex es un framework Windows-first para descubrir, identificar, extraer,
+indexar, relacionar, clasificar, revisar y buscar contenido personal de forma
+incremental. Sus rutas actuales cubren PDF, DOCX, otros documentos Office,
+audio, imágenes y código.
+
+La arquitectura persigue estos invariantes:
+
+- los archivos originales permanecen intactos salvo autorización explícita;
+- el estado derivado conserva identidad, evidencia, incertidumbre y
+  procedencia;
+- una interrupción no debe convertir trabajo parcial en verdad publicada;
+- los lotes, colas, procesos y consumo de recursos deben permanecer acotados;
+- las superficies CLI, GUI y Python deben converger en los mismos contratos;
+- la evidencia probabilística o semántica nunca autoriza por sí sola una
+  eliminación, movimiento o rename.
+
+Los riesgos todavía abiertos se enumeran al final. La publicación generacional
+de inventario, catálogo y semántica existe en la fuente `0.7.0`, pero sólo sus
+lectores oficiales aplican el contrato; SQL externo sobre tablas legacy puede
+eludirlo.
+
+## Fuentes de verdad
+
+| Tema | Fuente primaria |
+|---|---|
+| Entry point instalado | `[project.scripts]` de `pyproject.toml` y `neocortex.cli` |
+| Parser y validación CLI | `cli_parser.py` y `cli_validation.py`, con superficies extraídas `cli_{audio,code,semantic,knowledge}_surface.py` |
+| Configuración efectiva de una corrida | `models.py`; fachada plana compatible `application_config.py`, proyecciones en `application_config_projections.py` y construcción CLI en `cli_config.py` |
+| Rutas canónicas por usuario | `app_paths.py` |
+| Protección de rutas propias | `internal_paths.py`, `inventory_boundary.py` e `incremental_gate.py` |
+| Orden y adaptadores de rutas | `route_selection.py` y `route_registry.py` |
+| Coordinación de corridas | `orchestrator.py` |
+| Knowledge Plane read-only | `knowledge_contracts.py`, `knowledge_snapshot.py`, `knowledge_planner.py`, `knowledge_search.py`, `knowledge_context.py` y `knowledge_service.py` |
+| Planner semántico read-only | `semantic_planner.py` y contratos en `semantic_service_contracts.py` |
+| SDK y capacidades públicas | `neocortex/sdk`, `neocortex/capabilities.py` y markers `py.typed` |
+| Apertura SQLite compartida | `neocortex/sqlite_connection.py`; su adopción actual no es universal |
+| Esquemas persistentes | módulos `*_schema.py` y propietarios `*_state.py`/repositorios |
+| Estado operacional | bases bajo `%LOCALAPPDATA%\Neocortex\state` |
+| Comportamiento comprobable | código ejecutado y pruebas; la documentación no lo sustituye |
+
+La topología derivada de `app_paths.py` separa los árboles propios:
+
+```text
+Fuente:       %USERPROFILE%\Neocortex\Repository
+Runtime:      %LOCALAPPDATA%\Programs\Neocortex\versions\<runtime-id>\venv
+Launcher:     %LOCALAPPDATA%\Programs\Neocortex\bin\Neocortex.exe
+Estado:       %LOCALAPPDATA%\Neocortex\state
+Autoanálisis: %LOCALAPPDATA%\Neocortex\self-analysis
+```
+
+Los runtimes son versionados; `bin\Neocortex.exe` es la única ruta estable de
+promoción y se valida contra el artefacto exacto antes de incorporarla al
+`PATH`.
+
+La guía de bases, migraciones, backup y retención es
+[PERSISTENCE.md](PERSISTENCE.md). La operación diaria se explica en
+[OPERATIONS.md](OPERATIONS.md), la recuperación en
+[RECOVERY.md](RECOVERY.md) y los límites de seguridad en
+[SECURITY.md](SECURITY.md). El perfil code-only protegido se especifica en
+[SELF_ANALYSIS.md](SELF_ANALYSIS.md) y los contratos y límites del plano de
+conocimiento se documentan en [KNOWLEDGE.md](KNOWLEDGE.md).
+
+## Vista de alto nivel
+
+```text
+                   Neocortex / python -m neocortex
+                                  │
+                   neocortex.cli:entrypoint
+                     ┌────────────┼────────────┐
+                     │            │            │
+                  CLI normal     --ui     --gui-worker
+                     │            │            │
+            cli_app / cli_direct  │       worker supervisado
+                     │            └──── QProcess ─────┘
+                     │
+          FrameworkOrchestrator / operaciones directas
+                     │
+          framework.lock + estado común de corrida
+                     │
+       ┌─────────────┴─────────────────────────────┐
+       │                                           │
+ enumeración NTFS/USN                       rutas de contenido
+       │                               ┌────┬────┬────┬────┬────┐
+ inventario y deduplicación            PDF DOCX Office Audio Image Code
+       │                               └────┴────┴────┴────┴────┘
+ checkpoint durable                          │
+       │                     catálogo documental / revisión / semántica
+       └───────────────────────────────┬─────┘
+                                      │
+                              SQLite por propietario
+```
+
+La separación física entre bases reduce contención y permite que cada ruta sea
+propietaria de su contrato. No constituye una transacción distribuida: la
+coherencia entre bases depende del orden del orquestador, identificadores de
+run, checkpoints y reglas de publicación de cada subsistema.
+
+## Knowledge Plane de sólo lectura
+
+La Fase 1 agrega una frontera de recuperación común sobre las bases que ya
+poseen inventario, extractores, FTS, catálogo, semantic y código. No agrega una
+base `knowledge.sqlite3`, DDL ni migraciones, y sus operaciones no indexan ni
+modifican el corpus. Los contratos inmutables `ResourceRef`, `RevisionRef`,
+`EvidenceRef`, `KnowledgeHit`, `KnowledgeSnapshot` y `ContextBundle` conservan
+identidad, revisión, localizador, procedencia, score de origen y completitud.
+
+`collect_knowledge_snapshot()` abre únicamente owners existentes en modo de
+lectura, observa sus publicaciones o watermarks dos veces y reintenta el
+conjunto una vez si detecta cambios. Ese snapshot es una vista lógica, no una
+transacción distribuida. `KnowledgeSearchService` vuelve a capturar el estado
+antes y después de cada consulta; ante un primer cambio repite la recuperación
+completa una vez y, ante otro, devuelve evidencia parcial con el cambio
+explícito en vez de fingir atomicidad.
+
+El planner determinista selecciona rankings independientes de identidad/ruta
+exacta, FTS por owner, semantic publicado, código estructural y metadatos de
+catálogo. La fusión RRF mantiene scores y modelos en sus espacios originales y
+opera por evidencia concreta, no sólo por archivo. El modo `evidence` permite
+varias páginas, segmentos o chunks de un recurso; `discovery` conserva la
+semántica compatible de un mejor hit semantic por recurso. El compilador de
+contexto aplica un presupuesto duro, citas estables, contradicciones
+estructuradas y estados de ausencia o abstención.
+
+La API Python y los comandos `--knowledge-status`, `--knowledge-search` y
+`--knowledge-context` consumen esa misma frontera. Un grafo transversal entre
+owners y una superficie MCP no forman parte de la Fase 1 y permanecen para una
+fase posterior. La especificación completa está en
+[KNOWLEDGE.md](KNOWLEDGE.md).
+
+La telemetría Knowledge schema 1 ya se especifica allí: usa nanosegundos y
+conserva intentos, snapshots, owners, rankings, fusión, broker y contexto sin
+alterar los contratos sin telemetría. No constituye una publicación ni un owner
+persistente adicional.
+
+## Planificador semántico read-only
+
+`plan_semantic_index()` y `--semantic-plan {text,image,all}` calculan un
+preflight determinista sobre estado durable existente. No adquieren modelos,
+no crean jobs y no modifican las bases propietarias. Usan un SQLite scratch
+privado, con cuota dura predeterminada de 512 MiB, para deduplicar y proyectar
+contenido con memoria acotada; exceso, cancelación o bloqueo persistente fallan
+cerrado.
+
+Cada base física se abre en su propia transacción de lectura y se protege con
+versión de esquema, fingerprint XXH3 del snapshot y un fence `data_version`
+antes/después. Los logical owners Office que comparten archivo se leen dentro
+de una sola transacción física. Esto evita mezclar vistas de una misma base,
+pero no crea atomicidad cross-database; el contrato lo declara explícitamente.
+
+Cada workload conserva modalidad, rol, modelo, versión, proveedor, espacio
+vectorial, dimensiones, dtype, normalización, distancia, procedencia y firma de
+procesamiento. El planner calcula reutilización preexistente y entre workloads,
+bytes vectoriales como cota inferior y solicitudes al modelo como rango entre
+contenido único nuevo y entidades aún no reutilizadas. El rango de segundos de
+modelo sólo aparece con una calibración exacta de ejecución/procesamiento/
+workload/modelo/rol; sin ella queda desconocido en vez de extrapolar una tasa.
+
+Imagen y `all` se planifican sólo desde caché. No se abren originales, por lo
+que `originals_verified=false`, `execution_ready=null` y `complete=false` son
+resultados deliberados, no una inferencia de disponibilidad. El JSON estable y
+la salida humana exponen esos límites junto con la cuota y los hashes de
+snapshot.
+
+## Paquetes y responsabilidades
+
+### `neocortex`
+
+Paquete de instalación mínimo:
+
+- declara la versión pública en `neocortex.__version__`;
+- expone `neocortex.cli:entrypoint`;
+- soporta `python -m neocortex`;
+- contiene utilidades compartidas de ciclo de vida y contrato SQLite.
+
+No implementa el pipeline completo. Su función es ofrecer una frontera estable
+y evitar imports pesados durante ayuda, versión o selección de modo.
+
+### `_01_Enumeracion`
+
+Frontera Windows/NTFS:
+
+- enumeración MFT;
+- lectura y resolución de registros USN;
+- snapshots con identidad durable y metadatos;
+- índice SQLite auxiliar de rutas.
+
+Produce observaciones; no decide eliminación ni clasificación. El
+`SqlitePathIndex` es una API auxiliar soportada y probada, pero no se confirmó
+un consumidor dentro de la corrida integrada actual.
+
+### `_02_Deduplicacion`
+
+Propietario del inventario común:
+
+- scans e inventarios;
+- checkpoints por raíz/volumen/journal;
+- fingerprints no criptográficos de contenido propio;
+- grupos y planes de duplicados;
+- comparación exacta inmediatamente antes de una mutación autorizada.
+
+El esquema fuente actual es v8. Conserva la clave `(scan_id, path)` y los scans
+`building`, `complete` y `partial` introducidos por v7, liga cada scan nuevo a
+su `inventory_policy_signature` y publica un checkpoint que referencia una
+generación completa. La migración histórica v6→v7 y la migración v7→v8 tienen
+regresiones específicas; los diagnósticos no migran una base existente y la
+actualización debe seguir el procedimiento respaldado de
+[PERSISTENCE.md](PERSISTENCE.md).
+
+### `_03_Progreso`
+
+Contratos de eventos y reporteros. Separa el progreso del motor de la
+representación Rich, texto o protocolo de GUI. Las rutas no deben depender de
+widgets ni escribir directamente a una terminal para informar avance.
+
+### `_04_Nucleo_Operativo`
+
+Núcleo de aplicación. Contiene:
+
+- configuración, parser, validación y reporte CLI;
+- fachada plana `ApplicationConfig` compatible con `FrameworkConfig`, seis
+  proyecciones de ruta y una proyección de límites globales calculadas desde el
+  valor vigente;
+- superficies de registro/validación CLI separadas para Audio, Code, Semantic y
+  Knowledge, sin cambiar sus flags planos;
+- orquestador, locking, cancelación y heartbeat;
+- selección y registro de rutas;
+- coordinador global de recursos;
+- extractores, clasificadores, cachés y repositorios por formato;
+- catálogo documental, organización, revisión y evidencia;
+- búsqueda PDF/DOCX/audio/código y servicio semántico;
+- contratos, snapshot lógico, planner, recuperación, fusión y contexto de la
+  Knowledge Plane read-only;
+- watcher incremental foreground;
+- acciones autorizadas sobre archivos, recibos de efecto, eventos append-only y
+  conciliación de sólo lectura. Una operación `record` separada puede conservar
+  la observación como evento append-only; decisión, autorización, recuperación
+  y verificación productivas todavía no existen.
+
+Es el paquete más grande y concentra integración, pero las rutas mantienen
+bases y modelos propios para limitar transacciones cruzadas.
+
+### `_05_Interfaz`
+
+Frontend PySide6:
+
+- transforma el formulario en una solicitud canónica;
+- inicia un único worker hijo mediante `QProcess`;
+- intercambia eventos estructurados y acotados;
+- permite cancelación supervisada;
+- consulta estado mediante conexiones cortas de sólo lectura.
+
+La GUI ofrece PDF, DOCX, Office, audio e imagen. La ruta `code` permanece
+CLI-only por decisión observable, no por ausencia en el núcleo.
+
+### Compatibilidad de raíz
+
+`Orquestador.py` conserva imports históricos y delega en los módulos actuales.
+Se incluye en el paquete y tiene consumidores de prueba; por ello sigue siendo
+compatibilidad necesaria. `python -m _02_Deduplicacion` es un wrapper
+explícitamente obsoleto que delega en la aplicación integrada y no activa
+acciones destructivas.
+
+## Superficies públicas
+
+### CLI instalada
+
+La invocación canónica es:
+
+```powershell
+Neocortex --help
+```
+
+`neocortex.cli` selecciona perezosamente tres modos:
+
+1. CLI normal: delega en `_04_Nucleo_Operativo.cli_app`;
+2. `--ui`: inicia la aplicación de escritorio;
+3. `--gui-worker`: protocolo interno del frontend, no comando de usuario.
+
+Las operaciones directas se registran declarativamente y cargan su handler de
+forma lazy. Audio, Code, Semantic y Knowledge separan registro y validación en
+sus módulos `cli_*_surface.py`; los handlers conservan sus módulos de dominio.
+Las operaciones que escriben estado adquieren el lock común cuando su contrato
+lo requiere. La lista de comandos y códigos de salida está en
+[CLI.md](CLI.md).
+
+`Neocortex doctor capabilities [--json]` es un alias canónico estrecho que
+`neocortex.cli` traduce a flags planos internos ocultos. El handler inspecciona
+specs, metadata y ejecutables sin cargar engines/modelos ni crear estado; no
+introduce un `--doctor` o `--json` global.
+
+La Knowledge Plane se expone mediante operaciones directas mutuamente
+excluyentes y no destructivas:
+
+```powershell
+Neocortex --knowledge-status
+Neocortex --knowledge-search "protección diferencial" --knowledge-mode evidence
+Neocortex --knowledge-context "protección diferencial" --knowledge-limit 12
+```
+
+Estas operaciones sólo abren estado existente y pueden informar owners
+ausentes, incompatibles, futuros o corruptos sin crearlos ni migrarlos. Sus
+formatos, opciones auxiliares y códigos de salida se detallan en
+[KNOWLEDGE.md](KNOWLEDGE.md).
+
+`--action-recovery-status` es una excepción deliberada: abre
+`framework.sqlite3` sin crearla ni migrarla y clasifica acciones inciertas sin
+repetir una syscall. Su salida JSON pertenece sólo a esa familia.
+
+### API Python
+
+`_04_Nucleo_Operativo.__init__` expone perezosamente configuraciones, summaries,
+rutas, orquestador, búsquedas, doctors y coordinador de recursos. Las clases de
+ruta y `PdfDerivedIndexer` son superficies de bajo nivel: un consumidor que las
+invoque fuera del orquestador debe respetar inicialización de esquema,
+cancelación, recursos y exclusión de writers. La ejecución canónica mediante
+`FrameworkOrchestrator` es la frontera que aplica el contrato integrado.
+
+`neocortex.sdk` es la fachada pública lazy y tipada PEP 561 para Knowledge. Sus
+símbolos conservan identidad con los imports legacy y tanto el paquete canónico
+como el shim de implementación distribuyen `py.typed`.
+
+La superficie diferida también exporta `ResourceRef`, `RevisionRef`,
+`EvidenceRef`, `KnowledgeHit`, `KnowledgeSnapshot`, `ContextBundle`,
+`KnowledgeQuery`, `KnowledgePlan`, `RetrievalMode`, `KnowledgeStatePaths`,
+`KnowledgeSearchResult`, `KnowledgeSearchService` y
+`plan_knowledge_query`. Estas APIs consultan estado persistente; no sustituyen
+la corrida que lo produce.
+
+Los exports diferidos de `route_registry` existen para compatibilidad y emiten
+`DeprecationWarning`; los nuevos consumidores deben importar desde el módulo de
+la ruta correspondiente.
+
+## Corrida integrada
+
+Una corrida normal sigue este orden lógico:
+
+1. validar argumentos, raíz, estado y compatibilidad;
+2. adquirir `%STATE%\framework.lock` mediante un lock del sistema operativo;
+3. inicializar esquemas y marcar runs/acciones abandonados según la política
+   vigente;
+4. abrir el run común y su heartbeat;
+5. capturar el cursor USN inicial;
+6. preparar inventario completo o incremental y su checkpoint;
+7. construir el plan de deduplicación;
+8. ejecutar sólo las acciones expresamente autorizadas;
+9. publicar atómicamente el vínculo al inventario y el conjunto completo de
+   candidatos de ruta;
+10. iniciar las rutas de contenido seleccionadas;
+11. actualizar catálogo y organización cuando corresponda;
+12. podar estado transitorio permitido;
+13. completar el run y detener el heartbeat;
+14. liberar el lock.
+
+Errores y cancelación toman ramas distintas. `KeyboardInterrupt` solicita
+cancelación cooperativa y el launcher devuelve `130`; una ruta fallida no debe
+presentarse como completada.
+
+La enumeración, el inventario y las rutas escriben distintas bases. Por ello la
+finalización del run común no reemplaza los invariantes locales de publicación
+de cada propietario.
+
+La publicación del snapshot de enrutamiento ocurre después de que
+`FrameworkActions.execute()` termina de persistir todos los candidatos. El
+`scan_id`, los contadores de inventario y el evento versionado
+`neocortex.routing-snapshot/v1` se confirman en la misma transacción de
+`framework.sqlite3`; una ruta no puede iniciarse mientras ese vínculo no exista.
+
+Para corridas normales, `NormalInventoryBoundary` captura raíz, estado,
+`InternalPathsPolicy` y exclusiones. La policy reserva por ruta e identidad
+física el repositorio, runtime, datos de aplicación, autoanálisis y launcher;
+detecta aliases/reparses y el hardlink del launcher. Los árboles internos que
+quedan bajo un corpus permitido se excluyen, pero una raíz situada dentro de
+ellos se rechaza. El estado tampoco puede ser igual ni ancestro del corpus. La
+firma cruda de `InventoryExclusionPolicy` se guarda en Dedup v8; Framework y
+watcher usan la firma efectiva versionada que combina esa firma con la de
+`InternalPathsPolicy`.
+
+## Autoanálisis protegido
+
+`FrameworkOrchestrator.run_self_analysis()` es una rama vertical distinta de la
+corrida común. El preflight exige `analyze_only`, raíz/estado disjuntos y
+una única ruta `code` cuyo `RouteAdapter.input_source` sea
+`inventory_snapshot`. Después captura las identidades, crea el estado sólo tras
+validarlas y repite la frontera en los fences de E/S. No instancia el planner
+de duplicados, `FrameworkActions`, catálogo ni organización.
+
+El inventario completo y USN comparten una policy concreta y su firma
+`inventory-exclusion-policy-v1:xxh3_128:...`. La reutilización incremental se
+autoriza sólo por la conjunción del último binding durable del framework, el
+checkpoint Dedup del mismo scan/cursor y la identidad/cursor vivos. Un fallo en
+cualquiera fuerza full scan sin invalidar el checkpoint; no se recupera una
+firma histórica detrás de un run durable más reciente incompatible.
+
+Code consume directamente el scan publicado con cero `route_candidates`. La
+finalización adquiere una transacción propia y exige exactamente una ruta code
+completada, identidad vigente y ceros en candidatos, `file_actions`,
+`run_actions` y organización. El cambio del run a `completed` y el único
+manifest `neocortex.self-analysis-manifest/v1` se confirman juntos. Framework
+v20 conserva modo, identidad, estado y firma; sus triggers y
+`CorpusMutationGuard` forman una segunda defensa en los propietarios de mutación.
+
+`--code-status --code-json` proyecta el manifest y su frescura sin crear o
+migrar estado. Sus lectores usan SQLite `immutable`, `query_only` y fences
+pre/post. Cualquier sidecar, incluso vacío o desacoplado, o una cerca inestable
+en code, framework o Dedup causa abstención total con código `2`. El diseño
+completo, argv reproducible y límites de validación están en
+[SELF_ANALYSIS.md](SELF_ANALYSIS.md).
+
+## Mutación ligada a identidad y recuperación
+
+Las mutaciones soportadas de rename y organización usan
+`windows_handle_mutation.rename_no_replace_by_identity`. La primitiva mantiene
+abiertos el archivo fuente y el directorio destino, verifica volumen/FileId y
+opera de forma relativa al handle del padre con semántica *no-replace*. El
+contrato es deliberadamente estrecho: Windows, NTFS local, archivo regular, un
+solo hard link y mismo volumen. UNC, otros filesystems, reparses, directorios,
+hard links múltiples y movimientos entre volúmenes provocan abstención; no hay
+fallback permisivo por ruta.
+
+`file_actions` conserva en el esquema framework v20 la frontera incorporada en v18:
+
+```text
+started -> applying -> applied
+                    \-> recovery_required
+```
+
+`applying` se persiste con identidad esperada justo antes de la llamada nativa;
+`applied` exige un recibo posterior. Si el proceso o el registro fallan después
+de cruzar la frontera, la acción queda `recovery_required`. Cada transición
+agrega una fila a `file_action_events`; triggers impiden actualizar o borrar
+esos eventos. Al reiniciar, una acción `started` abandonada antes de la
+frontera queda `failed` con evidencia de que no se intentó el efecto; una
+`applying` abandonada queda `recovery_required`. Ninguna se repite
+automáticamente.
+
+El conciliador observa origen y destino y devuelve `confirmed`,
+`not_performed`, `ambiguous` o `impossible_to_check`. `status` es idempotente y
+de sólo lectura. `record` agrega a `file_action_reconciliation_events` una
+observación append-only con CAS, key idempotente, actor, procedencia, firma y
+evidencia, pero declara que no autoriza una mutación. No hay todavía contratos
+`decide`, `authorize`, `recover` o `verify`. Un recibo de Papelera sólo
+confirma la acción si liga las rutas origen/destino de esa misma acción, aunque
+la aplicación de Papelera sigue deshabilitada. Los planes de organización
+conservan su propio
+`recovery_required`, excluido del selector automático y del reintento; además
+reserva el destino para evitar que otro plan lo reutilice.
+
+La API de Papelera disponible era path-bound. Por ello `0.7.0` conserva la
+planeación y validación en dry-run, pero `--apply` se abstiene y registra esas
+acciones como `skipped`. `Send2Trash` fue retirado y no se ofrece un override
+inseguro.
+
+## Registro y ejecución de rutas
+
+El orden estable es:
+
+| Ruta | Entrada principal | Salida persistente | Consumidor adicional |
+|---|---|---|---|
+| `pdf` | snapshots identificados como PDF | texto, páginas, OCR, warnings, FTS, similitud y layout | catálogo documental |
+| `docx` | OOXML Word validado | partes, texto, diagnósticos, FTS, layout y vínculos PDF | catálogo documental |
+| `office` | OOXML/ODF de otros documentos | texto, estado y FTS | catálogo documental |
+| `audio` | audio/vídeo sondeado | transcripción, segmentos y FTS | catálogo documental |
+| `image` | imágenes no documentales o candidatas de documento | clasificación, OCR/evidencia y estado | revisión; no catálogo documental actual |
+| `code` | archivos de texto/código acotados | proyectos, versiones, AST/símbolos, referencias, grafo, chunks y FTS | búsqueda y puente semántico |
+
+El grafo de código conserva esquema 2 y una transacción global en
+`finalize_graph`. Lectores concurrentes observan el snapshot anterior hasta el
+commit y los fallos por fase revierten el estado completo. Se descartó
+fragmentar esa transacción: antes se requiere un esquema 3 que defina build,
+membresía, head/CAS, writer, reanudación, publicación, migración, rollback y
+poda como un único contrato.
+
+La reutilización exige la misma ruta observada, metadatos, firma y analizador
+efectivo. Un hit de ruta invariable actualiza sólo presencia/observación y hace
+cero DML en `code_fts`; una ruta distinta rechaza la caché y el productor
+publica una versión sucesora, en vez de mutar la evidencia histórica.
+
+En una corrida completa sin límite ni selección, `mark_missing` precede al
+grafo. Una finalización real elimina y reconstruye las membresías derivadas y
+sincroniza en una sola sentencia las etiquetas FTS vigentes realmente distintas
+mediante un mapa temporal indexado; las etiquetas históricas permanecen
+inmutables. El resolver v3 materializa conjuntos temporales indexados de
+símbolos y dependencias vigentes y resuelve por nombre cualificado o nombre
+simple sólo cuando la coincidencia es única. Los empates y ausencias permanecen
+ambiguos o no resueltos; no se fabrican aristas. Sólo se omite si no cambió
+ninguna entrada,
+todos los candidatos fueron cache hits compatibles con el runtime y un fence
+tipado `code-graph-resolver-v3` identifica exactamente el run completo
+inmediatamente anterior con la misma firma. El fence avanza atómicamente con la
+finalización de ese `analysis_run`; ausencia, corrupción, run intermedio o la
+primera corrida sobre una base existente sin fence fallan cerrados hacia
+`finalize_graph`.
+
+El analizador Python `neocortex-python-ast` versión 2 sólo publica símbolos de
+asignación para nombres realmente enlazados por objetivos `Name`,
+`Tuple`/`List` y `Starred`. Atributos y subscripts no crean símbolos globales o
+de clase espurios, y un nombre repetido en la misma asignación se conserva una
+sola vez.
+
+`RouteAdapter` recibe un `RouteExecutionContext` con configuración, raíz,
+`run_id`, `scan_id`, estado corto de framework, cancelación y coordinador global.
+La summary debe ser dataclass o mapping serializable.
+
+PDF e imagen tratan el stream de candidatos como un recurso con afinidad de
+thread: creación, iteración y cierre ocurren en el thread propietario de la
+conexión SQLite. Un `finally` del productor lo cierra también ante error o
+cancelación; el coordinador no desenrolla ese generator desde otro thread.
+
+Las rutas PDF, DOCX, Office y audio alimentan el catálogo por lotes. Imagen y
+código conservan repositorios especializados; no deben presentarse como
+documentos catalogados si no existe ese consumidor.
+
+## Concurrencia y cancelación
+
+### Exclusión global
+
+`FrameworkRunLock` bloquea un byte de `framework.lock`. El orquestador y varias
+operaciones directas de escritura lo adquieren para impedir dos corridas
+integradas simultáneas sobre el mismo estado. El archivo no registra PID ni
+línea de comandos; un error de contención sólo prueba que otro handle mantiene
+el lock.
+
+No se debe borrar el lock para “desbloquear” una ejecución. El sistema operativo
+libera el bloqueo al cerrar el handle; primero debe identificarse el proceso
+propietario.
+
+### Paralelismo de rutas
+
+Las rutas seleccionadas se envían a un `ThreadPoolExecutor` acotado por su
+cantidad. Cada una recibe:
+
+- un estado de framework de vida corta;
+- token de cancelación común;
+- coordinador global de memoria, commit, CPU y carga;
+- su propia base de ruta.
+
+El orquestador espera las rutas, conserva errores por nombre y cancela de forma
+cooperativa si una ruta falla o el usuario interrumpe. Algunas rutas usan
+procesos `spawn` supervisados para aislar bibliotecas nativas y timeouts.
+
+El lock PDF adicional es un `RLock` **local al proceso**. Serializa writers del
+proceso padre, pero no sustituye `framework.lock` ni protege consumidores Python
+externos en otro proceso.
+
+### Watcher
+
+El watcher:
+
+- corre en primer plano;
+- usa lotes USN como señal de que debe reconciliarse;
+- no publica un cursor independiente;
+- vuelve a cargar el checkpoint durable después de cada corrida;
+- aplica debounce y backoff acotados.
+
+Además del `threading.Lock` por instancia, `WatcherLifeLease` mantiene un byte
+lock del sistema operativo durante toda la vida del proceso para la identidad
+canónica `(root,state_directory)`. Su nombre usa XXH3-128 y sus metadatos
+acotados registran PID, creación del proceso, host, versión, argv, raíz, estado e
+inicio. El lock del SO es la autoridad: un owner vivo provoca abstención; JSON
+stale sólo se reemplaza después de adquirirlo y nunca se mata un proceso. El
+handle se libera en cierre normal o caída. Raíces distintas no colisionan y las
+corridas directas conservan `framework.lock` por corrida.
+
+## GUI y worker
+
+El proceso de UI no ejecuta el pipeline dentro del event loop. `WorkerController`
+crea un proceso hijo con el mismo intérprete y el módulo `_05_Interfaz.worker`.
+El worker:
+
+- reconstruye parser y configuración canónicos;
+- emite eventos estructurados de progreso y terminales;
+- mantiene heartbeat supervisado;
+- escucha cancelación;
+- captura `KeyboardInterrupt` y `BaseException` para emitir un cierre
+  observable;
+- no se desprende ni se instala como servicio.
+
+Las líneas y buffers están limitados. La ventana conserva un historial visual
+acotado; ese historial no sustituye las tablas persistentes de eventos.
+
+## Persistencia y flujo de datos
+
+Las ubicaciones persistentes por usuario son:
+
+```text
+Estado normal: %LOCALAPPDATA%\Neocortex\state
+Autoanálisis:  %LOCALAPPDATA%\Neocortex\self-analysis
+Modelos:       %LOCALAPPDATA%\Neocortex\models
+```
+
+Las bases principales son `dedup`, `framework`, `pdf`, `docx`, `office`,
+`audio`, `image`, `document_catalog`, `code` y `semantic`. No todas existen
+antes de usar su ruta. La UI persiste configuración aparte, en
+`%LOCALAPPDATA%\Neocortex\ui.ini`, y FastEmbed usa el directorio hermano
+`models\fastembed`.
+
+La Knowledge Plane no es otro owner persistente: lee esas diez bases, conserva
+su snapshot y resultados sólo en memoria y no introduce una migración en
+`0.7.0`.
+
+En Dedup v8, `DedupIndex.published_snapshots(root)` es el lector público para
+recorrer la generación vigente: checkpoint y filas se seleccionan en una sola
+sentencia SQL y conservan el snapshot del lector ante una publicación y poda
+concurrentes. Cada scan nuevo conserva su firma cruda de exclusión. La migración
+7→8 preserva scans, archivos y bytes, pero invalida checkpoints legacy sin firma
+en vez de inventar evidencia. No combine por cuenta propia
+`inventory_checkpoint(root)` con `snapshots(scan_id)`; entre ambas llamadas otro
+writer puede publicar y podar la generación elegida.
+
+En semantic v6, cada `model_signature` tiene un único
+`published_embedding_heads`. Una generación `building` clona de forma acotada
+los miembros de la publicada, adjunta resultados a revisiones inmutables y sólo
+un cierre completo cambia el head dentro de la transacción de finalización. Un
+cierre parcial queda `ready_partial` y no publica; un CAS perdido obliga a
+rebase. Las búsquedas oficiales fijan los heads al inicio y resuelven hits desde
+sus miembros/revisiones congelados. El contenido y la identidad publicados
+permanecen inmutables, pero el localizador `path` se toma de `semantic_items`
+sólo cuando coinciden `item_id`, `source_kind` y `source_identity`; así un move
+confirmado no deja resultados apuntando al origen ni una identidad reasignada
+puede redirigir evidencia histórica. El resolver contrasta además
+`vector_space` y modalidad del hit con el modelo persistido; no confía en esos
+campos suministrados por el llamador.
+
+El staging textual mantiene una única sesión SQLite por `source_kind` y agrupa
+cada transacción en un máximo de 128 items o chunks. Un item mayor se divide en
+lotes de hasta 128 chunks. Error, cancelación o cualquier `BaseException`
+revierte sólo la transacción en curso; el prefijo ya confirmado permanece
+idempotente y reanudable dentro de la generación `building`. La desactivación de
+miembros no observados ocurre al finalizar la fuente, y ningún prefijo parcial
+cambia el head publicado. Este cambio no altera schema, API Python ni JSON.
+
+El worker alcanza un punto fijo de reutilización exacta antes de cada claim:
+agota jobs pendientes cuyo modelo, XXH3, longitud y guarda coinciden con un
+payload durable. Por ello el payload creado por el batch N satisface duplicados
+que sigan pendientes antes del claim N+1. Todo lease aún propio se libera ante
+`RuntimeError`, `KeyboardInterrupt` u otra `BaseException` sin ocultar la
+excepción original. Permanecen dos límites explícitos: duplicados ya incluidos
+en el mismo batch pueden llegar juntos al backend y los commits/fallos por job
+todavía realizan persistencia N+1.
+
+En catálogo v6, cada `source_kind` construye filas en
+`catalog_generation_documents`. Los lectores siguen viendo la proyección
+`documents` anterior hasta que una transacción reemplaza esa fuente, agrega el
+historial, reconcilia planes y cambia `catalog_publications` mediante CAS. Un
+fallo o cancelación conserva el puntero previo; dos publicaciones competidoras
+marcan la atrasada `superseded`.
+
+Ambos contratos preservan generaciones fallidas o abandonadas para diagnóstico.
+Un planificador dry-run puede inventariarlas y proteger publicaciones, bases y
+leases. También bloquea generaciones semánticas referenciadas por evidencia y
+protege el último run completado del framework. Todavía no existen
+`prepare/apply/verify`, poda ni enforcement de cuotas. Consumidores externos
+que consulten directamente las tablas legacy mutables no reciben estas
+garantías.
+
+La poda owner-local del inventario sólo puede ejecutarse cuando el coordinador
+entrega explícitamente todos los `scan_id` retenidos por framework. Sin esos
+holds falla cerrado; con ellos conserva la publicación vigente, la anterior y
+cualquier referencia cross-store. No es un motor de retención genérico ni
+elimina evidencia humana o acciones inciertas.
+
+La propiedad de un esquema implica:
+
+- un solo módulo decide DDL y migraciones;
+- los writers deben usar su factory canónica;
+- los lectores deben abrir `mode=ro` cuando no modifican;
+- las relaciones entre bases se expresan mediante identificadores y evidencia,
+  no mediante foreign keys cruzadas;
+- un run global no vuelve atómica una publicación local incompleta.
+
+`neocortex.sqlite_connection` centraliza modos explícitos y salvaguardas
+connection-local, pero su adopción productiva actual se limita a las factories
+de PDF, DOCX y catálogo. `FrameworkRouteState` conserva una apertura separada
+de estado existente mediante URI `mode=rw`; no se forzó una factory universal.
+El inventario de esta fase registra 42 connects en 25 módulos y 132
+adquisiciones mediante 20 factories de propietario. Consulte
+[PERSISTENCE.md](PERSISTENCE.md) para la matriz exacta y los límites de SQL
+externo/WAL.
+
+Una conexión URI `mode=ro` con `query_only=ON` no debe describirse como
+byte-neutra: SQLite todavía puede participar en `-wal`/`-shm`. La barrera de
+esta continuación validó únicamente bases nuevas dentro del laboratorio; no
+abrió ni migró bases operativas vivas.
+
+## Recursos y procesos externos
+
+Controles observados:
+
+- futuros de trabajo PDF e imagen acotados aproximadamente a `workers * 2`;
+- batches del catálogo de 100 filas y de escritura semántica de hasta 500;
+- staging semántico textual de hasta 128 items o chunks por transacción y una
+  sesión SQLite por fuente;
+- colas multiprocessing pequeñas para PDF, imagen y Whisper;
+- límites de miembros, expansión y central directory antes de abrir ZIP/OOXML;
+- límites de píxeles, texto, páginas, duración y segmentos por ruta;
+- subprocess con argumentos, timeout, drenaje concurrente y límite de salida;
+- limpieza de temporales después de cerrar procesos y handles;
+- admisión global según memoria física, commit, carga y slots CPU.
+
+En Windows, los procesos aislados y `run_bounded_capture()` crean el hijo
+suspendido, lo asocian por su handle exacto a un Job Object con
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` y sólo entonces lo reanudan. Timeout,
+overflow, cancelación y excepciones terminan el Job, esperan al hijo directo,
+cierran pipes y liberan el handle; así los descendientes propios no sobreviven
+a la frontera supervisada.
+
+Herramientas externas posibles:
+
+- Tesseract para OCR;
+- FFprobe/FFmpeg para audio y vídeo;
+- qpdf opcional para recuperación estructural PDF;
+- FastEmbed y Faster-Whisper para inferencia local.
+
+No se observó `shell=True` en el motor auditado. La presencia de límites no
+equivale a sandbox completo; véase [SECURITY.md](SECURITY.md).
+
+## Empaquetado y dependencias opcionales
+
+El paquete se construye con setuptools y exige Python `>=3.13,<3.14`. Incluye
+los seis paquetes de producción, `neocortex`, el shim `Orquestador.py` y assets
+de la GUI. La base exacta es `rich` + `xxhash`; `documents`, `audio`, `image`,
+`semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
+`neocortex.capabilities` inspecciona esa disponibilidad de forma estática; no
+certifica inferencia, caché de modelos ni compatibilidad resuelta.
+
+La ayuda y versión deben arrancar sin cargar rutas pesadas. La instalación, el
+wheel y el sdist deben validarse en un entorno limpio antes de publicar; este
+documento no afirma que esa barrera final ya haya ocurrido.
+
+El inventario técnico de metadata/licencias y archivos redistribuidos está en
+[THIRD_PARTY_LICENSE_INVENTORY.md](THIRD_PARTY_LICENSE_INVENTORY.md). No declara
+una licencia propia ni concede permisos; las decisiones de licencia/NOTICE
+pertenecen al propietario.
+
+## Extensibilidad
+
+Una ruta nueva debe definir antes de integrarse:
+
+1. nombre estable y posición o política de orden;
+2. tipos de entrada y detección;
+3. configuración y límites;
+4. base propietaria o contrato explícito de reutilización;
+5. firma de procesamiento y política de caché;
+6. summary serializable;
+7. eventos de progreso y cancelación;
+8. interacción con catálogo, revisión y semántica;
+9. pruebas de error, reanudación, recursos y empaquetado;
+10. documentación de dependencias y herramientas externas.
+
+No debe añadirse una base, repositorio o clasificación sin productor y
+consumidor confirmados.
+
+## Compatibilidad y retirada de legacy
+
+Clasificación actual:
+
+| Elemento | Estado | Criterio de retirada |
+|---|---|---|
+| `Orquestador.py` | necesario | retirar sólo tras deprecación y prueba de ausencia de consumidores |
+| `_02_Deduplicacion.__main__` | temporalmente necesario/deprecable | versión anunciada y migración de invocaciones |
+| exports diferidos de `route_registry` | deprecables | eliminar después del periodo documentado y búsqueda de consumidores |
+| fachadas `state`/`semantic_state`/`semantic_service` | necesarias | hoy tienen consumidores internos y de prueba |
+| `SqlitePathIndex` | auxiliar soportado, integración no verificada | decidir explícitamente si se integra o se depreca; no eliminar por análisis automático |
+
+Una métrica de complejidad, vulture o ausencia de import interno no basta para
+eliminar una API empaquetada.
+
+## Riesgos arquitectónicos pendientes
+
+Los siguientes límites deben permanecer visibles:
+
+- `NC-AUD-001`, `NC-AUD-002` y `NC-AUD-003` quedaron corregidos en el código
+  v7 y se conservan en v8 con regresiones de migración
+  poblada/abstencionista, aislamiento, publicación, scan parcial, lectura
+  concurrente, poda y cursor USN ambiguo; la barrera integral se registra
+  aparte;
+- la poda vigente de v8 conserva generaciones `building` y candidatos `complete` aún no
+  publicados para evitar carreras; el planner dry-run diagnostica candidatos,
+  pero todavía no ejecuta expiración/conciliación de un build abandonado;
+- semántica v6 y catálogo v6 aíslan el staging y publican por puntero/CAS para
+  sus lectores oficiales (`NC-AUD-012` y `NC-AUD-013`); SQL externo sobre
+  tablas legacy no hereda el contrato;
+- el grafo de código conserva esquema 2 no generacional y una transacción global
+  extensa (`NC-AUD-015`); es atómica para lectores, pero carece de reanudación y
+  de cancelación dentro de una sentencia SQL. Los empates permanecen ambiguos y
+  la firma global del registro puede invalidar lenguajes no afectados; no debe
+  fragmentarse sin el diseño generacional completo;
+- la Knowledge Plane Fase 1 no implementa un grafo transversal entre owners ni
+  una superficie MCP; relaciones verificadas e historial transversal se
+  reportan como capacidades incompletas en vez de inferirse;
+- el golden Knowledge vigente ejecuta candidatos de owner scripted; comprueba
+  contratos y fórmulas, no una evaluación humana ni calidad representativa del
+  corpus;
+- el planner semántico valida tipo y longitud de payloads reutilizados, pero el
+  writer `semantic_generation_repository.reuse_cached_jobs` aún no replica esa
+  guarda; esa convergencia pertenece a Fase 2;
+- el máximo configurable de scratch (16 TiB) es un límite de validación, no una
+  promesa de que toda build de SQLite acepte ese `max_page_count`; el default
+  operativo permanece en 512 MiB y el planner falla cerrado;
+- los propietarios SQLite oficiales quedaron clasificados y sus familias
+  verifican existencia/FK/query-only/timeout/rollback/cierre (`NC-AUD-017`);
+  SQL externo puede evadirlas y no se comprobaron bases operativas vivas;
+- rename y organización sólo operan con identidad ligada por handles dentro del
+  subconjunto NTFS soportado; Papelera se abstiene y la conciliación de
+  `file_actions` es idempotente y su observación puede persistirse append-only,
+  pero decisión/autorización/recuperación no están implementadas y los planes
+  de organización continúan en diagnóstico manual;
+- `semantic_status` eliminó N+1 de conexiones y summaries, y conserva una sola
+  conexión/snapshot; sus nueve conteos completos todavía pueden ser costosos
+  (`NC-AUD-019`);
+- el watcher tiene exclusión cross-process de por vida por raíz+estado y se
+  abstiene ante owner vivo (`NC-AUD-020`); el archivo de diagnóstico persiste y
+  no debe borrarse mientras un proceso pueda poseerlo;
+- no hay comando general incorporado de backup/restauración; retención sólo
+  ofrece dry-run, sin delete/cuotas/compactación, por lo que generaciones
+  fallidas o abandonadas pueden crecer (`NC-AUD-014`);
+- este corte no promovió el launcher estable; la validación del artefacto,
+  dependencias, versión y ayuda sigue siendo una barrera posterior explícita;
+- el proyecto no declara licencia propia ni NOTICE jurídico; el inventario
+  técnico de terceros no sustituye la decisión del propietario (`NC-AUD-021`).
+
+Los detalles, estados y procedimientos seguros pertenecen al informe técnico y
+a [PERSISTENCE.md](PERSISTENCE.md), [RECOVERY.md](RECOVERY.md) y
+[SECURITY.md](SECURITY.md). Una suite aprobada no convertiría automáticamente
+estos riesgos de diseño en resueltos.

@@ -1,0 +1,242 @@
+"""Canonical lazy SDK facade over the existing read-only Knowledge Plane."""
+
+
+# region [01] Isolated-process harness and stable surface
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+
+import pytest
+
+import neocortex.sdk as sdk
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+EXPECTED_EXPORTS = (
+    "ContextBundle",
+    "ContextContradictionRef",
+    "ContextEntityRef",
+    "ContextGraphBudget",
+    "ContextPlanRef",
+    "ContextPlanStepRef",
+    "ContextRelationRef",
+    "EvidenceRef",
+    "KnowledgeHit",
+    "KnowledgePhaseTiming",
+    "KnowledgePlan",
+    "KnowledgeQuery",
+    "KnowledgeQueryTelemetry",
+    "KnowledgeSearchResult",
+    "KnowledgeSearchService",
+    "KnowledgeSnapshot",
+    "KnowledgeStatePaths",
+    "KnowledgeStateRootError",
+    "KnowledgeTelemetryClock",
+    "KnowledgeTelemetryOperation",
+    "KnowledgeTimingPhase",
+    "ResourceRef",
+    "RetrievalMode",
+    "RevisionRef",
+    "plan_knowledge_query",
+)
+
+FUTURE_ENDPOINTS = (
+    "compare_revisions",
+    "explain_hit",
+    "get_resource",
+    "get_revision",
+    "read_evidence",
+    "recent_changes",
+)
+
+
+def _run_isolated(
+    script: str,
+    **environment_values: str,
+) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment.update(environment_values)
+    return subprocess.run(
+        [sys.executable, "-B", "-c", textwrap.dedent(script)],
+        cwd=PROJECT_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
+# endregion [01]
+
+
+# region [02] Public identity and scope
+
+
+def test_sdk_manifest_is_the_existing_public_knowledge_surface() -> None:
+    assert sdk.__all__ == EXPECTED_EXPORTS
+    assert set(EXPECTED_EXPORTS).issubset(dir(sdk))
+
+    for endpoint in FUTURE_ENDPOINTS:
+        assert endpoint not in sdk.__all__
+        with pytest.raises(AttributeError):
+            getattr(sdk, endpoint)
+
+
+def test_sdk_exports_preserve_legacy_object_identity() -> None:
+    import _04_Nucleo_Operativo as legacy
+
+    for name in EXPECTED_EXPORTS:
+        assert getattr(sdk, name) is getattr(legacy, name), name
+
+    service_type = sdk.KnowledgeSearchService
+    assert callable(service_type.status)
+    assert callable(service_type.search)
+    assert callable(service_type.context)
+
+
+def test_sdk_service_annotations_are_runtime_resolvable_without_search_import() -> None:
+    from typing import Any, get_type_hints
+
+    service_type = sdk.KnowledgeSearchService
+    assert get_type_hints(service_type.status)["return"] is sdk.KnowledgeSnapshot
+    assert get_type_hints(service_type.search)["return"] is Any
+    assert get_type_hints(service_type.context)["return"] is sdk.ContextBundle
+
+
+# endregion [02]
+
+
+# region [03] Cold import and absent-state status
+
+
+def test_sdk_cold_import_resolves_no_operational_or_optional_engine() -> None:
+    completed = _run_isolated(
+        """
+        import sys
+
+        before = set(sys.modules)
+        import neocortex.sdk as sdk
+        loaded = set(sys.modules) - before
+
+        forbidden_prefixes = (
+            "_04_Nucleo_Operativo",
+            "PIL",
+            "PySide6",
+            "ctranslate2",
+            "cv2",
+            "fastembed",
+            "faster_whisper",
+            "fitz",
+            "nudenet",
+            "numpy",
+            "onnxruntime",
+            "pdfminer",
+            "pytesseract",
+        )
+        unexpected = sorted(
+            name
+            for name in loaded
+            if any(
+                name == prefix or name.startswith(prefix + ".")
+                for prefix in forbidden_prefixes
+            )
+        )
+        if unexpected:
+            raise SystemExit("SDK cold import loaded: " + ",".join(unexpected))
+
+        eager_exports = sorted(set(sdk.__all__).intersection(sdk.__dict__))
+        if eager_exports:
+            raise SystemExit("SDK eagerly resolved: " + ",".join(eager_exports))
+        if not set(sdk.__all__).issubset(dir(sdk)):
+            raise SystemExit("SDK dir() omitted public exports")
+        print("SDK_COLD_IMPORT_OK")
+        """
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "SDK_COLD_IMPORT_OK" in completed.stdout
+
+
+def test_sdk_status_tolerates_absent_optional_engines_without_creating_state(
+    tmp_path: Path,
+) -> None:
+    state_directory = tmp_path / "missing-state"
+    completed = _run_isolated(
+        """
+        import importlib.abc
+        import os
+        import sys
+        from pathlib import Path
+
+        blocked_roots = {
+            "PIL",
+            "PySide6",
+            "ctranslate2",
+            "cv2",
+            "fastembed",
+            "faster_whisper",
+            "fitz",
+            "nudenet",
+            "numpy",
+            "onnxruntime",
+            "pdfminer",
+            "pytesseract",
+        }
+
+        class OptionalEngineBlocker(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path=None, target=None):
+                del path, target
+                if fullname.partition(".")[0] in blocked_roots:
+                    raise ModuleNotFoundError(
+                        f"blocked optional engine: {fullname}",
+                        name=fullname,
+                    )
+                return None
+
+        sys.meta_path.insert(0, OptionalEngineBlocker())
+
+        from neocortex.sdk import KnowledgeSearchService, KnowledgeStatePaths
+
+        state_directory = Path(os.environ["NEOCORTEX_TEST_STATE"])
+        if state_directory.exists():
+            raise SystemExit("status probe state unexpectedly exists")
+
+        service = KnowledgeSearchService(
+            KnowledgeStatePaths.from_directory(state_directory)
+        )
+        snapshot = service.status()
+        states = {owner.state.value for owner in snapshot.owners}
+        if len(snapshot.owners) != 10 or states != {"absent"}:
+            raise SystemExit(f"unexpected absent-state snapshot: {states!r}")
+        if state_directory.exists():
+            raise SystemExit("SDK status created missing state")
+
+        forbidden_modules = {
+            "_04_Nucleo_Operativo.knowledge_context",
+            "_04_Nucleo_Operativo.knowledge_search",
+            "_04_Nucleo_Operativo.semantic_backends",
+            "_04_Nucleo_Operativo.semantic_preparation",
+            "_04_Nucleo_Operativo.semantic_search_service",
+            "_04_Nucleo_Operativo.semantic_service",
+        }
+        loaded = sorted(forbidden_modules.intersection(sys.modules))
+        if loaded:
+            raise SystemExit("SDK status loaded search engines: " + ",".join(loaded))
+        print("SDK_ABSENT_STATUS_OK")
+        """,
+        NEOCORTEX_TEST_STATE=str(state_directory),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "SDK_ABSENT_STATUS_OK" in completed.stdout
+    assert not state_directory.exists()
+
+
+# endregion [03]

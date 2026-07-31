@@ -1,0 +1,42 @@
+"""Semantic planning errors and primary-preserving cleanup support."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+
+_PLANNER_COMPATIBILITY_MODULE = "_04_Nucleo_Operativo.semantic_planner"
+
+
+class SemanticPlanBlocked(RuntimeError):
+    """The requested exact plan cannot be proven from read-only owner state."""
+
+
+class SemanticScratchLimitExceeded(SemanticPlanBlocked):
+    """The planner exhausted its explicit private scratch storage allowance."""
+
+
+SemanticPlanBlocked.__module__ = _PLANNER_COMPATIBILITY_MODULE
+SemanticScratchLimitExceeded.__module__ = _PLANNER_COMPATIBILITY_MODULE
+
+
+def cleanup_preserving_primary(
+    cleanup: Callable[[], object],
+    primary: BaseException,
+    *,
+    label: str,
+) -> None:
+    """Run cleanup without replacing an already-raised primary exception."""
+
+    try:
+        cleanup()
+    except BaseException as cleanup_error:
+        primary.add_note(
+            f"{label} failed: {type(cleanup_error).__name__}: {cleanup_error}"
+        )
+
+
+__all__ = [
+    "SemanticPlanBlocked",
+    "SemanticScratchLimitExceeded",
+]

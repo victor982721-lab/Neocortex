@@ -1,0 +1,866 @@
+from __future__ import annotations
+
+# region [01] Imports and result fixtures
+
+import json
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from _04_Nucleo_Operativo.cli_app import dispatch_direct
+from _04_Nucleo_Operativo.cli_parser import build_parser
+from _04_Nucleo_Operativo.cli_validation import validate_arguments
+from _04_Nucleo_Operativo.semantic_config import COMPACT_TEXT_MODEL_ID
+from _04_Nucleo_Operativo.semantic_lexical import (
+    LexicalAvailability,
+    LexicalRanking,
+)
+from _04_Nucleo_Operativo.protected_content import (
+    ProtectedContentPolicy,
+    ProtectedPathSpec,
+)
+from _04_Nucleo_Operativo.semantic_models import (
+    CalibrationStatus,
+    EvidenceDisposition,
+    FusedHit,
+    FusionEvidence,
+    GenerationSummary,
+    SemanticEvidence,
+)
+from _04_Nucleo_Operativo.semantic_service import (
+    FusedResolvedHit,
+    GenerationWorkResult,
+    ModelPreparation,
+    SemanticClassificationResult,
+    SemanticEvidencePassResult,
+    SemanticIndexResult,
+    SemanticPlan,
+    SemanticRanking,
+    SemanticSearchResult,
+    SemanticSourcePlan,
+    SemanticWorkloadPlan,
+)
+from tests.internal_paths_test_support import disjoint_internal_paths_policy
+
+
+@pytest.fixture(autouse=True)
+def _safe_state_write_policies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    internal_policy = disjoint_internal_paths_policy(
+        tmp_path.parent / f"{tmp_path.name}-policy"
+    )
+    protected_policy = ProtectedContentPolicy.capture(())
+    monkeypatch.setattr(
+        "_04_Nucleo_Operativo.internal_paths.canonical_internal_paths_policy",
+        lambda: internal_policy,
+    )
+    monkeypatch.setattr(
+        "_04_Nucleo_Operativo.protected_content.canonical_protected_content_policy",
+        lambda: protected_policy,
+    )
+
+
+def _generation(*, pending: int = 0, errors: int = 0) -> GenerationWorkResult:
+    return GenerationWorkResult(
+        GenerationSummary(
+            generation_id=7,
+            model_signature="model-signature",
+            processing_signature="pipeline-signature",
+            status="complete" if not pending and not errors else "partial",
+            pending=pending,
+            leased=0,
+            done=3,
+            errors=errors,
+            stale=0,
+            cursor={"completed_source": "pdf"},
+        ),
+        queued=3,
+        reused=1,
+        embedded=2,
+        failed=errors,
+    )
+
+
+def _index_result(
+    state_directory: Path,
+    sources: tuple[str, ...],
+    *,
+    pending: int = 0,
+) -> SemanticIndexResult:
+    return SemanticIndexResult(
+        semantic_database=state_directory / "semantic.sqlite3",
+        sources=sources,
+        items_staged=4,
+        chunks_staged=6,
+        generations=(_generation(pending=pending),),
+    )
+
+
+def _plan_result(state_directory: Path) -> SemanticPlan:
+    source = SemanticSourcePlan(
+        source_kind="pdf",
+        database=state_directory / "pdf.sqlite3",
+        schema_version=11,
+        resources=2,
+        sections=2,
+        chunks=2,
+        embedding_entities=2,
+        source_bytes=200,
+        section_text_bytes=40,
+        input_bytes=40,
+        snapshot_xxh3_128="c" * 32,
+    )
+    workload = SemanticWorkloadPlan(
+        name="text",
+        modality="text",
+        role="passage",
+        model_signature="model-signature",
+        vector_space="model-space",
+        model_id="model-id",
+        model_version="model-v1",
+        dimensions=768,
+        provider="fixture-provider",
+        supported_roles=("query", "passage"),
+        vector_dtype="float16",
+        normalization="l2",
+        distance="cosine",
+        model_provenance_json="{}",
+        processing_signature="processing-signature",
+        embedding_entities=2,
+        unique_contents=1,
+        preexisting_reusable_contents=0,
+        planned_reusable_contents=0,
+        new_unique_contents=1,
+        input_bytes=40,
+        unique_input_bytes=20,
+        new_vector_blob_bytes_lower_bound=1536,
+        model_request_contents_lower_bound=1,
+        model_request_contents_upper_bound=2,
+        estimated_model_seconds_lower_bound=None,
+        estimated_model_seconds_upper_bound=None,
+        cost_calibration_signature=None,
+        cost_execution_signature=None,
+        cost_calibration_contents_per_second=None,
+        cost_calibration_sample_contents=None,
+        cost_calibration_sample_input_bytes=None,
+        cost_unavailable_reason="no_exact_cost_calibration",
+    )
+    return SemanticPlan(
+        scope="text",
+        selected_sources=("pdf",),
+        semantic_database=state_directory / "semantic.sqlite3",
+        semantic_schema_version=None,
+        source_plans=(source,),
+        workloads=(workload,),
+        text_chunking_signature="chunking-v1",
+        content_set_xxh3_128="a" * 32,
+        semantic_snapshot_xxh3_128="d" * 32,
+        plan_signature="semantic-readonly-plan-v2:xxh3-128:" + "b" * 32,
+        resources=2,
+        sections=2,
+        chunks=2,
+        embedding_entities=2,
+        source_bytes=200,
+        section_text_bytes=40,
+        input_bytes=40,
+        unique_contents=1,
+        unique_input_bytes=20,
+        reusable_unique_contents=0,
+        new_unique_contents=1,
+        new_vector_blob_bytes_lower_bound=1536,
+        model_request_contents_lower_bound=1,
+        model_request_contents_upper_bound=2,
+        estimated_model_seconds_lower_bound=None,
+        estimated_model_seconds_upper_bound=None,
+        scratch_storage_bytes=4096,
+        max_scratch_bytes=512 * 1024 * 1024,
+        originals_verified=None,
+        execution_ready=None,
+    )
+
+
+# endregion [01]
+
+
+# region [02] Parser and validation
+
+
+def test_semantic_cli_defaults_are_offline_bounded_and_quality_first() -> None:
+    args = build_parser().parse_args(["--semantic-search", "transformador"])
+
+    validate_arguments(args)
+
+    assert args.semantic_text_profile == "quality"
+    assert args.semantic_search_mode == "all"
+    assert args.semantic_search_limit == 20
+    assert args.semantic_evidence_limit == 100
+    assert args.semantic_max_vectors == 500_000
+    assert args.semantic_plan_max_scratch_bytes == 512 * 1024 * 1024
+    assert args.semantic_source is None
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (
+            ["--semantic-status", "--semantic-search", "breaker"],
+            "semantic direct actions are mutually exclusive",
+        ),
+        (
+            ["--semantic-status", "--semantic-plan", "text"],
+            "semantic direct actions are mutually exclusive",
+        ),
+        (["--semantic-search", ""], "--semantic-search must be non-empty"),
+        (
+            ["--semantic-search", "breaker", "--semantic-search-limit", "0"],
+            "--semantic-search-limit must be between",
+        ),
+        (
+            ["--semantic-evidence", "item:1", "--semantic-evidence-limit", "0"],
+            "--semantic-evidence-limit must be between",
+        ),
+        (
+            ["--semantic-evidence-limit", "10"],
+            "semantic options require one semantic direct action",
+        ),
+        (
+            ["--semantic-search", "breaker", "--semantic-max-vectors", "10000001"],
+            "--semantic-max-vectors must be between",
+        ),
+        (
+            ["--semantic-index", "image", "--semantic-source", "pdf"],
+            "--semantic-source requires",
+        ),
+        (
+            ["--semantic-plan", "image", "--semantic-source", "pdf"],
+            "--semantic-source requires",
+        ),
+        (
+            ["--semantic-index", "text", "--semantic-no-ocr"],
+            "--semantic-no-ocr requires",
+        ),
+        (
+            ["--semantic-plan", "text", "--semantic-no-ocr"],
+            "--semantic-no-ocr requires",
+        ),
+        (
+            ["--semantic-status", "--semantic-include-compact"],
+            "--semantic-include-compact requires",
+        ),
+        (
+            ["--semantic-prepare-models", "--semantic-text-profile", "compact"],
+            "--semantic-text-profile requires",
+        ),
+        (
+            ["--semantic-status", "--semantic-threads", "2"],
+            "model cache/thread options require",
+        ),
+        (
+            ["--semantic-index", "text", "--apply"],
+            "cannot be combined with file-action --apply",
+        ),
+        (
+            ["--semantic-search-mode", "lexical"],
+            "semantic options require one semantic direct action",
+        ),
+        (
+            ["--semantic-status", "--semantic-plan-json"],
+            "--semantic-plan-json requires --semantic-plan",
+        ),
+        (
+            ["--semantic-status", "--semantic-plan-max-scratch-bytes", "65536"],
+            "--semantic-plan-max-scratch-bytes requires --semantic-plan",
+        ),
+        (
+            ["--semantic-plan", "text", "--semantic-plan-max-scratch-bytes", "1"],
+            "--semantic-plan-max-scratch-bytes must be between",
+        ),
+    ),
+)
+def test_semantic_cli_rejects_ambiguous_or_out_of_scope_options(
+    arguments: list[str],
+    message: str,
+) -> None:
+    args = build_parser().parse_args(arguments)
+    with pytest.raises(SystemExit, match=message):
+        validate_arguments(args)
+
+
+# endregion [02]
+
+
+# region [03] Status, preparation and incremental indexing
+
+
+def test_semantic_plan_json_is_read_only_and_uses_selected_profile(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-plan",
+            "text",
+            "--semantic-plan-json",
+            "--semantic-source",
+            "pdf",
+            "--semantic-text-profile",
+            "compact",
+        ]
+    )
+    validate_arguments(args)
+    result = _plan_result(tmp_path)
+
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.plan_semantic_index",
+        return_value=result,
+    ) as operation:
+        assert dispatch_direct(args) == 0
+
+    kwargs = operation.call_args.kwargs
+    assert kwargs["scope"] == "text"
+    assert kwargs["source_kinds"] == ("pdf",)
+    assert kwargs["text_model"].model_id == COMPACT_TEXT_MODEL_ID
+    assert kwargs["embed_ocr_text"] is True
+    assert kwargs["max_scratch_bytes"] == 512 * 1024 * 1024
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dry_run"] is True
+    assert payload["jobs_created"] == 0
+    assert payload["unique_contents"] == 1
+    assert payload["complete"] is False
+    assert payload["model_request_contents_lower_bound"] == 1
+    assert payload["model_request_contents_upper_bound"] == 2
+    assert payload["cost_calibrated"] is False
+    assert payload["workloads"][0]["role"] == "passage"
+    assert payload["workloads"][0]["dimensions"] == 768
+    assert not (tmp_path / "framework.lock").exists()
+    assert not (tmp_path / "semantic.sqlite3").exists()
+
+
+def test_semantic_plan_text_output_exposes_ranges_without_claiming_calibration(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-plan",
+            "text",
+            "--semantic-source",
+            "pdf",
+        ]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.plan_semantic_index",
+        return_value=_plan_result(tmp_path),
+    ):
+        assert dispatch_direct(args) == 0
+
+    output = capsys.readouterr().out
+    assert "complete=0" in output
+    assert "request_lower=1 request_upper=2" in output
+    assert "model_seconds_lower=- model_seconds_upper=-" in output
+    assert "cost_calibrated=0 cost_complete=0" in output
+    assert "role=passage" in output
+    assert "dimensions=768 dtype=float16" in output
+
+
+def test_semantic_status_is_read_only_when_state_does_not_exist(
+    tmp_path,
+    capsys,
+) -> None:
+    state_directory = tmp_path / "missing"
+    args = build_parser().parse_args(
+        ["--state-directory", str(state_directory), "--semantic-status"]
+    )
+    validate_arguments(args)
+
+    assert dispatch_direct(args) == 0
+    assert "SEMANTIC_STATUS exists=0" in capsys.readouterr().out
+    assert not state_directory.exists()
+
+
+def test_semantic_prepare_is_the_only_cli_action_that_authorizes_downloads(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-prepare-models",
+            "--semantic-include-compact",
+            "--semantic-threads",
+            "2",
+        ]
+    )
+    validate_arguments(args)
+    prepared = (ModelPreparation("signature", "model-id", 384, 0.25),)
+
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.prepare_semantic_models",
+        return_value=prepared,
+    ) as operation:
+        assert dispatch_direct(args) == 0
+
+    operation.assert_called_once_with(
+        tmp_path,
+        model_cache=None,
+        include_compact=True,
+        local_files_only=False,
+        threads=2,
+    )
+    assert "SEMANTIC_MODEL_READY id=model-id" in capsys.readouterr().out
+    assert (tmp_path / "framework.lock").is_file()
+
+
+def test_semantic_prepare_rejects_protected_missing_state_before_mkdir_or_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    protected_root = tmp_path / "protected"
+    protected_root.mkdir()
+    state_directory = protected_root / "missing-state"
+    protected_policy = ProtectedContentPolicy.capture(
+        (
+            ProtectedPathSpec(
+                "protected-state",
+                "tree",
+                "exclude",
+                protected_root,
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "_04_Nucleo_Operativo.protected_content.canonical_protected_content_policy",
+        lambda: protected_policy,
+    )
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(state_directory),
+            "--semantic-prepare-models",
+        ]
+    )
+    validate_arguments(args)
+
+    with (
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.prepare_semantic_models"
+        ) as operation,
+        patch("_04_Nucleo_Operativo.locking.FrameworkRunLock") as lock,
+    ):
+        assert dispatch_direct(args) == 2
+
+    operation.assert_not_called()
+    lock.assert_not_called()
+    assert "protected content" in capsys.readouterr().out
+    assert not state_directory.exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "operation_path"),
+    (
+        (
+            ("--semantic-index", "image"),
+            "_04_Nucleo_Operativo.semantic_service.index_image_embeddings",
+        ),
+        (
+            ("--semantic-classify", "all"),
+            "_04_Nucleo_Operativo.semantic_service.classify_semantic_index",
+        ),
+    ),
+)
+def test_semantic_writes_reject_existing_protected_state_before_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    command: tuple[str, str],
+    operation_path: str,
+) -> None:
+    state_directory = tmp_path / "protected-state"
+    state_directory.mkdir()
+    protected_policy = ProtectedContentPolicy.capture(
+        (
+            ProtectedPathSpec(
+                "protected-state",
+                "tree",
+                "exclude",
+                state_directory,
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        "_04_Nucleo_Operativo.protected_content.canonical_protected_content_policy",
+        lambda: protected_policy,
+    )
+    args = build_parser().parse_args(
+        ("--state-directory", str(state_directory), *command)
+    )
+    validate_arguments(args)
+
+    with (
+        patch(operation_path) as operation,
+        patch("_04_Nucleo_Operativo.locking.FrameworkRunLock") as lock,
+    ):
+        assert dispatch_direct(args) == 2
+
+    operation.assert_not_called()
+    lock.assert_not_called()
+    assert "protected content" in capsys.readouterr().out
+    assert not (state_directory / "framework.lock").exists()
+
+
+def test_semantic_index_all_runs_text_then_image_offline_with_selected_profile(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-index",
+            "all",
+            "--semantic-source",
+            "pdf",
+            "--semantic-source",
+            "audio",
+            "--semantic-text-profile",
+            "compact",
+            "--semantic-no-ocr",
+            "--semantic-threads",
+            "3",
+        ]
+    )
+    validate_arguments(args)
+    order: list[str] = []
+
+    def text_index(*_args, **_kwargs):
+        order.append("text")
+        return _index_result(tmp_path, ("pdf", "audio"))
+
+    def image_index(*_args, **_kwargs):
+        order.append("image")
+        return _index_result(tmp_path, ("image",))
+
+    with (
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+            side_effect=text_index,
+        ) as text_operation,
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.index_image_embeddings",
+            side_effect=image_index,
+        ) as image_operation,
+    ):
+        assert dispatch_direct(args) == 0
+
+    assert order == ["text", "image"]
+    text_kwargs = text_operation.call_args.kwargs
+    assert text_kwargs["source_kinds"] == ("pdf", "audio")
+    assert text_kwargs["local_files_only"] is True
+    assert text_kwargs["model"].model_id == COMPACT_TEXT_MODEL_ID
+    image_kwargs = image_operation.call_args.kwargs
+    assert image_kwargs["local_files_only"] is True
+    assert image_kwargs["embed_ocr_text"] is False
+    assert image_kwargs["ocr_model"].model_id == COMPACT_TEXT_MODEL_ID
+    output = capsys.readouterr().out
+    assert "SEMANTIC_INDEX scope=text" in output
+    assert "SEMANTIC_INDEX scope=image" in output
+    assert (tmp_path / "framework.lock").is_file()
+
+
+def test_semantic_index_reports_partial_generation_as_nonzero(
+    tmp_path,
+    capsys,
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-index", "text"]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=_index_result(tmp_path, ("pdf",), pending=1),
+    ) as operation:
+        assert dispatch_direct(args) == 2
+    assert operation.call_args.kwargs["source_kinds"] == ("pdf",)
+    assert "incomplete=1" in capsys.readouterr().out
+
+
+def test_semantic_index_without_available_text_cache_fails_explicitly(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-index", "text"]
+    )
+    validate_arguments(args)
+
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings"
+    ) as operation:
+        assert dispatch_direct(args) == 2
+
+    operation.assert_not_called()
+    assert (
+        "no durable PDF, DOCX, Office, audio or code text cache"
+        in capsys.readouterr().out
+    )
+
+
+# endregion [03]
+
+
+# region [04] Search, classification and advisory evidence
+
+
+def _search_result(*, complete: bool = True) -> SemanticSearchResult:
+    semantic_ranking = SemanticRanking(
+        name="semantic_text",
+        hits=(),
+        resolved=(),
+        scanned=25,
+        complete=complete,
+        cutoff_reason=None if complete else "max_vectors_reached",
+        next_cursor=None if complete else 25,
+    )
+    lexical_ranking = LexicalRanking(
+        source_kind="pdf",
+        state_path=Path("pdf.sqlite3"),
+        availability=LexicalAvailability.AVAILABLE,
+        normalized_query="transformador",
+        hits=(),
+    )
+    fused = FusedResolvedHit(
+        fused=FusedHit(
+            item_id="item:pdf:1",
+            score=0.032,
+            evidence=(
+                FusionEvidence(
+                    ranking="semantic_text",
+                    rank=1,
+                    raw_score=0.81,
+                    contribution=0.016,
+                    entity_id="chunk:1",
+                    indexed_model_signature="model-signature",
+                ),
+            ),
+        ),
+        path=r"C:\corpus\transformador.pdf",
+        source_kind="pdf",
+        source_identity="page:1",
+        snippet="transformador de potencia",
+    )
+    return SemanticSearchResult(
+        "transformador",
+        (semantic_ranking,),
+        (lexical_ranking,),
+        (fused,),
+    )
+
+
+def test_semantic_search_reports_rank_availability_fusion_and_completeness(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-search",
+            "transformador",
+            "--semantic-search-limit",
+            "7",
+            "--semantic-max-vectors",
+            "99",
+            "--semantic-search-mode",
+            "all",
+        ]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.search_semantic_index",
+        return_value=_search_result(),
+    ) as operation:
+        assert dispatch_direct(args) == 0
+
+    kwargs = operation.call_args.kwargs
+    assert kwargs["local_files_only"] is True
+    assert kwargs["include_text"] is True
+    assert kwargs["include_images"] is True
+    assert kwargs["include_lexical"] is True
+    assert kwargs["limit"] == 7
+    assert kwargs["max_vectors"] == 99
+    output = capsys.readouterr().out
+    assert "SEMANTIC_RANKING name=semantic_text available=1 complete=1" in output
+    assert "LEXICAL_RANKING name=fts_pdf availability=available" in output
+    assert "SEMANTIC_HIT rank=1" in output
+    assert not (tmp_path / "framework.lock").exists()
+
+
+def test_semantic_search_incomplete_exact_scan_returns_two(tmp_path, capsys) -> None:
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-search", "breaker"]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.search_semantic_index",
+        return_value=_search_result(complete=False),
+    ):
+        assert dispatch_direct(args) == 2
+    output = capsys.readouterr().out
+    assert "complete=0" in output
+    assert "reason=max_vectors_reached" in output
+    assert "next_cursor=25" in output
+
+
+def test_offline_semantic_failure_names_explicit_model_preparation(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-search",
+            "breaker",
+            "--semantic-search-mode",
+            "text",
+        ]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.search_semantic_index",
+        side_effect=RuntimeError("model weights are not cached"),
+    ):
+        assert dispatch_direct(args) == 2
+    output = capsys.readouterr().out
+    assert "ERROR semantic-search RuntimeError" in output
+    assert "Neocortex --semantic-prepare-models" in output
+
+
+def test_semantic_classification_is_reported_as_advisory(tmp_path, capsys) -> None:
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-classify", "all"]
+    )
+    validate_arguments(args)
+    result = SemanticClassificationResult(
+        semantic_database=tmp_path / "semantic.sqlite3",
+        ontology_id="neocortex-industrial",
+        ontology_version="ontology-v1",
+        passes=(
+            SemanticEvidencePassResult(
+                indexed_model_signature="indexed",
+                query_model_signature="query",
+                vector_space="space",
+                prototypes=12,
+                entities_scored=4,
+                evidence_staged=8,
+                stale_evidence_deactivated=1,
+            ),
+        ),
+    )
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.classify_semantic_index",
+        return_value=result,
+    ) as operation:
+        assert dispatch_direct(args) == 0
+    assert operation.call_args.kwargs["local_files_only"] is True
+    output = capsys.readouterr().out
+    assert "SEMANTIC_CLASSIFICATION" in output
+    assert "advisory=1" in output
+    assert "abstained=0" in output
+    assert "authority=advisory" in output
+    assert (tmp_path / "framework.lock").is_file()
+
+
+def test_semantic_evidence_is_read_only_and_never_grants_policy_authority(
+    tmp_path,
+    capsys,
+) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-evidence",
+            "item:pdf:1",
+        ]
+    )
+    validate_arguments(args)
+    evidence = SemanticEvidence(
+        item_id="item:pdf:1",
+        source_entity_id="chunk:1",
+        ontology_id="neocortex-industrial",
+        ontology_version="ontology-v1",
+        concept_id="industrial.equipment.transformer",
+        prototype_id="prototype:1",
+        query_model_signature="query",
+        indexed_model_signature="indexed",
+        vector_space="space",
+        score=0.77,
+        rank=1,
+        generation_id=7,
+        calibration_status=CalibrationStatus.UNCALIBRATED,
+        disposition=EvidenceDisposition.ADVISORY,
+        provenance={"authority": "advisory-only"},
+    )
+    with patch(
+        "_04_Nucleo_Operativo.semantic_state.list_semantic_evidence",
+        return_value=(evidence,),
+    ) as operation:
+        assert dispatch_direct(args) == 0
+
+    assert operation.call_args.kwargs["item_id"] == "item:pdf:1"
+    assert operation.call_args.kwargs["limit"] == 101
+    output = capsys.readouterr().out
+    assert "SEMANTIC_EVIDENCE item=item:pdf:1 count=1" in output
+    assert "limit=100 truncated=0" in output
+    assert "disposition=advisory authority=advisory" in output
+    assert not (tmp_path / "framework.lock").exists()
+
+
+def test_semantic_evidence_limit_reports_truncation(tmp_path, capsys) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-evidence",
+            "item:pdf:1",
+            "--semantic-evidence-limit",
+            "1",
+        ]
+    )
+    validate_arguments(args)
+    evidence = SemanticEvidence(
+        item_id="item:pdf:1",
+        source_entity_id="chunk:1",
+        ontology_id="neocortex-industrial",
+        ontology_version="ontology-v1",
+        concept_id="industrial.equipment.transformer",
+        prototype_id="prototype:1",
+        query_model_signature="query",
+        indexed_model_signature="indexed",
+        vector_space="space",
+        score=0.77,
+        rank=1,
+    )
+    with patch(
+        "_04_Nucleo_Operativo.semantic_state.list_semantic_evidence",
+        return_value=(evidence, evidence),
+    ) as operation:
+        assert dispatch_direct(args) == 0
+
+    assert operation.call_args.kwargs["limit"] == 2
+    output = capsys.readouterr().out
+    assert "count=1 limit=1 truncated=1" in output
+
+
+# endregion [04]

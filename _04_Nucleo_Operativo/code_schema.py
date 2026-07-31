@@ -1,0 +1,604 @@
+"""Versioned SQLite schema for structured source-code intelligence."""
+
+from __future__ import annotations
+
+import sqlite3
+import time
+from contextlib import contextmanager
+from functools import lru_cache
+from pathlib import Path
+
+from neocortex.sqlite_connection import (
+    READONLY_EXISTING,
+    READWRITE_CREATE,
+    READWRITE_EXISTING,
+    SQLiteConnectionPolicy,
+    SQLiteWriterPragmas,
+    connect_sqlite,
+)
+
+from .sqlite_schema_contract import (
+    SQLiteSchemaContract,
+    schema_contract_from_builder,
+    validate_sqlite_schema_contract,
+)
+
+
+# region [01] Versioned DDL
+
+
+CODE_SCHEMA_VERSION = 2
+
+_V1_DDL = (
+    """CREATE TABLE metadata(
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    ) WITHOUT ROWID""",
+    """CREATE TABLE schema_migrations(
+        version INTEGER PRIMARY KEY CHECK(version>0),
+        description TEXT NOT NULL,
+        applied_ns INTEGER NOT NULL CHECK(applied_ns>0)
+    )""",
+    """CREATE TABLE analysis_runs(
+        analysis_run_id INTEGER PRIMARY KEY,
+        framework_run_id INTEGER NOT NULL,
+        scan_id INTEGER NOT NULL,
+        processing_signature TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN (
+            'running','completed','partial','failed','cancelled','interrupted'
+        )),
+        started_ns INTEGER NOT NULL,
+        completed_ns INTEGER,
+        candidates INTEGER NOT NULL DEFAULT 0 CHECK(candidates>=0),
+        processed INTEGER NOT NULL DEFAULT 0 CHECK(processed>=0),
+        cache_hits INTEGER NOT NULL DEFAULT 0 CHECK(cache_hits>=0),
+        errors INTEGER NOT NULL DEFAULT 0 CHECK(errors>=0),
+        summary_json TEXT,
+        error_type TEXT,
+        error_message TEXT
+    )""",
+    """CREATE INDEX analysis_runs_framework_idx
+        ON analysis_runs(framework_run_id,analysis_run_id)""",
+    """CREATE INDEX analysis_runs_status_idx
+        ON analysis_runs(status,started_ns)""",
+    """CREATE TABLE files(
+        file_id INTEGER PRIMARY KEY,
+        volume_id TEXT NOT NULL,
+        physical_file_id TEXT NOT NULL,
+        current_path TEXT NOT NULL COLLATE NOCASE,
+        current_version_id INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('current','missing','stale')),
+        first_seen_run_id INTEGER NOT NULL,
+        last_seen_run_id INTEGER NOT NULL,
+        UNIQUE(volume_id,physical_file_id),
+        FOREIGN KEY(current_version_id) REFERENCES file_versions(version_id)
+            DEFERRABLE INITIALLY DEFERRED
+    )""",
+    """CREATE UNIQUE INDEX files_current_path_idx
+        ON files(current_path) WHERE status='current'""",
+    """CREATE INDEX files_last_seen_idx ON files(last_seen_run_id,status,file_id)""",
+    """CREATE TABLE file_versions(
+        version_id INTEGER PRIMARY KEY,
+        file_id INTEGER NOT NULL,
+        path_observed TEXT NOT NULL COLLATE NOCASE,
+        size INTEGER NOT NULL CHECK(size>=0),
+        mtime_ns INTEGER NOT NULL,
+        birthtime_ns INTEGER NOT NULL,
+        raw_xxh3_128 TEXT,
+        raw_xxh3_64_guard TEXT,
+        text_xxh3_128 TEXT,
+        text_xxh3_64_guard TEXT,
+        normalized_xxh3_128 TEXT,
+        token_xxh3_128 TEXT,
+        structure_xxh3_128 TEXT,
+        encoding TEXT,
+        language TEXT,
+        artifact_kind TEXT NOT NULL,
+        generated INTEGER NOT NULL CHECK(generated IN (0,1)),
+        vendored INTEGER NOT NULL CHECK(vendored IN (0,1)),
+        classification_confidence REAL NOT NULL
+            CHECK(classification_confidence>=0.0 AND classification_confidence<=1.0),
+        classification_evidence_json TEXT NOT NULL,
+        analysis_status TEXT NOT NULL CHECK(analysis_status IN (
+            'complete','partial','text_only','skipped_limit','binary','error'
+        )),
+        processing_signature TEXT NOT NULL,
+        analyzer_id TEXT NOT NULL,
+        analyzer_version TEXT NOT NULL,
+        parser_kind TEXT NOT NULL,
+        text_zlib BLOB,
+        text_chars INTEGER NOT NULL DEFAULT 0 CHECK(text_chars>=0),
+        text_truncated INTEGER NOT NULL DEFAULT 0 CHECK(text_truncated IN (0,1)),
+        provenance_json TEXT NOT NULL,
+        first_observed_run_id INTEGER NOT NULL,
+        last_observed_run_id INTEGER NOT NULL,
+        valid_from_ns INTEGER NOT NULL,
+        invalidated_ns INTEGER,
+        invalidation_reason TEXT,
+        FOREIGN KEY(file_id) REFERENCES files(file_id) ON DELETE RESTRICT
+    )""",
+    """CREATE UNIQUE INDEX file_versions_current_idx
+        ON file_versions(file_id) WHERE invalidated_ns IS NULL""",
+    """CREATE INDEX file_versions_path_idx
+        ON file_versions(path_observed,invalidated_ns,version_id)""",
+    """CREATE INDEX file_versions_language_idx
+        ON file_versions(language,artifact_kind,invalidated_ns,version_id)""",
+    """CREATE INDEX file_versions_exact_hash_idx
+        ON file_versions(raw_xxh3_128,size,invalidated_ns,version_id)""",
+    """CREATE INDEX file_versions_normalized_hash_idx
+        ON file_versions(normalized_xxh3_128,language,invalidated_ns,version_id)""",
+    """CREATE TABLE invalidation_history(
+        invalidation_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        invalidated_ns INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        replacement_version_id INTEGER,
+        evidence_json TEXT NOT NULL,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(replacement_version_id) REFERENCES file_versions(version_id)
+    )""",
+    """CREATE INDEX invalidation_version_idx
+        ON invalidation_history(version_id,invalidation_id)""",
+    """CREATE TABLE symbols(
+        symbol_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        parent_symbol_id INTEGER,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        qualified_name TEXT NOT NULL,
+        signature TEXT,
+        visibility TEXT,
+        docstring TEXT,
+        confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1)),
+        complexity INTEGER CHECK(complexity IS NULL OR complexity>=0),
+        start_line INTEGER NOT NULL CHECK(start_line>0),
+        start_column INTEGER NOT NULL CHECK(start_column>=0),
+        end_line INTEGER NOT NULL CHECK(end_line>=start_line),
+        end_column INTEGER NOT NULL CHECK(end_column>=0),
+        start_byte INTEGER NOT NULL CHECK(start_byte>=0),
+        end_byte INTEGER NOT NULL CHECK(end_byte>=start_byte),
+        metadata_json TEXT NOT NULL,
+        UNIQUE(version_id,kind,qualified_name,start_byte),
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE,
+        FOREIGN KEY(parent_symbol_id) REFERENCES symbols(symbol_id)
+    )""",
+    """CREATE INDEX symbols_name_idx
+        ON symbols(name,kind,version_id)""",
+    """CREATE INDEX symbols_qualified_idx
+        ON symbols(qualified_name,version_id)""",
+    """CREATE INDEX symbols_complexity_idx
+        ON symbols(complexity DESC,version_id)""",
+    """CREATE TABLE code_references(
+        reference_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        source_symbol_id INTEGER,
+        target_symbol_id INTEGER,
+        target_version_id INTEGER,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        target_hint TEXT,
+        confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1)),
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        evidence TEXT NOT NULL,
+        start_line INTEGER NOT NULL CHECK(start_line>0),
+        start_column INTEGER NOT NULL CHECK(start_column>=0),
+        end_line INTEGER NOT NULL CHECK(end_line>=start_line),
+        end_column INTEGER NOT NULL CHECK(end_column>=0),
+        start_byte INTEGER NOT NULL CHECK(start_byte>=0),
+        end_byte INTEGER NOT NULL CHECK(end_byte>=start_byte),
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE,
+        FOREIGN KEY(source_symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(target_symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(target_version_id) REFERENCES file_versions(version_id)
+    )""",
+    """CREATE INDEX code_references_name_idx
+        ON code_references(name,kind,version_id)""",
+    """CREATE INDEX code_references_target_idx
+        ON code_references(target_symbol_id,kind,reference_id)""",
+    """CREATE TABLE dependencies(
+        dependency_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        resolved_version_id INTEGER,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        scope TEXT,
+        version_spec TEXT,
+        confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1)),
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        evidence TEXT NOT NULL,
+        start_line INTEGER,
+        start_column INTEGER,
+        end_line INTEGER,
+        end_column INTEGER,
+        start_byte INTEGER,
+        end_byte INTEGER,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE,
+        FOREIGN KEY(resolved_version_id) REFERENCES file_versions(version_id)
+    )""",
+    """CREATE INDEX dependencies_name_idx
+        ON dependencies(name,kind,version_id)""",
+    """CREATE INDEX dependencies_resolved_idx
+        ON dependencies(resolved_version_id,dependency_id)""",
+    """CREATE TABLE diagnostics(
+        diagnostic_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        code TEXT NOT NULL,
+        severity TEXT NOT NULL CHECK(severity IN ('info','warning','error')),
+        message TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        tool_version TEXT NOT NULL,
+        confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1)),
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        start_line INTEGER,
+        start_column INTEGER,
+        end_line INTEGER,
+        end_column INTEGER,
+        start_byte INTEGER,
+        end_byte INTEGER,
+        metadata_json TEXT NOT NULL,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE
+    )""",
+    """CREATE INDEX diagnostics_lookup_idx
+        ON diagnostics(code,severity,version_id)""",
+    """CREATE INDEX diagnostics_source_idx
+        ON diagnostics(source,tool_name,version_id)""",
+    """CREATE TABLE metrics(
+        metric_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        symbol_id INTEGER,
+        name TEXT NOT NULL,
+        value REAL NOT NULL,
+        confirmed INTEGER NOT NULL CHECK(confirmed IN (0,1)),
+        provenance TEXT NOT NULL,
+        UNIQUE(version_id,symbol_id,name,provenance),
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE,
+        FOREIGN KEY(symbol_id) REFERENCES symbols(symbol_id)
+    )""",
+    """CREATE INDEX metrics_lookup_idx
+        ON metrics(name,value DESC,version_id)""",
+    """CREATE TABLE code_chunks(
+        chunk_id INTEGER PRIMARY KEY,
+        version_id INTEGER NOT NULL,
+        symbol_id INTEGER,
+        chunk_index INTEGER NOT NULL CHECK(chunk_index>=0),
+        kind TEXT NOT NULL,
+        start_line INTEGER NOT NULL CHECK(start_line>0),
+        end_line INTEGER NOT NULL CHECK(end_line>=start_line),
+        start_byte INTEGER NOT NULL CHECK(start_byte>=0),
+        end_byte INTEGER NOT NULL CHECK(end_byte>=start_byte),
+        text TEXT NOT NULL,
+        text_xxh3_128 TEXT NOT NULL,
+        UNIQUE(version_id,chunk_index),
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id) ON DELETE CASCADE,
+        FOREIGN KEY(symbol_id) REFERENCES symbols(symbol_id)
+    )""",
+    """CREATE INDEX code_chunks_symbol_idx
+        ON code_chunks(symbol_id,chunk_index)""",
+    """CREATE VIRTUAL TABLE code_fts USING fts5(
+        chunk_id UNINDEXED,
+        version_id UNINDEXED,
+        path,
+        project,
+        language UNINDEXED,
+        symbol,
+        signature,
+        body,
+        tokenize='unicode61 remove_diacritics 2'
+    )""",
+    """CREATE TABLE version_relations(
+        relation_id INTEGER PRIMARY KEY,
+        left_version_id INTEGER NOT NULL,
+        right_version_id INTEGER NOT NULL,
+        relation_kind TEXT NOT NULL CHECK(relation_kind IN (
+            'exact_duplicate','normalized_duplicate','token_similar',
+            'structure_similar','predecessor','divergent_same_name'
+        )),
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        evidence_json TEXT NOT NULL,
+        created_ns INTEGER NOT NULL,
+        UNIQUE(left_version_id,right_version_id,relation_kind),
+        CHECK(left_version_id<right_version_id),
+        FOREIGN KEY(left_version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(right_version_id) REFERENCES file_versions(version_id)
+    )""",
+    """CREATE INDEX version_relations_right_idx
+        ON version_relations(right_version_id,relation_kind,left_version_id)""",
+)
+
+_V2_DDL = (
+    """CREATE TABLE projects(
+        project_id INTEGER PRIMARY KEY,
+        project_key TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        ecosystem TEXT NOT NULL,
+        probable_root TEXT COLLATE NOCASE,
+        manifest_kind TEXT,
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        evidence_json TEXT NOT NULL,
+        first_seen_run_id INTEGER NOT NULL,
+        last_seen_run_id INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('current','historical','ambiguous'))
+    )""",
+    """CREATE INDEX projects_name_idx
+        ON projects(name,ecosystem,status,project_id)""",
+    """CREATE TABLE project_memberships(
+        project_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        proposed_path TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        selected INTEGER NOT NULL CHECK(selected IN (0,1)),
+        conflict_group TEXT,
+        evidence_json TEXT NOT NULL,
+        PRIMARY KEY(project_id,version_id),
+        FOREIGN KEY(project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id)
+    ) WITHOUT ROWID""",
+    """CREATE INDEX project_membership_path_idx
+        ON project_memberships(project_id,proposed_path,selected,version_id)""",
+    """CREATE INDEX project_membership_version_idx
+        ON project_memberships(version_id,project_id)""",
+    """CREATE TABLE project_edges(
+        source_project_id INTEGER NOT NULL,
+        target_project_id INTEGER,
+        dependency_name TEXT NOT NULL,
+        edge_kind TEXT NOT NULL,
+        confidence REAL NOT NULL CHECK(confidence>=0.0 AND confidence<=1.0),
+        evidence_json TEXT NOT NULL,
+        PRIMARY KEY(source_project_id,dependency_name,edge_kind),
+        FOREIGN KEY(source_project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
+        FOREIGN KEY(target_project_id) REFERENCES projects(project_id)
+    ) WITHOUT ROWID""",
+    """CREATE TABLE embedding_links(
+        chunk_id INTEGER NOT NULL,
+        semantic_item_id TEXT NOT NULL,
+        model_signature TEXT NOT NULL,
+        vector_space TEXT NOT NULL,
+        generation_id INTEGER NOT NULL,
+        active INTEGER NOT NULL CHECK(active IN (0,1)),
+        provenance_json TEXT NOT NULL,
+        PRIMARY KEY(chunk_id,model_signature,generation_id),
+        FOREIGN KEY(chunk_id) REFERENCES code_chunks(chunk_id) ON DELETE CASCADE
+    ) WITHOUT ROWID""",
+    """CREATE INDEX embedding_links_active_idx
+        ON embedding_links(model_signature,active,chunk_id)""",
+    """CREATE TABLE external_tool_runs(
+        tool_run_id INTEGER PRIMARY KEY,
+        analysis_run_id INTEGER NOT NULL,
+        project_id INTEGER,
+        tool_name TEXT NOT NULL,
+        tool_version TEXT NOT NULL,
+        configuration_signature TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN (
+            'completed','failed','timeout','unavailable','skipped'
+        )),
+        started_ns INTEGER NOT NULL,
+        completed_ns INTEGER NOT NULL,
+        provenance_json TEXT NOT NULL,
+        FOREIGN KEY(analysis_run_id) REFERENCES analysis_runs(analysis_run_id),
+        FOREIGN KEY(project_id) REFERENCES projects(project_id)
+    )""",
+    """CREATE INDEX external_tool_runs_lookup_idx
+        ON external_tool_runs(tool_name,tool_version,status,analysis_run_id)""",
+)
+
+
+# endregion [01]
+
+
+# region [02] Connection and exact contract
+
+
+_CODE_SQLITE_POLICY = SQLiteConnectionPolicy(
+    label="code state",
+    timeout_seconds=60.0,
+    row_factory=sqlite3.Row,
+    writer_pragmas=SQLiteWriterPragmas(
+        journal_mode="WAL",
+        synchronous="NORMAL",
+        cache_size_kib=32_768,
+        wal_autocheckpoint_pages=2_048,
+        journal_size_limit_bytes=268_435_456,
+    ),
+)
+
+
+def connect_code_state(
+    path: Path,
+    *,
+    readonly: bool = False,
+    create: bool = True,
+) -> sqlite3.Connection:
+    """Open code state, optionally refusing creation after initialization."""
+
+    mode = (
+        READONLY_EXISTING
+        if readonly
+        else READWRITE_CREATE
+        if create
+        else READWRITE_EXISTING
+    )
+    return connect_sqlite(
+        path,
+        mode=mode,
+        policy=_CODE_SQLITE_POLICY,
+    )
+
+
+@contextmanager
+def code_database(
+    path: Path,
+    *,
+    readonly: bool = False,
+    create: bool = True,
+):
+    connection = connect_code_state(path, readonly=readonly, create=create)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+def _execute(connection: sqlite3.Connection, statements: tuple[str, ...]) -> None:
+    for statement in statements:
+        connection.execute(statement)
+
+
+def _build_current_schema(connection: sqlite3.Connection) -> None:
+    _execute(connection, _V1_DDL)
+    _execute(connection, _V2_DDL)
+
+
+@lru_cache(maxsize=1)
+def code_schema_contract() -> SQLiteSchemaContract:
+    return schema_contract_from_builder(_build_current_schema)
+
+
+def validate_code_schema(connection: sqlite3.Connection) -> None:
+    validate_sqlite_schema_contract(
+        connection,
+        code_schema_contract(),
+        label="code",
+        exact=True,
+    )
+
+
+# endregion [02]
+
+
+# region [03] Creation, migration and validation
+
+
+def _read_version(connection: sqlite3.Connection) -> int | None:
+    objects = connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"
+    ).fetchone()[0]
+    if int(objects) == 0:
+        return None
+    metadata = connection.execute(
+        "SELECT type FROM sqlite_master WHERE name='metadata'"
+    ).fetchone()
+    if metadata is None or str(metadata[0]) != "table":
+        raise RuntimeError("code database contains objects but no metadata table")
+    rows = connection.execute(
+        "SELECT value FROM metadata WHERE key='schema_version' LIMIT 2"
+    ).fetchall()
+    if len(rows) != 1:
+        raise RuntimeError("code metadata has no unique schema_version")
+    try:
+        version = int(rows[0][0])
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("code schema_version is malformed") from exc
+    pragma_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if pragma_version not in {0, version}:
+        raise RuntimeError("code metadata and PRAGMA user_version disagree")
+    if not 1 <= version <= CODE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"code schema {version} is unsupported; expected 1..{CODE_SCHEMA_VERSION}"
+        )
+    return version
+
+
+def _record_migration(
+    connection: sqlite3.Connection,
+    version: int,
+    description: str,
+    applied_ns: int,
+) -> None:
+    connection.execute(
+        "INSERT INTO schema_migrations(version,description,applied_ns) VALUES(?,?,?)",
+        (version, description, applied_ns),
+    )
+    connection.execute(
+        "INSERT INTO metadata(key,value) VALUES('schema_version',?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (str(version),),
+    )
+    connection.execute(f"PRAGMA user_version={version}")
+
+
+def _create_fresh(connection: sqlite3.Connection, applied_ns: int) -> None:
+    _execute(connection, _V1_DDL)
+    _record_migration(
+        connection,
+        1,
+        "versioned file observations, symbols, relations, diagnostics and FTS",
+        applied_ns,
+    )
+    _execute(connection, _V2_DDL)
+    _record_migration(
+        connection,
+        2,
+        "probable projects, reconstruction provenance and semantic links",
+        applied_ns + 1,
+    )
+
+
+def _migrate_one_to_two(connection: sqlite3.Connection, applied_ns: int) -> None:
+    _execute(connection, _V2_DDL)
+    _record_migration(
+        connection,
+        2,
+        "probable projects, reconstruction provenance and semantic links",
+        applied_ns,
+    )
+
+
+def _validate_migration_history(connection: sqlite3.Connection) -> None:
+    rows = connection.execute(
+        "SELECT version,description,applied_ns FROM schema_migrations ORDER BY version"
+    ).fetchall()
+    versions = tuple(int(row[0]) for row in rows)
+    if versions != tuple(range(1, CODE_SCHEMA_VERSION + 1)):
+        raise RuntimeError("code schema migration history is incomplete")
+    if any(int(row[2]) <= 0 for row in rows):
+        raise RuntimeError("code schema migration timestamps are invalid")
+
+
+def initialize_code_state(path: Path) -> None:
+    """Create or migrate code state atomically without replacing prior evidence."""
+
+    prior: int | None = None
+    if path.is_file():
+        with code_database(path, readonly=True) as connection:
+            prior = _read_version(connection)
+            if prior == CODE_SCHEMA_VERSION:
+                validate_code_schema(connection)
+                _validate_migration_history(connection)
+                return
+
+    connection = connect_code_state(path, create=True)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            current = _read_version(connection)
+            applied_ns = time.time_ns()
+            if current is None:
+                _create_fresh(connection, applied_ns)
+            elif current == 1:
+                _migrate_one_to_two(connection, applied_ns)
+            else:
+                raise RuntimeError(f"unsupported code migration start: {current}")
+            validate_code_schema(connection)
+            _validate_migration_history(connection)
+        except BaseException:
+            connection.rollback()
+            raise
+        else:
+            connection.commit()
+    finally:
+        connection.close()
+
+
+# endregion [03]
+
+
+__all__ = [
+    "CODE_SCHEMA_VERSION",
+    "code_database",
+    "code_schema_contract",
+    "connect_code_state",
+    "initialize_code_state",
+    "validate_code_schema",
+]

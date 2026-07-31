@@ -1,0 +1,20 @@
+# Direct dependency constraints validated with CPython 3.13 on Windows.
+# Transitive packages remain resolver-managed by their owning direct dependency.
+build==1.5.0
+coverage==7.14.1
+fastembed==0.8.0
+faster-whisper==1.2.1
+mypy==2.1.0
+nudenet==3.4.2
+numpy==2.4.6
+pdfminer.six==20260107
+Pillow==12.2.0
+PyMuPDF==1.27.2.3
+PySide6==6.11.1
+pytest==9.1.0
+pytesseract==0.3.13
+rich==15.0.0
+ruff==0.15.17
+setuptools==82.0.1
+vulture==2.16
+xxhash==3.8.1

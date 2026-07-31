@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+from unittest.mock import patch
+
+import neocortex
+from neocortex.cli import entrypoint
+from _02_Deduplicacion.__main__ import main as legacy_dedup_main
+
+
+def test_project_metadata_uses_package_version_and_installed_command() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    with (project_root / "pyproject.toml").open("rb") as stream:
+        metadata = tomllib.load(stream)
+
+    assert metadata["project"]["dynamic"] == ["version"]
+    assert metadata["project"]["scripts"]["Neocortex"] == ("neocortex.cli:entrypoint")
+    assert metadata["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "neocortex.__version__"
+    }
+    assert neocortex.__version__ == "0.7.1"
+
+
+def test_source_manifest_includes_repository_instruction_files() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    manifest_lines = {
+        line.strip()
+        for line in (project_root / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+    }
+
+    assert "include AGENTS.md" in manifest_lines
+    assert "include NeoCortex_AGENTS.md" in manifest_lines
+
+
+def test_sdist_manifest_includes_audit_and_python_test_support_only() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    manifest_lines = {
+        line.strip()
+        for line in (project_root / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+    }
+
+    assert "include docs/TECHNICAL_EVOLUTION_*.md" in manifest_lines
+    assert "include docs/SELF_ANALYSIS.md" in manifest_lines
+    assert "recursive-include tests *.py" in manifest_lines
+    assert "recursive-include tests/fixtures/knowledge *.json" in manifest_lines
+    assert tuple((project_root / "docs").glob("TECHNICAL_EVOLUTION_*.md"))
+
+    expected_helpers = {
+        "audit_lab_guard.py",
+        "conftest.py",
+        "mutation_containment.py",
+        "semantic_test_backend.py",
+        "synthetic_usn.py",
+    }
+    packaged_test_python = {
+        path.name for path in (project_root / "tests").glob("*.py")
+    }
+    assert expected_helpers <= packaged_test_python
+
+    with (project_root / "pyproject.toml").open("rb") as stream:
+        metadata = tomllib.load(stream)
+    wheel_package_patterns = metadata["tool"]["setuptools"]["packages"]["find"][
+        "include"
+    ]
+    assert all(
+        not str(pattern).startswith(("tests", "docs"))
+        for pattern in wheel_package_patterns
+    )
+
+
+def test_installed_entrypoint_forwards_arguments_to_integrated_cli() -> None:
+    with (
+        patch("neocortex.cli._run_special_mode", return_value=None),
+        patch("_04_Nucleo_Operativo.cli_app.main", return_value=7) as run_cli,
+    ):
+        result = entrypoint(("--status",))
+
+    assert result == 7
+    run_cli.assert_called_once_with(["--status"])
+
+
+def test_legacy_dedup_entrypoint_delegates_without_legacy_state(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    database = tmp_path / "state" / "dedup.sqlite3"
+    with patch("_04_Nucleo_Operativo.cli_app.main", return_value=0) as run_cli:
+        result = legacy_dedup_main(
+            (
+                "--root",
+                str(tmp_path),
+                "--state-database",
+                str(database),
+                "--show-groups",
+                "3",
+            )
+        )
+
+    assert result == 0
+    forwarded = run_cli.call_args.args[0]
+    assert tuple(forwarded) == (
+        "--root",
+        str(tmp_path),
+        "--state-directory",
+        str(database.parent),
+        "--show-groups",
+        "3",
+    )
+    assert "obsoleto" in capsys.readouterr().err

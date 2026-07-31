@@ -1,0 +1,1815 @@
+{
+  "schema_version": 1,
+  "suite_id": "knowledge-phase1-executable-v1",
+  "description": "Seventeen input-only deterministic Phase-1 cases executed through live planning, fusion, context, and snapshot service seams.",
+  "provenance": "scripted_candidates",
+  "limitations": [
+    "Scripted owner candidates exercise live planning, fusion, context, and service seams; they do not validate semantic model quality.",
+    "Candidate rankings are deterministic owner inputs; reported observations and telemetry are produced only by the executable runner.",
+    "The available_multihop case encodes scripted code-relation records before live ContextBundle compilation; it does not assert that production corpus adapters currently expose those relations."
+  ],
+  "cases": [
+    {
+      "scenario_id": "exact-identifier",
+      "category": "exact_identifier",
+      "query": "TR-44001",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "exact",
+        "lexical",
+        "semantic",
+        "catalog"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "catalog:serial:TR-44001",
+          "gain": 3,
+          "source_kind": "catalog",
+          "format": "metadata",
+          "revision_state": "current",
+          "locator": {
+            "kind": "identifier",
+            "value": "serial:TR-44001"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "catalog:serial:TR-44001"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "catalog:serial:TR-44001",
+          "locator": {
+            "kind": "identifier",
+            "value": "serial:TR-44001"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "catalog",
+          "condition": "available",
+          "expected_schema_version": 6,
+          "observed_schema_version": 6
+        }
+      ],
+      "rankings": [
+        {
+          "name": "catalog_metadata",
+          "channel": "catalog",
+          "candidates": [
+            {
+              "evidence_id": "catalog:serial:TR-44001",
+              "resource_id": "resource:transformer:44001",
+              "source_kind": "catalog",
+              "format": "metadata",
+              "revision_state": "current",
+              "locator": {
+                "kind": "identifier",
+                "value": "serial:TR-44001"
+              },
+              "source_rank": 1,
+              "raw_score": 1,
+              "disposition": "canonical",
+              "snippet": "Transformador identificado con serial TR-44001."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "lexical-pressure-sf6",
+      "category": "lexical",
+      "query": "presión nominal de gas SF6",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:manual:sf6:p7",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "7"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:manual:general:p2",
+        "pdf:manual:sf6:p7"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:manual:sf6:p7",
+          "locator": {
+            "kind": "page",
+            "value": "7"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:manual:general:p2",
+              "resource_id": "resource:manual:general",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "2"
+              },
+              "source_rank": 1,
+              "raw_score": 0.91,
+              "disposition": "canonical",
+              "snippet": "Descripción general del equipo."
+            },
+            {
+              "evidence_id": "pdf:manual:sf6:p7",
+              "resource_id": "resource:manual:sf6",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "7"
+              },
+              "source_rank": 2,
+              "raw_score": 0.88,
+              "disposition": "canonical",
+              "snippet": "La presión nominal del gas SF6 es 0.5 MPa."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "semantic-transformer-paraphrase",
+      "category": "semantic_paraphrase",
+      "query": "¿Qué equipo reduce la tensión para alimentar los tableros?",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "text:substation:chunk4",
+          "gain": 3,
+          "source_kind": "text",
+          "format": "txt",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "chunk-4",
+            "section_index": 4,
+            "section_count": 8
+          }
+        },
+        {
+          "evidence_id": "text:substation:chunk5",
+          "gain": 2,
+          "source_kind": "text",
+          "format": "txt",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "chunk-5",
+            "section_index": 5,
+            "section_count": 8
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "text:substation:chunk4"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "text:substation:chunk4",
+          "locator": {
+            "kind": "section",
+            "value": "chunk-4",
+            "section_index": 4,
+            "section_count": 8
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "semantic",
+          "condition": "available",
+          "expected_schema_version": 6,
+          "observed_schema_version": 6
+        }
+      ],
+      "rankings": [
+        {
+          "name": "semantic_text",
+          "channel": "semantic",
+          "candidates": [
+            {
+              "evidence_id": "text:substation:chunk4",
+              "resource_id": "resource:substation:overview",
+              "source_kind": "text",
+              "format": "txt",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "chunk-4",
+                "section_index": 4,
+                "section_count": 8
+              },
+              "source_rank": 1,
+              "raw_score": 0.84,
+              "disposition": "canonical",
+              "snippet": "El transformador reduce la tensión para alimentar los tableros de distribución."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "chunk-two-of-three",
+      "category": "relevant_hit_chunk_2_of_3",
+      "query": "función que normaliza identificadores de activo",
+      "query_options": {
+        "source_kinds": [
+          "code"
+        ],
+        "formats": [
+          "py"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "structural_code",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "code:ids:normalize:chunk2",
+          "gain": 3,
+          "source_kind": "code",
+          "format": "py",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "function:normalize_asset_id",
+            "section_index": 2,
+            "section_count": 3
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "code:ids:normalize:chunk2"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "code:ids:normalize:chunk2",
+          "locator": {
+            "kind": "section",
+            "value": "function:normalize_asset_id",
+            "section_index": 2,
+            "section_count": 3
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "code",
+          "condition": "available",
+          "expected_schema_version": 2,
+          "observed_schema_version": 2
+        }
+      ],
+      "rankings": [
+        {
+          "name": "code_structural",
+          "channel": "structural_code",
+          "candidates": [
+            {
+              "evidence_id": "code:ids:normalize:chunk2",
+              "resource_id": "resource:code:identifiers",
+              "source_kind": "code",
+              "format": "py",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "function:normalize_asset_id",
+                "section_index": 2,
+                "section_count": 3
+              },
+              "source_rank": 1,
+              "raw_score": 1,
+              "disposition": "canonical",
+              "snippet": "def normalize_asset_id(value: str) -> str:"
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "multiple-evidence-one-resource",
+      "category": "multiple_evidence_same_resource",
+      "query": "hallazgos de aislamiento y recomendación de mantenimiento",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 2,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:inspection:p2",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "page-2"
+          }
+        },
+        {
+          "evidence_id": "pdf:inspection:p9",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "page-9"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:inspection:p2",
+        "pdf:inspection:p9"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:inspection:p2",
+          "locator": {
+            "kind": "section",
+            "value": "page-2"
+          }
+        },
+        {
+          "evidence_id": "pdf:inspection:p9",
+          "locator": {
+            "kind": "section",
+            "value": "page-9"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:inspection:p2",
+              "resource_id": "resource:inspection:alpha",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "page-2"
+              },
+              "source_rank": 1,
+              "raw_score": 0.96,
+              "disposition": "canonical",
+              "snippet": "Se observó degradación del aislamiento en la fase B."
+            },
+            {
+              "evidence_id": "pdf:inspection:p9",
+              "resource_id": "resource:inspection:alpha",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "page-9"
+              },
+              "source_rank": 2,
+              "raw_score": 0.89,
+              "disposition": "canonical",
+              "snippet": "Se recomienda mantenimiento correctivo del aislamiento."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "same-answer-two-formats",
+      "category": "two_sources_formats_same_answer",
+      "query": "presión nominal del interruptor principal",
+      "query_options": {
+        "source_kinds": [
+          "pdf",
+          "audio"
+        ],
+        "formats": [
+          "pdf",
+          "wav"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic",
+        "catalog"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:breaker:pressure:p14",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "14"
+          }
+        },
+        {
+          "evidence_id": "audio:breaker:pressure:t45",
+          "gain": 3,
+          "source_kind": "audio",
+          "format": "wav",
+          "revision_state": "current",
+          "locator": {
+            "kind": "timestamp_ms",
+            "value": "45000-61000"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:breaker:pressure:p14",
+        "audio:breaker:pressure:t45"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:breaker:pressure:p14",
+          "locator": {
+            "kind": "page",
+            "value": "14"
+          }
+        },
+        {
+          "evidence_id": "audio:breaker:pressure:t45",
+          "locator": {
+            "kind": "timestamp_ms",
+            "value": "45000-61000"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        },
+        {
+          "owner": "audio",
+          "condition": "available",
+          "expected_schema_version": 1,
+          "observed_schema_version": 1
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:breaker:pressure:p14",
+              "resource_id": "resource:breaker:report",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "14"
+              },
+              "source_rank": 1,
+              "raw_score": 0.95,
+              "disposition": "canonical",
+              "snippet": "La presión nominal indicada es 0.6 MPa.",
+              "claim_id": "claim-pressure"
+            }
+          ]
+        },
+        {
+          "name": "semantic_text",
+          "channel": "semantic",
+          "candidates": [
+            {
+              "evidence_id": "pdf:breaker:pressure:p14",
+              "resource_id": "resource:breaker:report",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "14"
+              },
+              "source_rank": 1,
+              "raw_score": 0.95,
+              "disposition": "canonical",
+              "snippet": "La presión nominal indicada es 0.6 MPa.",
+              "claim_id": "claim-pressure"
+            },
+            {
+              "evidence_id": "audio:breaker:pressure:t45",
+              "resource_id": "resource:breaker:interview",
+              "source_kind": "audio",
+              "format": "wav",
+              "revision_state": "current",
+              "locator": {
+                "kind": "timestamp_ms",
+                "value": "45000-61000"
+              },
+              "source_rank": 2,
+              "raw_score": 0.82,
+              "disposition": "canonical",
+              "snippet": "Se confirma una presión nominal de cero punto seis megapascales.",
+              "claim_id": "claim-pressure"
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "claim_id": "claim-pressure",
+          "topic": "nominal_pressure",
+          "value": "0.6 MPa",
+          "evidence_ids": [
+            "pdf:breaker:pressure:p14",
+            "audio:breaker:pressure:t45"
+          ]
+        }
+      ],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "code-and-documentation",
+      "category": "code_and_documentation",
+      "query": "cómo se construye processing_signature en el código y la documentación",
+      "query_options": {
+        "source_kinds": [
+          "code",
+          "documentation"
+        ],
+        "formats": [
+          "py",
+          "md"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "structural_code",
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "code:signature:lines84-99",
+          "gain": 3,
+          "source_kind": "code",
+          "format": "py",
+          "revision_state": "current",
+          "locator": {
+            "kind": "lines",
+            "value": "84-99"
+          }
+        },
+        {
+          "evidence_id": "docs:signature:section",
+          "gain": 2,
+          "source_kind": "documentation",
+          "format": "md",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "processing-signature"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "code:signature:lines84-99",
+        "docs:signature:section"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "code:signature:lines84-99",
+          "locator": {
+            "kind": "lines",
+            "value": "84-99"
+          }
+        },
+        {
+          "evidence_id": "docs:signature:section",
+          "locator": {
+            "kind": "section",
+            "value": "processing-signature"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "code",
+          "condition": "available",
+          "expected_schema_version": 2,
+          "observed_schema_version": 2
+        },
+        {
+          "owner": "framework",
+          "condition": "available",
+          "expected_schema_version": 19,
+          "observed_schema_version": 19
+        }
+      ],
+      "rankings": [
+        {
+          "name": "code_structural",
+          "channel": "structural_code",
+          "candidates": [
+            {
+              "evidence_id": "code:signature:lines84-99",
+              "resource_id": "resource:code:signatures",
+              "source_kind": "code",
+              "format": "py",
+              "revision_state": "current",
+              "locator": {
+                "kind": "lines",
+                "value": "84-99"
+              },
+              "source_rank": 1,
+              "raw_score": 0.93,
+              "disposition": "canonical",
+              "snippet": "processing_signature = build_signature(processor, version, options)",
+              "claim_id": "claim-signature"
+            }
+          ]
+        },
+        {
+          "name": "docs_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "docs:signature:section",
+              "resource_id": "resource:docs:signatures",
+              "source_kind": "documentation",
+              "format": "md",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "processing-signature"
+              },
+              "source_rank": 1,
+              "raw_score": 0.91,
+              "disposition": "canonical",
+              "snippet": "The processing signature records processor, version, and normalized options.",
+              "claim_id": "claim-signature"
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "claim_id": "claim-signature",
+          "topic": "signature_components",
+          "value": "processor+version+options",
+          "evidence_ids": [
+            "code:signature:lines84-99",
+            "docs:signature:section"
+          ]
+        }
+      ],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "current-over-superseded",
+      "category": "current_vs_superseded",
+      "query": "procedimiento actual de bloqueo",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:lockout:current:p3",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "3"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:lockout:current:p3"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:lockout:current:p3",
+          "locator": {
+            "kind": "page",
+            "value": "3"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:lockout:current:p3",
+              "resource_id": "resource:lockout:procedure",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "3"
+              },
+              "source_rank": 1,
+              "raw_score": 0.96,
+              "disposition": "canonical",
+              "snippet": "Procedimiento vigente de bloqueo y etiquetado."
+            },
+            {
+              "evidence_id": "pdf:lockout:old:p3",
+              "resource_id": "resource:lockout:procedure",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "superseded",
+              "locator": {
+                "kind": "page",
+                "value": "3"
+              },
+              "source_rank": 2,
+              "raw_score": 0.92,
+              "disposition": "canonical",
+              "snippet": "Procedimiento anterior de bloqueo y etiquetado."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 1,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "exact-duplicate-filter",
+      "category": "exact_duplicate",
+      "query": "manual de operación del relé",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:relay:canonical:p5",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "5"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:relay:canonical:p5"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:relay:canonical:p5",
+          "locator": {
+            "kind": "page",
+            "value": "5"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:relay:canonical:p5",
+              "resource_id": "resource:relay:manual:canonical",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "5"
+              },
+              "source_rank": 1,
+              "raw_score": 0.99,
+              "disposition": "canonical",
+              "snippet": "Operación local y remota del relé."
+            },
+            {
+              "evidence_id": "pdf:relay:copy:p5",
+              "resource_id": "resource:relay:manual:copy",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "5"
+              },
+              "source_rank": 2,
+              "raw_score": 0.98,
+              "disposition": "duplicate",
+              "canonical_resource_id": "resource:relay:manual:canonical",
+              "snippet": "Operación local y remota del relé."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 1,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "contradictory-breaker-state",
+      "category": "contradiction",
+      "query": "estado registrado del interruptor Q52",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "partial",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:breaker:open:p11",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "11"
+          }
+        },
+        {
+          "evidence_id": "pdf:breaker:closed:p16",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "page",
+            "value": "16"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:breaker:open:p11",
+        "pdf:breaker:closed:p16"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:breaker:open:p11",
+          "locator": {
+            "kind": "page",
+            "value": "11"
+          }
+        },
+        {
+          "evidence_id": "pdf:breaker:closed:p16",
+          "locator": {
+            "kind": "page",
+            "value": "16"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:breaker:open:p11",
+              "resource_id": "resource:breaker:log-a",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "11"
+              },
+              "source_rank": 1,
+              "raw_score": 0.94,
+              "disposition": "canonical",
+              "snippet": "El interruptor Q52 se registró abierto.",
+              "claim_id": "claim-breaker-open"
+            },
+            {
+              "evidence_id": "pdf:breaker:closed:p16",
+              "resource_id": "resource:breaker:log-b",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "page",
+                "value": "16"
+              },
+              "source_rank": 2,
+              "raw_score": 0.9,
+              "disposition": "canonical",
+              "snippet": "El interruptor Q52 se registró cerrado.",
+              "claim_id": "claim-breaker-closed"
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "claim_id": "claim-breaker-open",
+          "topic": "breaker_state",
+          "value": "open",
+          "evidence_ids": [
+            "pdf:breaker:open:p11"
+          ]
+        },
+        {
+          "claim_id": "claim-breaker-closed",
+          "topic": "breaker_state",
+          "value": "closed",
+          "evidence_ids": [
+            "pdf:breaker:closed:p16"
+          ]
+        }
+      ],
+      "contradictions": [
+        {
+          "left_claim_id": "claim-breaker-open",
+          "right_claim_id": "claim-breaker-closed",
+          "relation": "conflicts_with"
+        }
+      ],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 1
+    },
+    {
+      "scenario_id": "available-two-hop-chain",
+      "category": "available_multihop",
+      "query": "what calls B and what imports C relationship",
+      "query_options": {
+        "source_kinds": [
+          "code"
+        ],
+        "formats": [
+          "py"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic",
+        "structural_code",
+        "relational"
+      ],
+      "forbidden_plan_steps": [
+        "temporal"
+      ],
+      "expected_outcome": "success",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "code:relation:a-calls-b",
+          "gain": 3,
+          "source_kind": "code",
+          "format": "py",
+          "revision_state": "current",
+          "locator": {
+            "kind": "relation",
+            "value": "code_references:1"
+          }
+        },
+        {
+          "evidence_id": "code:relation:b-imports-c",
+          "gain": 3,
+          "source_kind": "code",
+          "format": "py",
+          "revision_state": "current",
+          "locator": {
+            "kind": "relation",
+            "value": "dependencies:2"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "code:relation:a-calls-b",
+        "code:relation:b-imports-c"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "code:relation:a-calls-b",
+          "locator": {
+            "kind": "relation",
+            "value": "code_references:1"
+          }
+        },
+        {
+          "evidence_id": "code:relation:b-imports-c",
+          "locator": {
+            "kind": "relation",
+            "value": "dependencies:2"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "code",
+          "condition": "available",
+          "expected_schema_version": 2,
+          "observed_schema_version": 2
+        }
+      ],
+      "rankings": [
+        {
+          "name": "code_relations",
+          "channel": "structural_code",
+          "candidates": [
+            {
+              "evidence_id": "code:relation:a-calls-b",
+              "resource_id": "resource:code:A",
+              "source_kind": "code",
+              "format": "py",
+              "revision_state": "current",
+              "locator": {
+                "kind": "relation",
+                "value": "code_references:1"
+              },
+              "source_rank": 1,
+              "raw_score": 1,
+              "disposition": "canonical",
+              "snippet": "A calls B."
+            },
+            {
+              "evidence_id": "code:relation:b-imports-c",
+              "resource_id": "resource:code:B",
+              "source_kind": "code",
+              "format": "py",
+              "revision_state": "current",
+              "locator": {
+                "kind": "relation",
+                "value": "dependencies:2"
+              },
+              "source_rank": 2,
+              "raw_score": 0.95,
+              "disposition": "canonical",
+              "snippet": "B imports C."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [
+        {
+          "from_resource_id": "resource:code:A",
+          "relation": "code_reference:calls",
+          "to_resource_id": "resource:code:B",
+          "evidence_id": "code:relation:a-calls-b"
+        },
+        {
+          "from_resource_id": "resource:code:B",
+          "relation": "code_dependency:imports",
+          "to_resource_id": "resource:code:C",
+          "evidence_id": "code:relation:b-imports-c"
+        }
+      ],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "no-answer-abstention",
+      "category": "no_answer",
+      "query": "torque de la válvula inexistente ZZZ-9000",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "no_evidence",
+      "expected_abstain": true,
+      "relevant_evidence": [],
+      "expected_retrieved_ids": [],
+      "expected_citations": [],
+      "owner_conditions": [
+        {
+          "owner": "semantic",
+          "condition": "available",
+          "expected_schema_version": 6,
+          "observed_schema_version": 6
+        }
+      ],
+      "rankings": [],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "bounded-incomplete-result",
+      "category": "incomplete_by_limit",
+      "query": "todas las observaciones de inspección",
+      "query_options": {
+        "source_kinds": [
+          "pdf"
+        ],
+        "formats": [
+          "pdf"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 1,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "partial",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "pdf:bounded:p1",
+          "gain": 3,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "page-1"
+          }
+        },
+        {
+          "evidence_id": "pdf:bounded:p5",
+          "gain": 2,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "page-5"
+          }
+        },
+        {
+          "evidence_id": "pdf:bounded:p9",
+          "gain": 1,
+          "source_kind": "pdf",
+          "format": "pdf",
+          "revision_state": "current",
+          "locator": {
+            "kind": "section",
+            "value": "page-9"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "pdf:bounded:p1"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "pdf:bounded:p1",
+          "locator": {
+            "kind": "section",
+            "value": "page-1"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "pdf",
+          "condition": "available",
+          "expected_schema_version": 11,
+          "observed_schema_version": 11
+        }
+      ],
+      "rankings": [
+        {
+          "name": "pdf_fts",
+          "channel": "lexical",
+          "candidates": [
+            {
+              "evidence_id": "pdf:bounded:p1",
+              "resource_id": "resource:bounded:inspection",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "page-1"
+              },
+              "source_rank": 1,
+              "raw_score": 0.95,
+              "disposition": "canonical",
+              "snippet": "Observación uno."
+            },
+            {
+              "evidence_id": "pdf:bounded:p5",
+              "resource_id": "resource:bounded:inspection",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "page-5"
+              },
+              "source_rank": 2,
+              "raw_score": 0.9,
+              "disposition": "canonical",
+              "snippet": "Observación dos."
+            },
+            {
+              "evidence_id": "pdf:bounded:p9",
+              "resource_id": "resource:bounded:inspection",
+              "source_kind": "pdf",
+              "format": "pdf",
+              "revision_state": "current",
+              "locator": {
+                "kind": "section",
+                "value": "page-9"
+              },
+              "source_rank": 3,
+              "raw_score": 0.85,
+              "disposition": "canonical",
+              "snippet": "Observación tres."
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 2,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "snapshot-changes-twice",
+      "category": "snapshot_changes",
+      "query": "estado del catálogo durante actualización",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code"
+      ],
+      "expected_outcome": "snapshot_changed",
+      "expected_abstain": true,
+      "relevant_evidence": [],
+      "expected_retrieved_ids": [],
+      "expected_citations": [],
+      "owner_conditions": [
+        {
+          "owner": "catalog",
+          "condition": "available",
+          "expected_schema_version": 6,
+          "observed_schema_version": 6
+        }
+      ],
+      "rankings": [],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": {
+        "changes_during_attempts": 2
+      },
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "absent-image-owner",
+      "category": "absent_owner_base",
+      "query": "objetos detectados en la imagen",
+      "query_options": {
+        "source_kinds": [
+          "image"
+        ],
+        "formats": [
+          "jpg"
+        ],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "partial",
+      "expected_abstain": true,
+      "relevant_evidence": [],
+      "expected_retrieved_ids": [],
+      "expected_citations": [],
+      "owner_conditions": [
+        {
+          "owner": "image",
+          "condition": "absent",
+          "expected_schema_version": 5
+        }
+      ],
+      "rankings": [],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "future-semantic-schema",
+      "category": "future_schema",
+      "query": "búsqueda semántica de aislamiento",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "lexical",
+        "semantic"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "schema_incompatible",
+      "expected_abstain": true,
+      "relevant_evidence": [],
+      "expected_retrieved_ids": [],
+      "expected_citations": [],
+      "owner_conditions": [
+        {
+          "owner": "semantic",
+          "condition": "future",
+          "expected_schema_version": 6,
+          "observed_schema_version": 7
+        }
+      ],
+      "rankings": [],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    },
+    {
+      "scenario_id": "unicode-spaces-hash-path",
+      "category": "unicode_spaces_hash_path",
+      "query": "C:\\Corpus\\Área técnica #1\\Informe final.pdf",
+      "query_options": {
+        "source_kinds": [],
+        "formats": [],
+        "include_history": false
+      },
+      "limits": {
+        "limit": 5,
+        "max_per_resource": 3,
+        "min_section_distance": 0,
+        "max_vectors": 100
+      },
+      "required_plan_steps": [
+        "exact",
+        "lexical",
+        "semantic",
+        "catalog"
+      ],
+      "forbidden_plan_steps": [
+        "structural_code",
+        "temporal"
+      ],
+      "expected_outcome": "partial",
+      "expected_abstain": false,
+      "relevant_evidence": [
+        {
+          "evidence_id": "inventory:path:unicode",
+          "gain": 3,
+          "source_kind": "inventory",
+          "format": "path",
+          "revision_state": "current",
+          "locator": {
+            "kind": "path",
+            "value": "C:\\Corpus\\Área técnica #1\\Informe final.pdf"
+          }
+        }
+      ],
+      "expected_retrieved_ids": [
+        "inventory:path:unicode"
+      ],
+      "expected_citations": [
+        {
+          "evidence_id": "inventory:path:unicode",
+          "locator": {
+            "kind": "path",
+            "value": "C:\\Corpus\\Área técnica #1\\Informe final.pdf"
+          }
+        }
+      ],
+      "owner_conditions": [
+        {
+          "owner": "inventory",
+          "condition": "available",
+          "expected_schema_version": 7,
+          "observed_schema_version": 7
+        }
+      ],
+      "rankings": [
+        {
+          "name": "exact_identifiers",
+          "channel": "exact",
+          "candidates": [
+            {
+              "evidence_id": "inventory:path:unicode",
+              "resource_id": "resource:path:unicode",
+              "source_kind": "inventory",
+              "format": "path",
+              "revision_state": "current",
+              "locator": {
+                "kind": "path",
+                "value": "C:\\Corpus\\Área técnica #1\\Informe final.pdf"
+              },
+              "source_rank": 1,
+              "raw_score": 1,
+              "disposition": "canonical",
+              "current_path": "C:\\Corpus\\Área técnica #1\\Informe final.pdf",
+              "snippet": "C:\\Corpus\\Área técnica #1\\Informe final.pdf"
+            }
+          ]
+        }
+      ],
+      "claims": [],
+      "contradictions": [],
+      "relation_hops": [],
+      "snapshot_transition": null,
+      "expected_filtered_duplicates": 0,
+      "expected_excluded_revisions": 0,
+      "expected_omitted_by_limit": 0,
+      "expected_contradictions": 0
+    }
+  ]
+}

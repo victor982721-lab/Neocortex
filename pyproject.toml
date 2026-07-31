@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neocortex-framework"
+dynamic = ["version"]
+description = "Windows-first incremental personal content framework"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "rich>=15,<16",
+    "xxhash>=3.8,<4",
+]
+
+[project.scripts]
+Neocortex = "neocortex.cli:entrypoint"
+
+[project.optional-dependencies]
+documents = [
+    "Pillow>=12.2,<13",
+    "PyMuPDF>=1.27,<2",
+    "pdfminer.six>=20260107",
+    "pytesseract>=0.3.13,<0.4",
+]
+audio = [
+    "faster-whisper>=1.2,<2",
+]
+image = [
+    "nudenet>=3.4.2,<4",
+    "Pillow>=12.2,<13",
+]
+semantic = [
+    "fastembed==0.8.0",
+    "numpy>=2.1,<3",
+    "Pillow>=12.2,<13",
+]
+ui = [
+    "PySide6>=6.11,<7",
+]
+full = [
+    "fastembed==0.8.0",
+    "faster-whisper>=1.2,<2",
+    "nudenet>=3.4.2,<4",
+    "numpy>=2.1,<3",
+    "Pillow>=12.2,<13",
+    "PyMuPDF>=1.27,<2",
+    "pdfminer.six>=20260107",
+    "PySide6>=6.11,<7",
+    "pytesseract>=0.3.13,<0.4",
+]
+dev = [
+    "build>=1.5,<2",
+    "coverage>=7.14,<8",
+    "mypy>=2.1,<3",
+    "pytest>=9.1,<10",
+    "ruff>=0.15,<0.16",
+    "vulture>=2.16,<3",
+]
+
+[tool.setuptools]
+py-modules = ["Orquestador"]
+
+[tool.setuptools.dynamic]
+version = {attr = "neocortex.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "neocortex*",
+    "_01_Enumeracion*",
+    "_02_Deduplicacion*",
+    "_03_Progreso*",
+    "_04_Nucleo_Operativo*",
+    "_05_Interfaz*",
+]
+
+[tool.setuptools.package-data]
+"neocortex" = ["py.typed"]
+"_04_Nucleo_Operativo" = ["py.typed"]
+"_05_Interfaz" = ["assets/*.svg", "assets/*.png", "assets/*.ico"]

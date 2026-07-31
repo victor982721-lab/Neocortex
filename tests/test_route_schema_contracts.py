@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+
+from _04_Nucleo_Operativo.audio_state import (
+    AUDIO_SCHEMA_VERSION,
+    initialize_audio_state,
+)
+from _04_Nucleo_Operativo.office_state import (
+    OFFICE_SCHEMA_VERSION,
+    initialize_office_state,
+)
+from _04_Nucleo_Operativo.sqlite_schema_contract import SQLiteSchemaContractError
+
+
+Initializer = Callable[[Path], None]
+
+
+@pytest.fixture(
+    params=(
+        (
+            "audio",
+            initialize_audio_state,
+            AUDIO_SCHEMA_VERSION,
+            "audio_documents_status_idx",
+        ),
+        (
+            "office",
+            initialize_office_state,
+            OFFICE_SCHEMA_VERSION,
+            "office_documents_status_idx",
+        ),
+    ),
+    ids=("audio", "office"),
+)
+def route_schema(
+    request: pytest.FixtureRequest,
+) -> tuple[str, Initializer, int, str]:
+    return request.param
+
+
+def _metadata(path: Path) -> dict[str, str]:
+    with sqlite3.connect(path) as connection:
+        return dict(connection.execute("SELECT key,value FROM metadata"))
+
+
+def _schema_objects(path: Path) -> list[tuple[str, str, str | None]]:
+    with sqlite3.connect(path) as connection:
+        return connection.execute(
+            """SELECT type,name,sql FROM sqlite_master
+            WHERE name NOT LIKE 'sqlite_%'
+            ORDER BY type,name"""
+        ).fetchall()
+
+
+def test_route_schema_initialization_is_idempotent_and_read_only_when_current(
+    tmp_path: Path,
+    route_schema: tuple[str, Initializer, int, str],
+) -> None:
+    label, initialize, version, _index_name = route_schema
+    database = tmp_path / f"{label}.sqlite3"
+
+    initialize(database)
+    before = database.read_bytes()
+    initialize(database)
+
+    assert database.read_bytes() == before
+    assert _metadata(database)["schema_version"] == str(version)
+
+
+def test_current_route_schema_corruption_is_rejected_without_writes(
+    tmp_path: Path,
+    route_schema: tuple[str, Initializer, int, str],
+) -> None:
+    label, initialize, _version, index_name = route_schema
+    database = tmp_path / f"{label}.sqlite3"
+    initialize(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(f'DROP INDEX "{index_name}"')
+    before = database.read_bytes()
+
+    with pytest.raises(SQLiteSchemaContractError, match="lacks indexes"):
+        initialize(database)
+
+    assert database.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("declared_version", "exception", "message"),
+    (
+        ("2", RuntimeError, "newer than supported"),
+        ("01", SQLiteSchemaContractError, "not canonical"),
+    ),
+)
+def test_invalid_route_schema_versions_are_rejected_without_writes(
+    tmp_path: Path,
+    route_schema: tuple[str, Initializer, int, str],
+    declared_version: str,
+    exception: type[Exception],
+    message: str,
+) -> None:
+    label, initialize, _version, _index_name = route_schema
+    database = tmp_path / f"{label}.sqlite3"
+    initialize(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE metadata SET value=? WHERE key='schema_version'",
+            (declared_version,),
+        )
+    before = database.read_bytes()
+
+    with pytest.raises(exception, match=message):
+        initialize(database)
+
+    assert database.read_bytes() == before
+
+
+def test_version_zero_route_schema_upgrade_preserves_existing_state(
+    tmp_path: Path,
+    route_schema: tuple[str, Initializer, int, str],
+) -> None:
+    label, initialize, version, _index_name = route_schema
+    database = tmp_path / f"{label}.sqlite3"
+    initialize(database)
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE metadata SET value='0' WHERE key='schema_version'")
+        connection.execute(
+            "INSERT INTO metadata(key,value) VALUES('legacy_marker','preserve-me')"
+        )
+
+    initialize(database)
+
+    assert _metadata(database) == {
+        "legacy_marker": "preserve-me",
+        "schema_version": str(version),
+    }
+
+
+def test_failed_route_schema_upgrade_rolls_back_all_schema_changes(
+    tmp_path: Path,
+    route_schema: tuple[str, Initializer, int, str],
+) -> None:
+    label, initialize, _version, _index_name = route_schema
+    database = tmp_path / f"{label}.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """CREATE TABLE metadata(
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            ) WITHOUT ROWID"""
+        )
+        connection.execute(
+            """CREATE TABLE documents(
+                file_key TEXT PRIMARY KEY
+            ) WITHOUT ROWID"""
+        )
+        connection.executemany(
+            "INSERT INTO metadata(key,value) VALUES(?,?)",
+            (("schema_version", "0"), ("legacy_marker", "preserve-me")),
+        )
+    schema_before = _schema_objects(database)
+
+    with pytest.raises(sqlite3.OperationalError, match="no such column: path"):
+        initialize(database)
+
+    assert _schema_objects(database) == schema_before
+    assert _metadata(database) == {
+        "legacy_marker": "preserve-me",
+        "schema_version": "0",
+    }

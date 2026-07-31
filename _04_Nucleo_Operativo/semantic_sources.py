@@ -1,0 +1,785 @@
+"""Read-only, streaming adapters from durable route caches to semantic items."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import zlib
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+from _02_Deduplicacion import FileSnapshot
+from _02_Deduplicacion.hashing import FULL_ALGORITHM, stat_matches_snapshot
+from _02_Deduplicacion.path_io import native_io_path
+
+from .file_identity import FileIdentityError, decode_file_identity
+from .semantic_models import (
+    ContentFingerprint,
+    SemanticItem,
+    TextSection,
+    fingerprint_bytes,
+    fingerprint_chunks,
+    fingerprint_text,
+)
+from .sqlite_paths import readonly_sqlite_uri
+
+
+# region [01] Public records and explicit limits
+
+TEXT_SOURCE_KINDS = ("pdf", "docx", "xlsx", "pptx", "odt", "audio", "code")
+IMAGE_SOURCE_KIND = "image"
+SOURCE_DATABASE_NAMES = {
+    "pdf": "pdf.sqlite3",
+    "docx": "docx.sqlite3",
+    "xlsx": "office.sqlite3",
+    "pptx": "office.sqlite3",
+    "odt": "office.sqlite3",
+    "audio": "audio.sqlite3",
+    "code": "code.sqlite3",
+    IMAGE_SOURCE_KIND: "image.sqlite3",
+}
+SOURCE_ADAPTER_VERSION = "semantic-source-adapters-v2"
+CODE_SOURCE_ADAPTER_VERSION = "semantic-code-source-v1"
+MAX_SECTION_TEXT_BYTES = 32 * 1024 * 1024
+MAX_SECTION_TEXT_CHARS = 20_000_000
+FILE_HASH_BUFFER_BYTES = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class TextSourceRecord:
+    """One natural text section; adjacent rows with the same item are grouped."""
+
+    item: SemanticItem
+    section: TextSection
+
+
+@dataclass(frozen=True, slots=True)
+class ImageSourceRecord:
+    """One image item and its optional bounded OCR representation."""
+
+    item: SemanticItem
+    ocr_section: TextSection | None
+
+
+class SemanticSourceError(RuntimeError):
+    """A durable route cache contains invalid or unsafe source evidence."""
+
+
+def semantic_source_database(state_directory: Path, source_kind: str) -> Path:
+    """Resolve one route-owned source database through the shared contract."""
+
+    try:
+        database_name = SOURCE_DATABASE_NAMES[source_kind]
+    except KeyError as exc:
+        supported = ", ".join(SOURCE_DATABASE_NAMES)
+        raise ValueError(
+            f"unsupported semantic source {source_kind!r}; use {supported}"
+        ) from exc
+    return state_directory / database_name
+
+
+# endregion [01]
+
+
+# region [02] Shared SQLite, compression and identity helpers
+
+
+@contextmanager
+def _readonly_database(path: Path):
+    connection = sqlite3.connect(
+        readonly_sqlite_uri(path),
+        uri=True,
+        timeout=60,
+    )
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=60000")
+        connection.execute("PRAGMA foreign_keys=ON")
+        if int(connection.execute("PRAGMA foreign_keys").fetchone()[0]) != 1:
+            raise SemanticSourceError("source reader could not enable foreign keys")
+        connection.execute("PRAGMA query_only=ON")
+        if int(connection.execute("PRAGMA query_only").fetchone()[0]) != 1:
+            raise SemanticSourceError("source reader is not query-only")
+        yield connection
+    finally:
+        connection.close()
+
+
+@contextmanager
+def _borrow_or_open_database(
+    path: Path,
+    connection: sqlite3.Connection | None,
+):
+    """Use a caller-owned snapshot or open the traditional private reader."""
+
+    if connection is not None:
+        yield connection
+        return
+    with _readonly_database(path) as opened:
+        yield opened
+
+
+def _decode_text(payload: bytes | memoryview, expected_chars: int) -> str:
+    """Decode one zlib payload with hard byte and character ceilings."""
+
+    if expected_chars < 0 or expected_chars > MAX_SECTION_TEXT_CHARS:
+        raise SemanticSourceError(
+            f"declared section text length is outside bounds: {expected_chars}"
+        )
+    decompressor = zlib.decompressobj()
+    decoded = decompressor.decompress(bytes(payload), MAX_SECTION_TEXT_BYTES + 1)
+    if len(decoded) > MAX_SECTION_TEXT_BYTES or decompressor.unconsumed_tail:
+        raise SemanticSourceError("compressed section exceeds the byte limit")
+    remaining = MAX_SECTION_TEXT_BYTES + 1 - len(decoded)
+    decoded += decompressor.flush(remaining)
+    if len(decoded) > MAX_SECTION_TEXT_BYTES:
+        raise SemanticSourceError("compressed section exceeds the byte limit")
+    if not decompressor.eof:
+        raise SemanticSourceError("compressed section is incomplete or truncated")
+    if decompressor.unused_data:
+        raise SemanticSourceError(
+            "compressed section contains trailing or concatenated data"
+        )
+    try:
+        text = decoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SemanticSourceError("section text is not valid UTF-8") from exc
+    if len(text) > MAX_SECTION_TEXT_CHARS:
+        raise SemanticSourceError("decoded section exceeds the character limit")
+    if len(text) != expected_chars:
+        raise SemanticSourceError(
+            "decoded section length does not match its durable metadata"
+        )
+    return text
+
+
+def _item_id(source_kind: str, source_identity: str) -> str:
+    return f"item:{source_kind}:{source_identity}"
+
+
+def _descriptor_fingerprint(
+    *,
+    source_kind: str,
+    stored_xxh3_128: str | None,
+    byte_or_char_count: int,
+    processing_signature: str,
+) -> ContentFingerprint:
+    """Fingerprint a versioned source descriptor when the cache owns the text hash."""
+
+    digest = stored_xxh3_128 or "unavailable"
+    descriptor = (
+        f"{SOURCE_ADAPTER_VERSION}\0{source_kind}\0{digest}\0"
+        f"{byte_or_char_count}\0{processing_signature}"
+    )
+    return fingerprint_text(descriptor)
+
+
+def _text_source_revision(row: sqlite3.Row) -> dict[str, object]:
+    """Preserve the route-owned physical revision without synthesizing values."""
+
+    revision: dict[str, object] = {
+        "size": int(row["size"]),
+        "mtime_ns": int(row["mtime_ns"]),
+        "birthtime_ns": int(row["birthtime_ns"]),
+        "processing_signature": str(row["processing_signature"]),
+    }
+    if row["last_seen_run_id"] is not None:
+        revision["last_seen_run_id"] = int(row["last_seen_run_id"])
+    if "is_partial" in row.keys():
+        is_partial = row["is_partial"]
+        if not isinstance(is_partial, int) or is_partial not in {0, 1}:
+            raise SemanticSourceError("PDF source has an invalid is_partial value")
+        revision["is_partial"] = bool(is_partial)
+    return revision
+
+
+def _source_item(
+    row: sqlite3.Row,
+    *,
+    source_kind: str,
+    text_fingerprint_column: str,
+    text_count_column: str,
+) -> SemanticItem:
+    processing_signature = str(row["processing_signature"])
+    source_identity = str(row["file_key"])
+    return SemanticItem(
+        item_id=_item_id(source_kind, source_identity),
+        source_kind=source_kind,
+        source_identity=source_identity,
+        identity_version=f"{SOURCE_ADAPTER_VERSION}|{processing_signature}",
+        fingerprint=_descriptor_fingerprint(
+            source_kind=source_kind,
+            stored_xxh3_128=(
+                None
+                if row[text_fingerprint_column] is None
+                else str(row[text_fingerprint_column])
+            ),
+            byte_or_char_count=int(row[text_count_column]),
+            processing_signature=processing_signature,
+        ),
+        path=str(row["path"]),
+        source_revision=_text_source_revision(row),
+        provenance={
+            "adapter": SOURCE_ADAPTER_VERSION,
+            "processing_signature": processing_signature,
+            "source_status": str(row["status"]),
+            "fingerprint_basis": "durable-source-text-descriptor",
+        },
+    )
+
+
+def _current_source_item(
+    row: sqlite3.Row,
+    *,
+    source_kind: str,
+    text_fingerprint_column: str,
+    text_count_column: str,
+    current_file_key: str | None,
+    current_item: SemanticItem | None,
+) -> tuple[str, SemanticItem]:
+    """Reuse only the current ordered file's immutable semantic identity."""
+
+    file_key = str(row["file_key"])
+    if current_item is None or file_key != current_file_key:
+        current_item = _source_item(
+            row,
+            source_kind=source_kind,
+            text_fingerprint_column=text_fingerprint_column,
+            text_count_column=text_count_column,
+        )
+    return file_key, current_item
+
+
+# endregion [02]
+
+
+# region [03] Text cache adapters
+
+
+def _iter_pdf(
+    path: Path,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    with _borrow_or_open_database(path, connection) as connection:
+        rows = connection.execute(
+            """SELECT d.file_key,d.path,d.processing_signature,d.status,
+            d.size,d.mtime_ns,d.birthtime_ns,d.last_seen_run_id,d.is_partial,
+            d.normalized_text_xxh3_128,d.normalized_text_chars,
+            p.page_number,p.source,p.text_zlib,p.text_chars
+            FROM documents d JOIN pages p ON p.file_key=d.file_key
+            WHERE d.status IN ('done','partial')
+            ORDER BY d.file_key,p.page_number"""
+        )
+        current_file_key: str | None = None
+        current_item: SemanticItem | None = None
+        for row in rows:
+            current_file_key, current_item = _current_source_item(
+                row,
+                source_kind="pdf",
+                text_fingerprint_column="normalized_text_xxh3_128",
+                text_count_column="normalized_text_chars",
+                current_file_key=current_file_key,
+                current_item=current_item,
+            )
+            yield TextSourceRecord(
+                current_item,
+                TextSection(
+                    section_kind="pdf_page",
+                    section_id=str(int(row["page_number"])),
+                    text=_decode_text(row["text_zlib"], int(row["text_chars"])),
+                    provenance={
+                        "adapter": SOURCE_ADAPTER_VERSION,
+                        "extraction_source": str(row["source"]),
+                    },
+                ),
+            )
+
+
+def _iter_docx(
+    path: Path,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    with _borrow_or_open_database(path, connection) as connection:
+        rows = connection.execute(
+            """SELECT d.file_key,d.path,d.processing_signature,d.status,
+            d.size,d.mtime_ns,d.birthtime_ns,d.last_seen_run_id,
+            d.text_xxh3_128,d.text_chars,d.text_zlib AS document_text_zlib,
+            p.part_name,p.part_kind,p.ordinal,p.text_zlib,p.text_chars AS part_chars
+            FROM documents d LEFT JOIN document_parts p ON p.file_key=d.file_key
+            WHERE d.status IN ('complete','partial')
+            ORDER BY d.file_key,p.ordinal,p.part_name"""
+        )
+        current_file_key: str | None = None
+        current_item: SemanticItem | None = None
+        for row in rows:
+            if row["part_name"] is None:
+                payload = row["document_text_zlib"]
+                if payload is None or int(row["text_chars"]) == 0:
+                    continue
+                section = TextSection(
+                    "docx_document",
+                    "body",
+                    _decode_text(payload, int(row["text_chars"])),
+                    {"adapter": SOURCE_ADAPTER_VERSION},
+                )
+            else:
+                section = TextSection(
+                    section_kind=f"docx_{row['part_kind']}",
+                    section_id=str(row["part_name"]),
+                    text=_decode_text(row["text_zlib"], int(row["part_chars"])),
+                    provenance={
+                        "adapter": SOURCE_ADAPTER_VERSION,
+                        "part_ordinal": int(row["ordinal"]),
+                    },
+                )
+            current_file_key, current_item = _current_source_item(
+                row,
+                source_kind="docx",
+                text_fingerprint_column="text_xxh3_128",
+                text_count_column="text_chars",
+                current_file_key=current_file_key,
+                current_item=current_item,
+            )
+            yield TextSourceRecord(current_item, section)
+
+
+def _iter_office(
+    path: Path,
+    source_kind: str,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    with _borrow_or_open_database(path, connection) as connection:
+        rows = connection.execute(
+            """SELECT file_key,path,size,mtime_ns,birthtime_ns,
+            processing_signature,status,last_seen_run_id,text_xxh3_128,
+            text_chars,text_zlib FROM documents
+            WHERE format=? AND status='complete' ORDER BY file_key""",
+            (source_kind,),
+        )
+        for row in rows:
+            if row["text_zlib"] is None or int(row["text_chars"]) == 0:
+                continue
+            item = _source_item(
+                row,
+                source_kind=source_kind,
+                text_fingerprint_column="text_xxh3_128",
+                text_count_column="text_chars",
+            )
+            yield TextSourceRecord(
+                item,
+                TextSection(
+                    section_kind=f"{source_kind}_document",
+                    section_id="body",
+                    text=_decode_text(row["text_zlib"], int(row["text_chars"])),
+                    provenance={"adapter": SOURCE_ADAPTER_VERSION},
+                ),
+            )
+
+
+def _iter_audio(
+    path: Path,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    with _borrow_or_open_database(path, connection) as connection:
+        rows = connection.execute(
+            """SELECT d.file_key,d.path,d.processing_signature,d.status,
+            d.size,d.mtime_ns,d.birthtime_ns,d.last_seen_run_id,
+            d.text_xxh3_128,d.text_chars,s.segment_index,s.start_ms,s.end_ms,s.text
+            FROM documents d JOIN segments s ON s.file_key=d.file_key
+            WHERE d.status='complete' ORDER BY d.file_key,s.segment_index"""
+        )
+        current_file_key: str | None = None
+        current_item: SemanticItem | None = None
+        for row in rows:
+            text = str(row["text"])
+            if not text.strip():
+                continue
+            current_file_key, current_item = _current_source_item(
+                row,
+                source_kind="audio",
+                text_fingerprint_column="text_xxh3_128",
+                text_count_column="text_chars",
+                current_file_key=current_file_key,
+                current_item=current_item,
+            )
+            yield TextSourceRecord(
+                current_item,
+                TextSection(
+                    section_kind="audio_segment",
+                    section_id=str(int(row["segment_index"])),
+                    text=text,
+                    provenance={
+                        "adapter": SOURCE_ADAPTER_VERSION,
+                        "start_ms": int(row["start_ms"]),
+                        "end_ms": int(row["end_ms"]),
+                    },
+                ),
+            )
+
+
+def _iter_code(
+    path: Path,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    """Stream current bounded code chunks with structural provenance."""
+
+    with _borrow_or_open_database(path, connection) as connection:
+        rows = connection.execute(
+            """SELECT f.volume_id,f.physical_file_id,f.current_path AS path,
+            f.last_seen_run_id AS source_last_seen_run_id,
+            v.version_id,v.size,v.mtime_ns,v.birthtime_ns,v.raw_xxh3_128,
+            v.first_observed_run_id,v.last_observed_run_id,
+            v.text_xxh3_128,v.text_chars,v.processing_signature,v.analysis_status,
+            v.language,v.artifact_kind,v.analyzer_id,v.analyzer_version,v.parser_kind,
+            c.chunk_index,c.kind AS chunk_kind,c.start_line,c.end_line,c.text,
+            s.qualified_name AS symbol
+            FROM files f JOIN file_versions v ON v.version_id=f.current_version_id
+            JOIN code_chunks c ON c.version_id=v.version_id
+            LEFT JOIN symbols s ON s.symbol_id=c.symbol_id
+            WHERE f.status='current' AND v.invalidated_ns IS NULL
+            AND v.analysis_status IN ('complete','partial','text_only')
+            ORDER BY v.version_id,c.chunk_index"""
+        )
+        current_version_id: int | None = None
+        current_item: SemanticItem | None = None
+        for row in rows:
+            version_id = int(row["version_id"])
+            if version_id != current_version_id:
+                source_identity = f"{row['volume_id']}:{row['physical_file_id']}"
+                text_digest = str(row["text_xxh3_128"] or "unavailable")
+                descriptor = fingerprint_text(
+                    f"{CODE_SOURCE_ADAPTER_VERSION}\0{source_identity}\0"
+                    f"{text_digest}\0{int(row['text_chars'])}\0"
+                    f"{row['processing_signature']}"
+                )
+                current_item = SemanticItem(
+                    item_id=_item_id("code", source_identity),
+                    source_kind="code",
+                    source_identity=source_identity,
+                    identity_version=(
+                        f"{CODE_SOURCE_ADAPTER_VERSION}|{row['processing_signature']}|"
+                        f"{row['analyzer_id']}:{row['analyzer_version']}"
+                    ),
+                    fingerprint=descriptor,
+                    path=str(row["path"]),
+                    source_revision={
+                        "version_id": version_id,
+                        "size": int(row["size"]),
+                        "mtime_ns": int(row["mtime_ns"]),
+                        "birthtime_ns": int(row["birthtime_ns"]),
+                        "processing_signature": str(row["processing_signature"]),
+                        "last_seen_run_id": int(row["source_last_seen_run_id"]),
+                        "first_observed_run_id": int(row["first_observed_run_id"]),
+                        "last_observed_run_id": int(row["last_observed_run_id"]),
+                        "raw_content_xxh3_128": row["raw_xxh3_128"],
+                    },
+                    provenance={
+                        "adapter": CODE_SOURCE_ADAPTER_VERSION,
+                        "processing_signature": str(row["processing_signature"]),
+                        "analysis_status": str(row["analysis_status"]),
+                        "language": row["language"],
+                        "artifact_kind": str(row["artifact_kind"]),
+                        "analyzer_id": str(row["analyzer_id"]),
+                        "analyzer_version": str(row["analyzer_version"]),
+                        "parser_kind": str(row["parser_kind"]),
+                        "fingerprint_basis": "durable-code-text-descriptor",
+                    },
+                )
+                current_version_id = version_id
+            assert current_item is not None
+            yield TextSourceRecord(
+                current_item,
+                TextSection(
+                    section_kind=f"code_{row['chunk_kind']}",
+                    section_id=str(int(row["chunk_index"])),
+                    text=str(row["text"]),
+                    provenance={
+                        "adapter": CODE_SOURCE_ADAPTER_VERSION,
+                        "version_id": version_id,
+                        "language": row["language"],
+                        "symbol": row["symbol"],
+                        "start_line": int(row["start_line"]),
+                        "end_line": int(row["end_line"]),
+                    },
+                ),
+            )
+
+
+def iter_text_source_records(
+    state_directory: Path,
+    source_kind: str,
+    *,
+    connection: sqlite3.Connection | None = None,
+) -> Iterator[TextSourceRecord]:
+    """Yield one selected source incrementally without scanning source files."""
+
+    if source_kind not in TEXT_SOURCE_KINDS:
+        raise ValueError(f"unsupported semantic text source: {source_kind}")
+    database = semantic_source_database(state_directory, source_kind)
+    if not database.is_file():
+        return
+    if source_kind == "pdf":
+        yield from _iter_pdf(database, connection)
+    elif source_kind == "docx":
+        yield from _iter_docx(database, connection)
+    elif source_kind == "audio":
+        yield from _iter_audio(database, connection)
+    elif source_kind == "code":
+        yield from _iter_code(database, connection)
+    else:
+        yield from _iter_office(database, source_kind, connection)
+
+
+# endregion [03]
+
+
+# region [04] Image cache adapter and bounded binary fingerprints
+
+
+def _snapshot_from_image_row(row: sqlite3.Row) -> FileSnapshot:
+    file_key = str(row["file_key"])
+    try:
+        identity = decode_file_identity(file_key)
+    except FileIdentityError as exc:
+        raise SemanticSourceError(f"invalid image file identity: {file_key}") from exc
+    return FileSnapshot(
+        path=str(row["path"]),
+        volume_id=identity.volume_id,
+        file_id=identity.file_id,
+        size=int(row["size"]),
+        mtime_ns=int(row["mtime_ns"]),
+        birthtime_ns=int(row["birthtime_ns"]),
+    )
+
+
+def _stream_file_fingerprint(snapshot: FileSnapshot) -> ContentFingerprint:
+    def chunks() -> Iterator[bytes]:
+        buffer = bytearray(FILE_HASH_BUFFER_BYTES)
+        view = memoryview(buffer)
+        with open(native_io_path(snapshot.path), "rb", buffering=0) as stream:
+            if not stat_matches_snapshot(snapshot, os.fstat(stream.fileno())):
+                raise SemanticSourceError(
+                    f"image source changed before fingerprinting: {snapshot.path}"
+                )
+            while count := stream.readinto(buffer):
+                yield bytes(view[:count])
+            if not stat_matches_snapshot(snapshot, os.fstat(stream.fileno())):
+                raise SemanticSourceError(
+                    f"image source changed during fingerprinting: {snapshot.path}"
+                )
+
+    return fingerprint_chunks(chunks())
+
+
+def _image_descriptor_fingerprint(
+    digest: bytes | memoryview,
+    size: int,
+) -> ContentFingerprint:
+    """Wrap a raw full-file XXH3-128 result in one stable cache descriptor."""
+
+    value = bytes(digest)
+    if len(value) != 16:
+        raise SemanticSourceError("dedup full fingerprint must contain 16 bytes")
+    return fingerprint_bytes(
+        b"dedup-full-xxh3-128-descriptor-v1\0"
+        + value
+        + size.to_bytes(8, "little", signed=False)
+    )
+
+
+def _dedup_uses_isolated_generations(connection: sqlite3.Connection) -> bool:
+    primary_key = tuple(
+        str(row[1])
+        for row in sorted(
+            connection.execute("PRAGMA dedup.table_info(files)"),
+            key=lambda row: int(row[5]) if int(row[5]) else 99,
+        )
+        if int(row[5])
+    )
+    return primary_key == ("scan_id", "path")
+
+
+def _image_rows(
+    image_database: Path,
+    dedup_database: Path | None,
+    connection: sqlite3.Connection | None = None,
+    *,
+    dedup_attached: bool = False,
+) -> Iterator[sqlite3.Row]:
+    with _borrow_or_open_database(image_database, connection) as connection:
+        image_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(images)")
+        }
+        run_projection = (
+            ",i.last_seen_run_id"
+            if "last_seen_run_id" in image_columns
+            else ",NULL AS last_seen_run_id"
+        )
+        image_projection = f"""i.file_key,i.path,i.size,i.mtime_ns,i.birthtime_ns,
+            i.processing_signature,i.category,i.document_candidate,
+            i.adult_classification{run_projection}"""
+        if "ocr_text_zlib" in image_columns:
+            ocr_projection = """,i.ocr_text_zlib,i.ocr_text_chars,
+            i.ocr_text_xxh3_128,i.ocr_text_truncated"""
+        else:
+            ocr_projection = """,NULL AS ocr_text_zlib,NULL AS ocr_text_chars,
+            NULL AS ocr_text_xxh3_128,0 AS ocr_text_truncated"""
+        has_dedup = dedup_attached or bool(dedup_database and dedup_database.is_file())
+        if has_dedup:
+            assert dedup_database is not None
+            if not dedup_attached:
+                connection.execute(
+                    "ATTACH DATABASE ? AS dedup",
+                    (readonly_sqlite_uri(dedup_database),),
+                )
+            if _dedup_uses_isolated_generations(connection):
+                # A path may coexist in several roots or unpublished scans.
+                # Reuse only the newest valid checkpoint generation.
+                query = f"""SELECT {image_projection}{ocr_projection},
+                fp.digest AS full_digest FROM images i
+                LEFT JOIN dedup.files f ON f.path=i.path COLLATE NOCASE
+                    AND f.size=i.size AND f.mtime_ns=i.mtime_ns
+                    AND f.birthtime_ns=i.birthtime_ns
+                    AND f.scan_id=(
+                        SELECT candidate.scan_id FROM dedup.files candidate
+                        JOIN dedup.inventory_checkpoints checkpoint
+                          ON checkpoint.scan_id=candidate.scan_id
+                         AND checkpoint.valid=1
+                        WHERE candidate.path=i.path COLLATE NOCASE
+                          AND candidate.size=i.size
+                          AND candidate.mtime_ns=i.mtime_ns
+                          AND candidate.birthtime_ns=i.birthtime_ns
+                        ORDER BY checkpoint.updated_ns DESC,
+                                 candidate.scan_id DESC LIMIT 1)
+                LEFT JOIN dedup.fingerprints fp ON fp.volume_id=f.volume_id
+                    AND fp.file_id=f.file_id AND fp.size=f.size
+                    AND fp.mtime_ns=f.mtime_ns AND fp.birthtime_ns=f.birthtime_ns
+                    AND fp.algorithm=?
+                WHERE i.status='done' ORDER BY i.file_key"""
+            else:
+                query = f"""SELECT {image_projection}{ocr_projection},
+                fp.digest AS full_digest FROM images i
+                LEFT JOIN dedup.files f ON f.path=i.path COLLATE NOCASE
+                    AND f.size=i.size AND f.mtime_ns=i.mtime_ns
+                    AND f.birthtime_ns=i.birthtime_ns
+                LEFT JOIN dedup.fingerprints fp ON fp.volume_id=f.volume_id
+                    AND fp.file_id=f.file_id AND fp.size=f.size
+                    AND fp.mtime_ns=f.mtime_ns AND fp.birthtime_ns=f.birthtime_ns
+                    AND fp.algorithm=?
+                WHERE i.status='done' ORDER BY i.file_key"""
+            rows = connection.execute(query, (FULL_ALGORITHM,))
+        else:
+            rows = connection.execute(
+                f"""SELECT {image_projection}{ocr_projection},
+                NULL AS full_digest FROM images i
+                WHERE i.status='done' ORDER BY i.file_key"""
+            )
+        try:
+            for row in rows:
+                yield row
+        finally:
+            try:
+                rows.close()
+            except sqlite3.ProgrammingError:
+                # A caller may abort after closing its borrowed owner snapshot.
+                pass
+
+
+def iter_image_source_records(
+    state_directory: Path,
+    *,
+    verify_snapshots: bool = True,
+) -> Iterator[ImageSourceRecord]:
+    """Yield images and verified OCR, reusing exact dedup fingerprints when present."""
+
+    image_database = semantic_source_database(state_directory, IMAGE_SOURCE_KIND)
+    if not image_database.is_file():
+        return
+    dedup_database = state_directory / "dedup.sqlite3"
+    for row in _image_rows(image_database, dedup_database):
+        snapshot = _snapshot_from_image_row(row)
+        if verify_snapshots:
+            try:
+                stat = os.stat(native_io_path(snapshot.path), follow_symlinks=False)
+            except OSError as exc:
+                raise SemanticSourceError(
+                    f"image source is unavailable during semantic refresh: "
+                    f"{snapshot.path}"
+                ) from exc
+            if not stat_matches_snapshot(snapshot, stat):
+                raise SemanticSourceError(
+                    f"image source changed before semantic refresh: {snapshot.path}"
+                )
+        if row["full_digest"] is not None:
+            raw_digest = bytes(row["full_digest"])
+            fingerprint_acquisition = "dedup-cache"
+        else:
+            streamed_fingerprint = _stream_file_fingerprint(snapshot)
+            raw_digest = bytes.fromhex(streamed_fingerprint.xxh3_128)
+            fingerprint_acquisition = "streamed-source"
+        fingerprint = _image_descriptor_fingerprint(raw_digest, snapshot.size)
+        fingerprint_basis = "raw-full-xxh3-128-size-descriptor-v1"
+        raw_content_xxh3_128 = raw_digest.hex()
+        processing_signature = str(row["processing_signature"] or "unprocessed")
+        source_revision: dict[str, object] = {
+            "volume_id": snapshot.volume_id,
+            "file_id": snapshot.file_id,
+            "size": snapshot.size,
+            "mtime_ns": snapshot.mtime_ns,
+            "birthtime_ns": snapshot.birthtime_ns,
+            "fingerprint_algorithm": fingerprint_basis,
+            "fingerprint_digest": fingerprint.xxh3_128,
+            "raw_content_xxh3_128": raw_content_xxh3_128,
+        }
+        if row["processing_signature"] is not None:
+            source_revision["processing_signature"] = str(row["processing_signature"])
+        if row["last_seen_run_id"] is not None:
+            source_revision["last_seen_run_id"] = int(row["last_seen_run_id"])
+        item = SemanticItem(
+            item_id=_item_id("image", str(row["file_key"])),
+            source_kind="image",
+            source_identity=str(row["file_key"]),
+            identity_version=(
+                f"{SOURCE_ADAPTER_VERSION}|{processing_signature}|"
+                f"snapshot={snapshot.size}:{snapshot.mtime_ns}:{snapshot.birthtime_ns}"
+            ),
+            fingerprint=fingerprint,
+            path=snapshot.path,
+            source_revision=source_revision,
+            provenance={
+                "adapter": SOURCE_ADAPTER_VERSION,
+                "processing_signature": processing_signature,
+                "category": row["category"],
+                "document_candidate": bool(row["document_candidate"]),
+                "adult_classification": row["adult_classification"],
+                "fingerprint_basis": fingerprint_basis,
+                "fingerprint_acquisition": fingerprint_acquisition,
+            },
+        )
+        ocr_section = None
+        if row["ocr_text_zlib"] is not None:
+            ocr_text = _decode_text(
+                row["ocr_text_zlib"],
+                int(row["ocr_text_chars"]),
+            )
+            ocr_fingerprint = fingerprint_text(ocr_text).xxh3_128
+            if ocr_fingerprint != str(row["ocr_text_xxh3_128"]):
+                raise SemanticSourceError(
+                    f"image OCR fingerprint mismatch: {snapshot.path}"
+                )
+            ocr_section = TextSection(
+                section_kind="image_ocr",
+                section_id="ocr",
+                text=ocr_text,
+                provenance={
+                    "adapter": SOURCE_ADAPTER_VERSION,
+                    "processing_signature": processing_signature,
+                    "truncated": bool(row["ocr_text_truncated"]),
+                },
+            )
+        yield ImageSourceRecord(item, ocr_section)
+
+
+# endregion [04]

@@ -1,0 +1,102 @@
+"""Stable, read-only Python facade for the existing Knowledge Plane.
+
+The implementation remains in the operational package during the compatible
+transition.  Symbols are resolved lazily and cached here without wrapping or
+subclassing them, so legacy and canonical imports retain object identity.
+The supported operations are the existing ``KnowledgeSearchService`` methods
+``status()``, ``search()`` and ``context()``; this module deliberately adds no
+future Knowledge endpoints.
+"""
+
+
+# region [01] Static public contract
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Final
+
+if TYPE_CHECKING:
+    from _04_Nucleo_Operativo import (
+        ContextBundle as ContextBundle,
+        ContextContradictionRef as ContextContradictionRef,
+        ContextEntityRef as ContextEntityRef,
+        ContextGraphBudget as ContextGraphBudget,
+        ContextPlanRef as ContextPlanRef,
+        ContextPlanStepRef as ContextPlanStepRef,
+        ContextRelationRef as ContextRelationRef,
+        EvidenceRef as EvidenceRef,
+        KnowledgeHit as KnowledgeHit,
+        KnowledgePhaseTiming as KnowledgePhaseTiming,
+        KnowledgePlan as KnowledgePlan,
+        KnowledgeQuery as KnowledgeQuery,
+        KnowledgeQueryTelemetry as KnowledgeQueryTelemetry,
+        KnowledgeSearchResult as KnowledgeSearchResult,
+        KnowledgeSearchService as KnowledgeSearchService,
+        KnowledgeSnapshot as KnowledgeSnapshot,
+        KnowledgeStatePaths as KnowledgeStatePaths,
+        KnowledgeTelemetryClock as KnowledgeTelemetryClock,
+        KnowledgeStateRootError as KnowledgeStateRootError,
+        KnowledgeTelemetryOperation as KnowledgeTelemetryOperation,
+        KnowledgeTimingPhase as KnowledgeTimingPhase,
+        ResourceRef as ResourceRef,
+        RetrievalMode as RetrievalMode,
+        RevisionRef as RevisionRef,
+        plan_knowledge_query as plan_knowledge_query,
+    )
+
+__all__ = (
+    "ContextBundle",
+    "ContextContradictionRef",
+    "ContextEntityRef",
+    "ContextGraphBudget",
+    "ContextPlanRef",
+    "ContextPlanStepRef",
+    "ContextRelationRef",
+    "EvidenceRef",
+    "KnowledgeHit",
+    "KnowledgePhaseTiming",
+    "KnowledgePlan",
+    "KnowledgeQuery",
+    "KnowledgeQueryTelemetry",
+    "KnowledgeSearchResult",
+    "KnowledgeSearchService",
+    "KnowledgeSnapshot",
+    "KnowledgeStatePaths",
+    "KnowledgeStateRootError",
+    "KnowledgeTelemetryClock",
+    "KnowledgeTelemetryOperation",
+    "KnowledgeTimingPhase",
+    "ResourceRef",
+    "RetrievalMode",
+    "RevisionRef",
+    "plan_knowledge_query",
+)
+
+_PUBLIC_NAMES: Final = frozenset(__all__)
+_LEGACY_FACADE: Final = "_04_Nucleo_Operativo"
+
+# endregion [01]
+
+
+# region [02] Identity-preserving lazy resolution
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve one canonical SDK symbol through the compatible legacy facade."""
+
+    if name not in _PUBLIC_NAMES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    legacy = import_module(_LEGACY_FACADE)
+    value = getattr(legacy, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Expose the stable facade without resolving any implementation module."""
+
+    return sorted(set(globals()) | _PUBLIC_NAMES)
+
+
+# endregion [02]

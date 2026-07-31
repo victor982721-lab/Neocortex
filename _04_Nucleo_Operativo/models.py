@@ -1,0 +1,278 @@
+"""Configuration and results for the integrated framework."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
+
+from _01_Enumeracion import JournalCursor
+from _02_Deduplicacion import DedupPlan, ScanSummary
+
+from .app_paths import default_state_directory
+from .route_filters import CandidateSelection
+
+if TYPE_CHECKING:
+    from .audio_models import AudioRouteSummary
+    from .code_contracts import CodeRouteSummary
+    from .docx_route import DocxRouteSummary
+    from .image_route import ImageRouteSummary
+    from .office_route import OfficeRouteSummary
+    from .pdf_route import PdfRouteSummary
+    from .global_resources import GlobalResourceSummary
+    from .document_organization import (
+        OrganizationApplySummary,
+        OrganizationPlanSummary,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class FrameworkConfig:
+    root: Path = field(default_factory=Path.home)
+    state_directory: Path = field(default_factory=default_state_directory)
+    self_analysis: bool = False
+    corpus_access_mode: Literal["normal", "analyze_only"] = "normal"
+    apply_actions: bool = False
+    preview_group_limit: int = 0
+    dedup_policy: Literal["fast", "exact"] = "fast"
+    route: str = "none"
+    route_only: bool = False
+    candidate_run_id: int | None = None
+    resume_run_id: int | None = None
+    selection: CandidateSelection = field(default_factory=CandidateSelection)
+    heartbeat_interval_seconds: float = 5.0
+    document_catalog_enabled: bool = True
+    document_taxonomy_path: Path | None = None
+    document_classification_max_chars: int = 64_000
+    organization_root: Path | None = None
+    organization_min_confidence: float = 0.72
+    global_memory_budget_bytes: int | None = None
+    global_min_free_memory_bytes: int | None = None
+    global_min_free_commit_bytes: int | None = None
+    global_cpu_slots: int | None = None
+    global_max_cpu_load_percent: float = 90.0
+    global_resource_wait_timeout_seconds: float = 300.0
+    code_max_file_bytes: int = 8 * 1024 * 1024
+    code_max_documents: int | None = None
+    code_max_text_chars: int = 4_000_000
+    code_chunk_chars: int = 12_000
+    code_retry_errors: bool = False
+    code_cache_validation: Literal["metadata", "full"] = "metadata"
+    code_include_generated: bool = True
+    code_include_vendored: bool = True
+    code_complexity_warning: int = 15
+    code_function_lines_warning: int = 200
+    image_workers: int = 4
+    image_max_file_bytes: int | None = None
+    image_max_documents: int | None = None
+    image_retry_errors: bool = False
+    image_memory_budget_bytes: int = 512 * 1024 * 1024
+    image_min_free_memory_bytes: int = 1024 * 1024 * 1024
+    image_min_free_commit_bytes: int = 1024 * 1024 * 1024
+    image_memory_wait_timeout_seconds: float = 60.0
+    image_worker_timeout_seconds: float = 120.0
+    image_document_ocr_mode: Literal["auto", "never"] = "auto"
+    image_document_ocr_lang: str = "spa+eng"
+    image_document_ocr_timeout_seconds: float = 12.0
+    image_tesseract_cmd: str | None = None
+    image_tessdata_dir: str | None = None
+    docx_max_file_bytes: int | None = None
+    docx_max_documents: int | None = None
+    docx_max_text_chars: int = 20_000_000
+    docx_retry_errors: bool = False
+    docx_memory_budget_bytes: int = 512 * 1024 * 1024
+    docx_min_free_memory_bytes: int = 1024 * 1024 * 1024
+    docx_min_free_commit_bytes: int = 1024 * 1024 * 1024
+    docx_memory_wait_timeout_seconds: float = 60.0
+    office_max_file_bytes: int | None = None
+    office_max_documents: int | None = None
+    office_max_text_chars: int = 20_000_000
+    office_retry_errors: bool = False
+    office_memory_budget_bytes: int = 512 * 1024 * 1024
+    office_min_free_memory_bytes: int = 1024 * 1024 * 1024
+    office_min_free_commit_bytes: int = 1024 * 1024 * 1024
+    office_memory_wait_timeout_seconds: float = 60.0
+    audio_model_name: str = "small"
+    audio_device: Literal["auto", "cpu", "cuda"] = "auto"
+    audio_compute_type: str = "auto"
+    audio_language: str | None = None
+    audio_beam_size: int = 5
+    audio_vad_filter: bool = True
+    audio_include_video: bool = True
+    audio_max_file_bytes: int | None = None
+    audio_max_documents: int | None = None
+    audio_max_duration_seconds: float = 6 * 60 * 60
+    audio_max_transcript_chars: int = 5_000_000
+    audio_max_segments: int = 100_000
+    audio_file_timeout_seconds: float = 3600.0
+    audio_worker_startup_timeout_seconds: float = 1800.0
+    audio_worker_memory_bytes: int = 4 * 1024 * 1024 * 1024
+    audio_retry_errors: bool = False
+    audio_ffprobe_path: str | None = None
+    audio_model_cache_directory: Path | None = None
+    audio_local_models_only: bool = False
+    audio_memory_budget_bytes: int = 2 * 1024 * 1024 * 1024
+    audio_min_free_memory_bytes: int = 2 * 1024 * 1024 * 1024
+    audio_min_free_commit_bytes: int = 2 * 1024 * 1024 * 1024
+    audio_memory_wait_timeout_seconds: float = 300.0
+    pdf_ocr_mode: Literal["auto", "never", "always"] = "auto"
+    pdf_ocr_lang: str = "spa+eng"
+    pdf_dpi: int = 200
+    pdf_workers: int = 4
+    pdf_ocr_workers: int = 2
+    pdf_min_page_chars: int = 40
+    pdf_max_page_text_chars: int = 5_000_000
+    pdf_max_render_pixels: int = 40_000_000
+    pdf_max_pages: int | None = None
+    pdf_max_file_bytes: int | None = None
+    pdf_max_documents: int | None = None
+    pdf_max_ocr_pages: int | None = None
+    pdf_ocr_timeout_seconds: int = 120
+    pdf_retry_errors: bool = False
+    pdfminer_fallback: bool = True
+    pdf_similarity_threshold: float = 0.92
+    pdf_cache_validation: Literal["metadata", "full"] = "metadata"
+    pdf_tesseract_cmd: str | None = None
+    pdf_tessdata_dir: str | None = None
+    pdf_page_start: int | None = None
+    pdf_page_end: int | None = None
+    pdf_fail_fast_pages: bool = False
+    pdf_document_timeout_seconds: float | None = 600.0
+    pdf_timeout_mode: Literal["fixed", "adaptive"] = "adaptive"
+    pdf_max_document_timeout_seconds: float = 1200.0
+    pdf_min_free_bytes: int = 512 * 1024 * 1024
+    pdf_memory_backpressure_bytes: int | None = None
+    pdf_commit_backpressure_bytes: int | None = None
+    pdf_memory_budget_bytes: int | None = None
+    pdf_worker_memory_bytes: int = 512 * 1024 * 1024
+    pdf_memory_wait_timeout_seconds: float = 60.0
+    pdf_large_document_bytes: int = 128 * 1024 * 1024
+    pdf_large_document_workers: int = 2
+
+    @property
+    def dedup_database(self) -> Path:
+        return self.state_directory / "dedup.sqlite3"
+
+    @property
+    def framework_database(self) -> Path:
+        return self.state_directory / "framework.sqlite3"
+
+    @property
+    def document_catalog_database(self) -> Path:
+        return self.state_directory / "document_catalog.sqlite3"
+
+    @property
+    def pdf_database(self) -> Path:
+        return self.state_directory / "pdf.sqlite3"
+
+    @property
+    def docx_database(self) -> Path:
+        return self.state_directory / "docx.sqlite3"
+
+    @property
+    def office_database(self) -> Path:
+        return self.state_directory / "office.sqlite3"
+
+    @property
+    def audio_database(self) -> Path:
+        return self.state_directory / "audio.sqlite3"
+
+    @property
+    def image_database(self) -> Path:
+        return self.state_directory / "image.sqlite3"
+
+    @property
+    def code_database(self) -> Path:
+        return self.state_directory / "code.sqlite3"
+
+
+@dataclass(frozen=True, slots=True)
+class InitialRunResult:
+    run_id: int
+    scan: ScanSummary
+    dedup_plan: DedupPlan
+    journal_before: JournalCursor
+    journal_after: JournalCursor
+    reconciliation_records: int
+    inventory_attempts: int
+    inventory_mode: Literal["full", "incremental"]
+    actions: ActionSummary
+    pdf: PdfRouteSummary | None = None
+    docx: DocxRouteSummary | None = None
+    office: OfficeRouteSummary | None = None
+    audio: AudioRouteSummary | None = None
+    image: ImageRouteSummary | None = None
+    code: CodeRouteSummary | None = None
+    route_results: dict[str, object] = field(default_factory=dict)
+    global_resources: GlobalResourceSummary | None = None
+    organization_plan: OrganizationPlanSummary | None = None
+    organization_apply: OrganizationApplySummary | None = None
+
+    @property
+    def journal_usn_span(self) -> int:
+        return self.journal_after.next_usn - self.journal_before.next_usn
+
+
+@dataclass(frozen=True, slots=True)
+class SelfAnalysisRunResult:
+    """Results of protected code analysis without a corpus-action phase."""
+
+    run_id: int
+    scan: ScanSummary
+    journal_before: JournalCursor
+    journal_after: JournalCursor
+    reconciliation_records: int
+    inventory_attempts: int
+    inventory_mode: Literal["full", "incremental"]
+    inventory_policy_signature: str
+    code: CodeRouteSummary
+    route_results: dict[str, object] = field(default_factory=dict)
+    global_resources: GlobalResourceSummary | None = None
+    corpus_action_count: int = 0
+    route_candidate_count: int = 0
+
+    @property
+    def journal_usn_span(self) -> int:
+        return self.journal_after.next_usn - self.journal_before.next_usn
+
+
+@dataclass(frozen=True, slots=True)
+class RouteOnlyRunResult:
+    """Results of a route-only run over durable route inputs."""
+
+    run_id: int
+    source_run_id: int
+    route_results: dict[str, object] = field(default_factory=dict)
+    global_resources: GlobalResourceSummary | None = None
+    pdf: PdfRouteSummary | None = None
+    docx: DocxRouteSummary | None = None
+    office: OfficeRouteSummary | None = None
+    audio: AudioRouteSummary | None = None
+    image: ImageRouteSummary | None = None
+    code: CodeRouteSummary | None = None
+    actions: ActionSummary = field(default_factory=lambda: ActionSummary(False))
+
+
+@dataclass(frozen=True, slots=True)
+class ActionSummary:
+    """Results of duplicate disposal and content-type validation."""
+
+    apply_actions: bool
+    duplicate_candidates: int = 0
+    duplicates_trashed: int = 0
+    duplicate_skips: int = 0
+    files_checked: int = 0
+    types_detected: int = 0
+    extensions_matching: int = 0
+    unknown_types: int = 0
+    type_cache_hits: int = 0
+    type_cache_misses: int = 0
+    type_cache_pruned: int = 0
+    stale_inventory: int = 0
+    rename_candidates: int = 0
+    files_renamed: int = 0
+    rename_skips: int = 0
+    empty_directory_candidates: int = 0
+    empty_directories_trashed: int = 0
+    empty_directory_skips: int = 0
+    errors: int = 0

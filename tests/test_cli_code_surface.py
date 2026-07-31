@@ -1,0 +1,372 @@
+"""Compatibility contract for the flat structured-code CLI surface."""
+
+from __future__ import annotations
+
+import argparse
+
+import pytest
+
+from _04_Nucleo_Operativo.cli_parser import build_parser, decimal_megabytes
+from _04_Nucleo_Operativo.cli_validation import validate_arguments
+
+
+CODE_GROUP_TITLE = "Structured source-code intelligence route"
+SEMANTIC_GROUP_TITLE = "Multimodal semantic index"
+KNOWLEDGE_GROUP_TITLE = "Read-only Knowledge Plane"
+
+
+def _expected_store(
+    option: str,
+    destination: str,
+    *,
+    default: object = None,
+    type_name: str | None = None,
+    choices: tuple[str, ...] | None = None,
+    metavar: str | None = None,
+    help_text: str | None = None,
+    action_name: str = "_StoreAction",
+) -> tuple[object, ...]:
+    return (
+        (option,),
+        destination,
+        action_name,
+        None,
+        None,
+        default,
+        type_name,
+        choices,
+        metavar,
+        False,
+        help_text,
+    )
+
+
+def _expected_flag(
+    option: str,
+    destination: str,
+    help_text: str | None = None,
+) -> tuple[object, ...]:
+    return (
+        (option,),
+        destination,
+        "_StoreTrueAction",
+        0,
+        True,
+        False,
+        None,
+        None,
+        None,
+        False,
+        help_text,
+    )
+
+
+def _expected_boolean_optional(
+    option: str,
+    negative_option: str,
+    destination: str,
+    help_text: str,
+) -> tuple[object, ...]:
+    return (
+        (option, negative_option),
+        destination,
+        "BooleanOptionalAction",
+        0,
+        None,
+        True,
+        None,
+        None,
+        None,
+        False,
+        help_text,
+    )
+
+
+EXPECTED_CODE_ACTIONS = (
+    _expected_store(
+        "--code-max-mb",
+        "code_max_file_bytes",
+        default=8 * 1024 * 1024,
+        type_name="decimal_megabytes",
+        metavar="MB",
+        help_text="analyze only textual artifacts at or below this bounded size",
+    ),
+    _expected_store(
+        "--code-max-count",
+        "code_max_documents",
+        type_name="int",
+        metavar="N",
+    ),
+    _expected_store(
+        "--code-max-text-chars",
+        "code_max_text_chars",
+        default=4_000_000,
+        type_name="int",
+    ),
+    _expected_store(
+        "--code-chunk-chars",
+        "code_chunk_chars",
+        default=12_000,
+        type_name="int",
+    ),
+    _expected_store(
+        "--code-complexity-warning",
+        "code_complexity_warning",
+        default=15,
+        type_name="int",
+    ),
+    _expected_store(
+        "--code-function-lines-warning",
+        "code_function_lines_warning",
+        default=200,
+        type_name="int",
+    ),
+    _expected_store(
+        "--code-cache-validation",
+        "code_cache_validation",
+        default="metadata",
+        choices=("metadata", "full"),
+        help_text=(
+            "metadata is incremental-fast; full rechecks exact bytes before reuse"
+        ),
+    ),
+    _expected_boolean_optional(
+        "--code-generated",
+        "--no-code-generated",
+        "code_include_generated",
+        "retain generated artifacts in structural analysis",
+    ),
+    _expected_boolean_optional(
+        "--code-vendored",
+        "--no-code-vendored",
+        "code_include_vendored",
+        "retain vendored artifacts in structural analysis",
+    ),
+    _expected_flag(
+        "--retry-code-errors",
+        "retry_code_errors",
+        "retry unchanged partial or failed code observations",
+    ),
+    _expected_flag(
+        "--code-status",
+        "code_status",
+        "show bounded code database, analyzer and index status",
+    ),
+    _expected_store(
+        "--code-search",
+        "code_search",
+        metavar="QUERY",
+    ),
+    _expected_store(
+        "--code-search-mode",
+        "code_search_mode",
+        choices=(
+            "literal",
+            "fts",
+            "path",
+            "language",
+            "symbol",
+            "definition",
+            "reference",
+            "import",
+            "dependency",
+            "call",
+            "signature",
+            "diagnostic",
+            "complexity",
+            "semantic",
+            "hybrid",
+        ),
+        help_text="repeat to fuse complementary exact and structural search modes",
+        action_name="_AppendAction",
+    ),
+    _expected_store(
+        "--code-search-limit",
+        "code_search_limit",
+        default=20,
+        type_name="int",
+        metavar="N",
+    ),
+    _expected_store("--code-path", "code_path", metavar="FRAGMENT"),
+    _expected_store("--code-language", "code_language"),
+    _expected_store("--code-project", "code_project"),
+    _expected_store("--code-symbol", "code_symbol"),
+    _expected_store("--code-diagnostic", "code_diagnostic"),
+    _expected_store(
+        "--code-min-complexity",
+        "code_min_complexity",
+        type_name="float",
+    ),
+    _expected_flag(
+        "--code-projects",
+        "code_projects",
+        "list inferred project instances without touching source files",
+    ),
+    _expected_store(
+        "--code-reconstruct",
+        "code_reconstruct",
+        metavar="PROJECT_OR_ID",
+    ),
+    _expected_store(
+        "--code-reconstruct-strategy",
+        "code_reconstruct_strategy",
+        default="coherent",
+        choices=("latest", "coherent", "branches"),
+    ),
+    _expected_flag(
+        "--code-doctor",
+        "code_doctor",
+        "verify code schema, FTS and analyzer availability without analysis",
+    ),
+    _expected_flag("--code-json", "code_json"),
+)
+
+EXPECTED_CODE_HELP = (
+    "Structured source-code intelligence route:\n"
+    "  --code-max-mb MB      analyze only textual artifacts at or below this\n"
+    "                        bounded size\n"
+    "  --code-max-count N\n"
+    "  --code-max-text-chars CODE_MAX_TEXT_CHARS\n"
+    "  --code-chunk-chars CODE_CHUNK_CHARS\n"
+    "  --code-complexity-warning CODE_COMPLEXITY_WARNING\n"
+    "  --code-function-lines-warning CODE_FUNCTION_LINES_WARNING\n"
+    "  --code-cache-validation {metadata,full}\n"
+    "                        metadata is incremental-fast; full rechecks exact\n"
+    "                        bytes before reuse\n"
+    "  --code-generated, --no-code-generated\n"
+    "                        retain generated artifacts in structural analysis\n"
+    "  --code-vendored, --no-code-vendored\n"
+    "                        retain vendored artifacts in structural analysis\n"
+    "  --retry-code-errors   retry unchanged partial or failed code observations\n"
+    "  --code-status         show bounded code database, analyzer and index status\n"
+    "  --code-search QUERY\n"
+    "  --code-search-mode "
+    "{literal,fts,path,language,symbol,definition,reference,import,dependency,call,"
+    "signature,diagnostic,complexity,semantic,hybrid}\n"
+    "                        repeat to fuse complementary exact and structural\n"
+    "                        search modes\n"
+    "  --code-search-limit N\n"
+    "  --code-path FRAGMENT\n"
+    "  --code-language CODE_LANGUAGE\n"
+    "  --code-project CODE_PROJECT\n"
+    "  --code-symbol CODE_SYMBOL\n"
+    "  --code-diagnostic CODE_DIAGNOSTIC\n"
+    "  --code-min-complexity CODE_MIN_COMPLEXITY\n"
+    "  --code-projects       list inferred project instances without touching\n"
+    "                        source files\n"
+    "  --code-reconstruct PROJECT_OR_ID\n"
+    "  --code-reconstruct-strategy {latest,coherent,branches}\n"
+    "  --code-doctor         verify code schema, FTS and analyzer availability\n"
+    "                        without analysis\n"
+    "  --code-json\n"
+    "\n"
+)
+
+
+def _normalized_action(action: argparse.Action) -> tuple[object, ...]:
+    choices = None if action.choices is None else tuple(action.choices)
+    type_name = None if action.type is None else action.type.__name__
+    return (
+        tuple(action.option_strings),
+        action.dest,
+        type(action).__name__,
+        action.nargs,
+        action.const,
+        action.default,
+        type_name,
+        choices,
+        action.metavar,
+        action.required,
+        action.help,
+    )
+
+
+def test_code_actions_aliases_and_help_preserve_the_normalized_contract() -> None:
+    parser = build_parser()
+    group = next(
+        item for item in parser._action_groups if item.title == CODE_GROUP_TITLE
+    )
+
+    assert group is parser._action_groups[-3]
+    assert parser._action_groups[-2].title == SEMANTIC_GROUP_TITLE
+    assert parser._action_groups[-1].title == KNOWLEDGE_GROUP_TITLE
+    assert tuple(_normalized_action(action) for action in group._group_actions) == (
+        EXPECTED_CODE_ACTIONS
+    )
+    max_file_action = next(
+        action
+        for action in group._group_actions
+        if action.dest == "code_max_file_bytes"
+    )
+    assert max_file_action.type is decimal_megabytes
+    help_text = parser.format_help()
+    help_start = help_text.index(f"{CODE_GROUP_TITLE}:\n")
+    help_end = help_text.index(f"{SEMANTIC_GROUP_TITLE}:\n", help_start)
+    assert help_text[help_start:help_end] == EXPECTED_CODE_HELP
+
+
+def test_code_explicit_aliases_and_abbreviation_policy_remain_stable() -> None:
+    parser = build_parser()
+    args = parser.parse_args(
+        (
+            "--code-status",
+            "--code-generated",
+            "--no-code-vendored",
+            "--code-search-mode=fts",
+        )
+    )
+
+    assert parser.allow_abbrev is False
+    assert args.code_include_generated is True
+    assert args.code_include_vendored is False
+    assert args.code_search_mode == ["fts"]
+    assert args._explicit_options == frozenset(
+        {
+            "code_status",
+            "code_include_generated",
+            "code_include_vendored",
+            "code_search_mode",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    (
+        (
+            ("--code-max-mb", "0.001", "--code-search", " "),
+            "--code-max-mb must be at least 0.004096",
+        ),
+        (
+            ("--code-search", " ", "--code-search-limit", "0"),
+            "--code-search must be non-empty",
+        ),
+        (
+            (
+                "--code-search-mode",
+                "fts",
+                "--code-search-mode",
+                "fts",
+            ),
+            "--code-search-mode values cannot be duplicated",
+        ),
+        (
+            ("--code-reconstruct-strategy", "branches", "--code-json"),
+            "--code-reconstruct-strategy requires --code-reconstruct",
+        ),
+        (
+            ("--code-status", "--code-json", "--route", "code", "--apply"),
+            "direct code operations are read-only and reject --apply",
+        ),
+    ),
+)
+def test_code_validation_error_precedence_remains_stable(
+    arguments: tuple[str, ...],
+    message: str,
+) -> None:
+    args = build_parser().parse_args(arguments)
+
+    with pytest.raises(SystemExit) as raised:
+        validate_arguments(args)
+
+    assert str(raised.value) == message

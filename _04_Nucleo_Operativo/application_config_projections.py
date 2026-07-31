@@ -1,0 +1,267 @@
+"""Import-light projections from the flat application configuration.
+
+This module defers owner contracts until a projection call or explicit runtime
+type-hint resolution.  Tests, help and unrelated routes therefore keep their
+dependency doubles and lazy-load guarantees intact.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
+
+# region [01] Static contracts and public projection surface
+
+
+class _DeferredTypeModule:
+    """Resolve annotation types without importing owners on a cold import."""
+
+    __slots__ = ("_module", "_module_name")
+
+    def __init__(self, module_name: str) -> None:
+        self._module_name = module_name
+        self._module: ModuleType | None = None
+
+    def __getattr__(self, name: str) -> object:
+        module = self._module
+        if module is None:
+            module = import_module(self._module_name, __package__)
+            self._module = module
+        return getattr(module, name)
+
+
+if TYPE_CHECKING:
+    from . import audio_models as _audio_contracts
+    from . import code_contracts as _code_contracts
+    from . import docx_models as _docx_contracts
+    from . import global_resources as _resource_contracts
+    from . import image_route as _image_contracts
+    from . import models as _application_contracts
+    from . import office_route as _office_contracts
+    from . import pdf_route_models as _pdf_contracts
+else:
+    _application_contracts = _DeferredTypeModule(".models")
+    _audio_contracts = _DeferredTypeModule(".audio_models")
+    _code_contracts = _DeferredTypeModule(".code_contracts")
+    _docx_contracts = _DeferredTypeModule(".docx_models")
+    _image_contracts = _DeferredTypeModule(".image_route")
+    _office_contracts = _DeferredTypeModule(".office_route")
+    _pdf_contracts = _DeferredTypeModule(".pdf_route_models")
+    _resource_contracts = _DeferredTypeModule(".global_resources")
+
+__all__ = [
+    "audio_route_config_from_application",
+    "code_route_config_from_application",
+    "docx_route_config_from_application",
+    "global_resource_limits_from_application",
+    "image_route_config_from_application",
+    "office_route_config_from_application",
+    "pdf_route_config_from_application",
+]
+
+# endregion [01]
+
+
+# region [02] Import-local owner projections
+
+
+def audio_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _audio_contracts.AudioRouteConfig:
+    """Project current application values into the audio owner's contract."""
+
+    from .audio_models import AudioRouteConfig
+
+    return AudioRouteConfig(
+        state_path=config.audio_database,
+        model_name=config.audio_model_name,
+        device=config.audio_device,
+        compute_type=config.audio_compute_type,
+        language=config.audio_language,
+        beam_size=config.audio_beam_size,
+        vad_filter=config.audio_vad_filter,
+        include_video=config.audio_include_video,
+        max_file_bytes=config.audio_max_file_bytes,
+        max_documents=config.audio_max_documents,
+        max_duration_seconds=config.audio_max_duration_seconds,
+        max_transcript_chars=config.audio_max_transcript_chars,
+        max_segments=config.audio_max_segments,
+        file_timeout_seconds=config.audio_file_timeout_seconds,
+        worker_startup_timeout_seconds=config.audio_worker_startup_timeout_seconds,
+        worker_memory_bytes=config.audio_worker_memory_bytes,
+        retry_errors=config.audio_retry_errors,
+        ffprobe_path=config.audio_ffprobe_path,
+        model_cache_directory=config.audio_model_cache_directory,
+        local_models_only=config.audio_local_models_only,
+        selection=config.selection,
+        memory_budget_bytes=config.audio_memory_budget_bytes,
+        min_free_memory_bytes=config.audio_min_free_memory_bytes,
+        min_free_commit_bytes=config.audio_min_free_commit_bytes,
+        memory_wait_timeout_seconds=config.audio_memory_wait_timeout_seconds,
+    )
+
+
+def code_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _code_contracts.CodeRouteConfig:
+    """Project current application values into the code owner's contract."""
+
+    from .code_contracts import CodeRouteConfig
+
+    return CodeRouteConfig(
+        state_path=config.code_database,
+        dedup_path=config.dedup_database,
+        max_file_bytes=config.code_max_file_bytes,
+        max_text_chars=config.code_max_text_chars,
+        max_documents=config.code_max_documents,
+        chunk_chars=config.code_chunk_chars,
+        retry_errors=config.code_retry_errors,
+        cache_validation=config.code_cache_validation,
+        include_generated=config.code_include_generated,
+        include_vendored=config.code_include_vendored,
+        complexity_warning=config.code_complexity_warning,
+        function_lines_warning=config.code_function_lines_warning,
+        selection=config.selection,
+    )
+
+
+def docx_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _docx_contracts.DocxRouteConfig:
+    """Project current application values into the DOCX owner's contract."""
+
+    from .docx_models import DocxRouteConfig
+
+    return DocxRouteConfig(
+        state_path=config.docx_database,
+        max_file_bytes=config.docx_max_file_bytes,
+        max_documents=config.docx_max_documents,
+        max_text_chars=config.docx_max_text_chars,
+        retry_errors=config.docx_retry_errors,
+        selection=config.selection,
+        memory_budget_bytes=config.docx_memory_budget_bytes,
+        min_free_memory_bytes=config.docx_min_free_memory_bytes,
+        min_free_commit_bytes=config.docx_min_free_commit_bytes,
+        memory_wait_timeout_seconds=config.docx_memory_wait_timeout_seconds,
+    )
+
+
+def image_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+    *,
+    root: Path | None = None,
+) -> _image_contracts.ImageRouteConfig:
+    """Project current values and the effective root into the image contract."""
+
+    from .image_route import ImageRouteConfig
+
+    return ImageRouteConfig(
+        state_path=config.image_database,
+        root=config.root if root is None else root,
+        workers=config.image_workers,
+        max_file_bytes=config.image_max_file_bytes,
+        max_documents=config.image_max_documents,
+        retry_errors=config.image_retry_errors,
+        selection=config.selection,
+        memory_budget_bytes=config.image_memory_budget_bytes,
+        min_free_memory_bytes=config.image_min_free_memory_bytes,
+        min_free_commit_bytes=config.image_min_free_commit_bytes,
+        memory_wait_timeout_seconds=config.image_memory_wait_timeout_seconds,
+        worker_timeout_seconds=config.image_worker_timeout_seconds,
+        document_ocr_mode=config.image_document_ocr_mode,
+        document_ocr_lang=config.image_document_ocr_lang,
+        document_ocr_timeout_seconds=config.image_document_ocr_timeout_seconds,
+        tesseract_cmd=config.image_tesseract_cmd,
+        tessdata_dir=config.image_tessdata_dir,
+    )
+
+
+def office_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _office_contracts.OfficeRouteConfig:
+    """Project current application values into the Office owner's contract."""
+
+    from .office_route import OfficeRouteConfig
+
+    return OfficeRouteConfig(
+        state_path=config.office_database,
+        max_file_bytes=config.office_max_file_bytes,
+        max_documents=config.office_max_documents,
+        max_text_chars=config.office_max_text_chars,
+        retry_errors=config.office_retry_errors,
+        selection=config.selection,
+        memory_budget_bytes=config.office_memory_budget_bytes,
+        min_free_memory_bytes=config.office_min_free_memory_bytes,
+        min_free_commit_bytes=config.office_min_free_commit_bytes,
+        memory_wait_timeout_seconds=config.office_memory_wait_timeout_seconds,
+    )
+
+
+def pdf_route_config_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _pdf_contracts.PdfRouteConfig:
+    """Project current application values into the PDF owner's contract."""
+
+    from .pdf_route_models import PdfRouteConfig
+
+    return PdfRouteConfig(
+        state_path=config.pdf_database,
+        apply_actions=config.apply_actions,
+        ocr_mode=config.pdf_ocr_mode,
+        ocr_lang=config.pdf_ocr_lang,
+        dpi=config.pdf_dpi,
+        workers=config.pdf_workers,
+        ocr_workers=config.pdf_ocr_workers,
+        min_page_chars=config.pdf_min_page_chars,
+        max_page_text_chars=config.pdf_max_page_text_chars,
+        max_render_pixels=config.pdf_max_render_pixels,
+        max_pages=config.pdf_max_pages,
+        max_file_bytes=config.pdf_max_file_bytes,
+        max_documents=config.pdf_max_documents,
+        max_ocr_pages=config.pdf_max_ocr_pages,
+        ocr_timeout_seconds=config.pdf_ocr_timeout_seconds,
+        retry_errors=config.pdf_retry_errors,
+        selection=config.selection,
+        resume_source_run_id=config.resume_run_id,
+        pdfminer_fallback=config.pdfminer_fallback,
+        similarity_threshold=config.pdf_similarity_threshold,
+        cache_validation=config.pdf_cache_validation,
+        tesseract_cmd=config.pdf_tesseract_cmd,
+        tessdata_dir=config.pdf_tessdata_dir,
+        page_start=config.pdf_page_start,
+        page_end=config.pdf_page_end,
+        fail_fast_pages=config.pdf_fail_fast_pages,
+        document_timeout_seconds=config.pdf_document_timeout_seconds,
+        timeout_mode=config.pdf_timeout_mode,
+        max_document_timeout_seconds=config.pdf_max_document_timeout_seconds,
+        min_free_bytes=config.pdf_min_free_bytes,
+        memory_backpressure_bytes=config.pdf_memory_backpressure_bytes,
+        commit_backpressure_bytes=config.pdf_commit_backpressure_bytes,
+        memory_budget_bytes=config.pdf_memory_budget_bytes,
+        worker_memory_bytes=config.pdf_worker_memory_bytes,
+        memory_wait_timeout_seconds=config.pdf_memory_wait_timeout_seconds,
+        large_document_bytes=config.pdf_large_document_bytes,
+        large_document_workers=config.pdf_large_document_workers,
+    )
+
+
+def global_resource_limits_from_application(
+    config: _application_contracts.FrameworkConfig,
+) -> _resource_contracts.GlobalResourceLimits:
+    """Project current application values into resource-owner limits."""
+
+    from .global_resources import GlobalResourceLimits
+
+    return GlobalResourceLimits(
+        memory_budget_bytes=config.global_memory_budget_bytes,
+        min_free_memory_bytes=config.global_min_free_memory_bytes,
+        min_free_commit_bytes=config.global_min_free_commit_bytes,
+        cpu_slots=config.global_cpu_slots,
+        max_cpu_load_percent=config.global_max_cpu_load_percent,
+        wait_timeout_seconds=config.global_resource_wait_timeout_seconds,
+    )
+
+
+# endregion [02]

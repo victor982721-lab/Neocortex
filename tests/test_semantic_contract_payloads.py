@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+import hashlib
+import importlib
+import importlib.util
+import inspect
+from pathlib import Path
+
+from pytest import MonkeyPatch
+
+from _04_Nucleo_Operativo import semantic_planner, semantic_service
+from _04_Nucleo_Operativo.semantic_service_contracts import (
+    SemanticPlan,
+    SemanticSourcePlan,
+    SemanticWorkloadPlan,
+)
+from _04_Nucleo_Operativo.semantic_models import canonical_json, fingerprint_text
+
+
+EXPECTED_PLAN_KEYS = {
+    "complete",
+    "content_set_xxh3_128",
+    "cost_calibrated",
+    "cost_complete",
+    "dry_run",
+    "embedding_entities",
+    "estimate_kind",
+    "estimated_model_seconds",
+    "estimated_model_seconds_lower_bound",
+    "estimated_model_seconds_upper_bound",
+    "execution_ready",
+    "input_bytes",
+    "jobs_created",
+    "max_scratch_bytes",
+    "model_request_contents_lower_bound",
+    "model_request_contents_upper_bound",
+    "new_unique_contents",
+    "new_vector_blob_bytes_lower_bound",
+    "originals_verified",
+    "plan_signature",
+    "resources",
+    "reusable_unique_contents",
+    "scope",
+    "scratch_storage_bytes",
+    "section_text_bytes",
+    "sections",
+    "selected_sources",
+    "semantic_database",
+    "semantic_schema_version",
+    "semantic_snapshot_xxh3_128",
+    "snapshot_scope",
+    "source_bytes",
+    "sources",
+    "sqlite_read_snapshot_may_touch_shm",
+    "state_mutated",
+    "text_chunking_signature",
+    "unique_contents",
+    "unique_input_bytes",
+    "vector_bytes_kind",
+    "workloads",
+}
+
+EXPECTED_SOURCE_KEYS = {
+    "chunks",
+    "database",
+    "embedding_entities",
+    "input_bytes",
+    "resources",
+    "schema_version",
+    "section_text_bytes",
+    "sections",
+    "source_bytes",
+    "source_kind",
+    "snapshot_xxh3_128",
+}
+
+EXPECTED_WORKLOAD_KEYS = {
+    "cost_calibrated",
+    "cost_calibration_signature",
+    "cost_calibration_contents_per_second",
+    "cost_calibration_sample_contents",
+    "cost_calibration_sample_input_bytes",
+    "cost_complete",
+    "cost_execution_signature",
+    "cost_unavailable_reason",
+    "distance",
+    "dimensions",
+    "embedding_entities",
+    "estimated_model_seconds",
+    "estimated_model_seconds_lower_bound",
+    "estimated_model_seconds_upper_bound",
+    "input_bytes",
+    "modality",
+    "model_id",
+    "model_provenance_json",
+    "model_signature",
+    "model_version",
+    "model_request_contents_lower_bound",
+    "model_request_contents_upper_bound",
+    "name",
+    "new_unique_contents",
+    "new_vector_blob_bytes_lower_bound",
+    "planned_reusable_contents",
+    "preexisting_reusable_contents",
+    "processing_signature",
+    "provider",
+    "role",
+    "supported_roles",
+    "unique_contents",
+    "unique_input_bytes",
+    "normalization",
+    "vector_dtype",
+    "vector_space",
+}
+
+
+def _plan() -> SemanticPlan:
+    source = SemanticSourcePlan(
+        "pdf",
+        Path("C:/fixture/pdf.sqlite3"),
+        11,
+        1,
+        1,
+        1,
+        1,
+        100,
+        20,
+        20,
+        "0" * 32,
+    )
+    workload = SemanticWorkloadPlan(
+        "text",
+        "text",
+        "passage",
+        "model-signature",
+        "vector-space",
+        "model-id",
+        "1.0",
+        4,
+        "fixture-provider",
+        ("query", "passage"),
+        "float16",
+        "l2",
+        "cosine",
+        canonical_json({"model": "fixture"}),
+        "processing-signature",
+        1,
+        1,
+        0,
+        0,
+        1,
+        20,
+        20,
+        8,
+        1,
+        1,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "no_exact_cost_calibration",
+    )
+    return SemanticPlan(
+        "text",
+        ("pdf",),
+        Path("C:/fixture/semantic.sqlite3"),
+        6,
+        (source,),
+        (workload,),
+        "chunking-v1",
+        "1" * 32,
+        "2" * 32,
+        "semantic-readonly-plan-v3:xxh3-128:bf07d55c2bbea631b94feace627e7317",
+        1,
+        1,
+        1,
+        1,
+        100,
+        20,
+        20,
+        1,
+        20,
+        0,
+        1,
+        8,
+        1,
+        1,
+        None,
+        None,
+        4096,
+        8192,
+        None,
+        None,
+    )
+
+
+def test_planner_payload_public_wrapper_identity_is_stable() -> None:
+    assert str(inspect.signature(semantic_planner.semantic_plan_payload)) == (
+        "(plan: 'SemanticPlan') -> 'dict[str, object]'"
+    )
+    assert semantic_planner.semantic_plan_payload.__module__ == (
+        "_04_Nucleo_Operativo.semantic_planner"
+    )
+    assert semantic_planner.__all__ == [
+        "CONTENT_BATCH_SIZE",
+        "DEFAULT_MAX_SCRATCH_BYTES",
+        "PLAN_ALGORITHM_VERSION",
+        "SemanticPlanBlocked",
+        "SemanticScratchLimitExceeded",
+        "plan_semantic_index",
+        "semantic_plan_payload",
+    ]
+    assert semantic_service.semantic_plan_payload is not (
+        semantic_planner.semantic_plan_payload
+    )
+    assert semantic_service.semantic_plan_payload.__module__ == (
+        "_04_Nucleo_Operativo.semantic_service"
+    )
+    assert str(inspect.signature(semantic_service.semantic_plan_payload)) == (
+        "(plan: 'SemanticPlan') -> 'dict[str, object]'"
+    )
+
+
+def test_service_payload_wrapper_forwards_without_becoming_an_alias(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    plan = _plan()
+    sentinel: dict[str, object] = {"sentinel": True}
+    calls: list[SemanticPlan] = []
+
+    def fake_payload(received: SemanticPlan) -> dict[str, object]:
+        calls.append(received)
+        return sentinel
+
+    monkeypatch.setattr(
+        semantic_service._planner, "semantic_plan_payload", fake_payload
+    )
+    assert semantic_service.semantic_plan_payload(plan) is sentinel
+    assert calls == [plan]
+    assert semantic_service.semantic_plan_payload is not fake_payload
+
+
+def test_representative_payload_keysets_and_byte_golden_are_stable() -> None:
+    plan = _plan()
+    payload = semantic_planner.semantic_plan_payload(plan)
+    assert set(payload) == EXPECTED_PLAN_KEYS
+    assert len(payload) == 40
+    source_payloads = payload["sources"]
+    workload_payloads = payload["workloads"]
+    assert isinstance(source_payloads, list)
+    assert isinstance(workload_payloads, list)
+    assert set(source_payloads[0]) == EXPECTED_SOURCE_KEYS
+    assert len(source_payloads[0]) == 11
+    assert set(workload_payloads[0]) == EXPECTED_WORKLOAD_KEYS
+    assert len(workload_payloads[0]) == 36
+    assert tuple(payload) == (
+        "complete",
+        "content_set_xxh3_128",
+        "cost_calibrated",
+        "cost_complete",
+        "dry_run",
+        "embedding_entities",
+        "estimate_kind",
+        "estimated_model_seconds",
+        "estimated_model_seconds_lower_bound",
+        "estimated_model_seconds_upper_bound",
+        "execution_ready",
+        "input_bytes",
+        "jobs_created",
+        "max_scratch_bytes",
+        "model_request_contents_lower_bound",
+        "model_request_contents_upper_bound",
+        "new_unique_contents",
+        "new_vector_blob_bytes_lower_bound",
+        "originals_verified",
+        "plan_signature",
+        "resources",
+        "reusable_unique_contents",
+        "scope",
+        "scratch_storage_bytes",
+        "section_text_bytes",
+        "sections",
+        "selected_sources",
+        "semantic_database",
+        "semantic_schema_version",
+        "semantic_snapshot_xxh3_128",
+        "snapshot_scope",
+        "source_bytes",
+        "sources",
+        "sqlite_read_snapshot_may_touch_shm",
+        "state_mutated",
+        "text_chunking_signature",
+        "unique_contents",
+        "unique_input_bytes",
+        "vector_bytes_kind",
+        "workloads",
+    )
+    assert tuple(source_payloads[0]) == (
+        "chunks",
+        "database",
+        "embedding_entities",
+        "input_bytes",
+        "resources",
+        "schema_version",
+        "section_text_bytes",
+        "sections",
+        "source_bytes",
+        "source_kind",
+        "snapshot_xxh3_128",
+    )
+    assert tuple(workload_payloads[0]) == (
+        "cost_calibrated",
+        "cost_calibration_signature",
+        "cost_calibration_contents_per_second",
+        "cost_calibration_sample_contents",
+        "cost_calibration_sample_input_bytes",
+        "cost_complete",
+        "cost_execution_signature",
+        "cost_unavailable_reason",
+        "distance",
+        "dimensions",
+        "embedding_entities",
+        "estimated_model_seconds",
+        "estimated_model_seconds_lower_bound",
+        "estimated_model_seconds_upper_bound",
+        "input_bytes",
+        "modality",
+        "model_id",
+        "model_provenance_json",
+        "model_signature",
+        "model_version",
+        "model_request_contents_lower_bound",
+        "model_request_contents_upper_bound",
+        "name",
+        "new_unique_contents",
+        "new_vector_blob_bytes_lower_bound",
+        "planned_reusable_contents",
+        "preexisting_reusable_contents",
+        "processing_signature",
+        "provider",
+        "role",
+        "supported_roles",
+        "unique_contents",
+        "unique_input_bytes",
+        "normalization",
+        "vector_dtype",
+        "vector_space",
+    )
+    assert payload["semantic_database"] == r"C:\fixture\semantic.sqlite3"
+    assert source_payloads[0]["database"] == r"C:\fixture\pdf.sqlite3"
+    assert payload["selected_sources"] == ["pdf"]
+    assert workload_payloads[0]["supported_roles"] == ["query", "passage"]
+    assert plan.plan_signature.encode("utf-8") == (
+        b"semantic-readonly-plan-v3:xxh3-128:bf07d55c2bbea631b94feace627e7317"
+    )
+    encoded = canonical_json(payload).encode("utf-8")
+    assert len(encoded) == 2683
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "58a742cbdacb167d90f186dd211eddda7acbf1b369bda3f92927887e1497c468"
+    )
+    assert semantic_service.semantic_plan_payload(plan) == payload
+
+
+def test_signature_preimage_is_private_separate_and_byte_stable() -> None:
+    plan = _plan()
+    preimage = semantic_planner._plan_payload_for_signature(
+        scope=plan.scope,
+        selected_sources=plan.selected_sources,
+        semantic_schema_version=plan.semantic_schema_version,
+        source_plans=plan.source_plans,
+        workloads=plan.workloads,
+        chunking_signature=plan.text_chunking_signature,
+        content_set_xxh3_128=plan.content_set_xxh3_128,
+        semantic_snapshot_xxh3_128=plan.semantic_snapshot_xxh3_128,
+    )
+    assert semantic_planner._plan_payload_for_signature.__module__ == (
+        "_04_Nucleo_Operativo.semantic_planner"
+    )
+    assert tuple(preimage) == (
+        "algorithm",
+        "scope",
+        "selected_sources",
+        "semantic_schema_version",
+        "semantic_snapshot_xxh3_128",
+        "chunking_signature",
+        "content_set_xxh3_128",
+        "sources",
+        "workloads",
+    )
+    encoded = canonical_json(preimage).encode("utf-8")
+    assert len(encoded) == 1117
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "dbea4dc926d78611787e795334b275284401150ac72b5d26062a75f87c4b0374"
+    )
+    derived_signature = (
+        f"{semantic_planner.PLAN_ALGORITHM_VERSION}:xxh3-128:"
+        f"{fingerprint_text(canonical_json(preimage)).xxh3_128}"
+    )
+    assert derived_signature == plan.plan_signature
+    public_payload = semantic_planner.semantic_plan_payload(plan)
+    assert preimage != public_payload
+    assert "algorithm" not in public_payload
+    assert "complete" not in preimage
+
+
+def test_planner_payload_wrapper_forwards_when_builder_is_present(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    if not hasattr(semantic_planner, "_build_semantic_plan_payload"):
+        return
+    plan = _plan()
+    sentinel: dict[str, object] = {"sentinel": True}
+    calls: list[SemanticPlan] = []
+
+    def fake_builder(received: SemanticPlan) -> dict[str, object]:
+        calls.append(received)
+        return sentinel
+
+    monkeypatch.setattr(semantic_planner, "_build_semantic_plan_payload", fake_builder)
+    assert semantic_planner.semantic_plan_payload(plan) is sentinel
+    assert calls == [plan]
+    assert semantic_planner.semantic_plan_payload is not fake_builder
+
+
+def test_extracted_payload_builder_matches_wrapper_when_present() -> None:
+    module_name = "_04_Nucleo_Operativo.semantic_contract_payloads"
+    if importlib.util.find_spec(module_name) is None:
+        return
+    module = importlib.import_module(module_name)
+    builder = module.build_semantic_plan_payload
+    assert str(inspect.signature(builder)) == (
+        "(plan: 'SemanticPlan') -> 'dict[str, object]'"
+    )
+    assert builder(_plan()) == semantic_planner.semantic_plan_payload(_plan())

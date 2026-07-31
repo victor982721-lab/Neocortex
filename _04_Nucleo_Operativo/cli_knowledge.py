@@ -1,0 +1,250 @@
+"""Canonical flat CLI handlers for the read-only Knowledge Plane."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+import threading
+from collections.abc import Callable
+from enum import IntEnum
+from typing import TYPE_CHECKING, TypeVar
+
+from .console_cancellation import ConsoleCancellationBridge
+from .knowledge_contracts import (
+    KnowledgeCompleteness,
+    OwnerAvailability,
+    SnapshotConsistency,
+)
+
+if TYPE_CHECKING:
+    from .knowledge_contracts import ContextBundle, KnowledgeSnapshot
+    from .knowledge_planner import KnowledgeQuery
+    from .knowledge_search import KnowledgeSearchResult
+    from .knowledge_service import KnowledgeSearchService
+
+
+# region [01] Stable exit contract and cancellation boundary
+
+
+class KnowledgeExitCode(IntEnum):
+    SUCCESS = 0
+    FATAL = 1
+    USAGE = 2
+    NO_RESULTS = 3
+    PARTIAL = 4
+    SNAPSHOT_CHANGED = 5
+    SCHEMA_INCOMPATIBLE = 6
+    CORRUPT = 7
+    CANCELLED = 130
+
+
+_T = TypeVar("_T")
+
+
+def _with_cancellation(operation: Callable[[Callable[[], None]], _T]) -> _T:
+    requested = threading.Event()
+
+    def checkpoint() -> None:
+        if requested.is_set():
+            raise KeyboardInterrupt
+
+    with ConsoleCancellationBridge(requested.set):
+        return operation(checkpoint)
+
+
+def _service(args: argparse.Namespace) -> KnowledgeSearchService:
+    from .knowledge_service import KnowledgeSearchService
+    from .knowledge_snapshot import KnowledgeStatePaths
+
+    paths = KnowledgeStatePaths.from_directory(args.state_directory)
+    return KnowledgeSearchService(paths)
+
+
+def _query(args: argparse.Namespace, value: str) -> KnowledgeQuery:
+    from .knowledge_planner import KnowledgeQuery, RetrievalMode
+
+    return KnowledgeQuery(
+        value,
+        retrieval_mode=RetrievalMode(args.knowledge_mode),
+        include_history=args.knowledge_history,
+        limit=args.knowledge_limit,
+    )
+
+
+def _snapshot_exit_code(snapshot: KnowledgeSnapshot) -> KnowledgeExitCode:
+    states = {owner.state for owner in snapshot.owners}
+    if OwnerAvailability.CORRUPT in states:
+        return KnowledgeExitCode.CORRUPT
+    if states.intersection(
+        {OwnerAvailability.FUTURE, OwnerAvailability.INCOMPATIBLE}
+    ):
+        return KnowledgeExitCode.SCHEMA_INCOMPATIBLE
+    if snapshot.consistency is SnapshotConsistency.SNAPSHOT_CHANGED:
+        return KnowledgeExitCode.SNAPSHOT_CHANGED
+    return KnowledgeExitCode.SUCCESS
+
+
+def knowledge_search_exit_code(result: KnowledgeSearchResult) -> KnowledgeExitCode:
+    snapshot_code = _snapshot_exit_code(result.snapshot)
+    if snapshot_code is not KnowledgeExitCode.SUCCESS:
+        return snapshot_code
+    if not result.complete:
+        return KnowledgeExitCode.PARTIAL
+    if not result.hits:
+        return KnowledgeExitCode.NO_RESULTS
+    return KnowledgeExitCode.SUCCESS
+
+
+def knowledge_context_exit_code(bundle: ContextBundle) -> KnowledgeExitCode:
+    snapshot_code = _snapshot_exit_code(bundle.snapshot)
+    if snapshot_code is not KnowledgeExitCode.SUCCESS:
+        return snapshot_code
+    if bundle.completeness in {
+        KnowledgeCompleteness.PARTIAL,
+        KnowledgeCompleteness.UNSUPPORTED,
+    }:
+        return KnowledgeExitCode.PARTIAL
+    if bundle.completeness is KnowledgeCompleteness.NO_EVIDENCE:
+        return KnowledgeExitCode.NO_RESULTS
+    return KnowledgeExitCode.SUCCESS
+
+
+def _failure(operation: str, exc: BaseException) -> int:
+    print(
+        f"ERROR {operation} {type(exc).__name__}: {exc}",
+        file=sys.stderr,
+    )
+    return int(KnowledgeExitCode.FATAL)
+
+
+# endregion [01]
+
+
+# region [02] Stable human output
+
+
+def _print_snapshot(snapshot: KnowledgeSnapshot) -> None:
+    print(
+        f"KNOWLEDGE_STATUS snapshot={snapshot.snapshot_id} "
+        f"consistency={snapshot.consistency.value} attempts={snapshot.attempts}"
+    )
+    for owner in snapshot.owners:
+        publications = ",".join(
+            f"{head.scope}:{head.generation}" for head in owner.publications
+        )
+        print(
+            f"KNOWLEDGE_OWNER owner={owner.owner} state={owner.state.value} "
+            f"schema={owner.observed_schema_version or '-'} "
+            f"expected={owner.expected_schema_version} "
+            f"publications={publications or '-'} "
+            f"warning={json.dumps(owner.warning, ensure_ascii=False)}"
+        )
+
+
+def _print_search(result: KnowledgeSearchResult) -> None:
+    print(
+        f"KNOWLEDGE_SEARCH query={json.dumps(result.plan.normalized_query, ensure_ascii=False)} "
+        f"snapshot={result.snapshot.snapshot_id} complete={int(result.complete)} "
+        f"hits={len(result.hits)} rows={result.rows_scanned} "
+        f"vectors={result.vectors_scanned} truncated={int(result.truncated)}"
+    )
+    for ranking in result.rankings:
+        print(
+            f"KNOWLEDGE_RANKING name={ranking.name} channel={ranking.channel} "
+            f"executed={int(ranking.executed)} available={int(ranking.available)} "
+            f"complete={int(ranking.complete)} returned={ranking.returned} "
+            f"reason={ranking.reason or '-'}"
+        )
+    for hit in result.hits:
+        locator = json.dumps(
+            hit.evidence.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        print(
+            f"KNOWLEDGE_HIT rank={hit.rank} score={hit.fused_score:.12f} "
+            f"resource={hit.resource.resource_id} revision={hit.revision.revision_id} "
+            f"path={json.dumps(hit.resource.current_path, ensure_ascii=False)} "
+            f"evidence={locator}"
+        )
+
+
+# endregion [02]
+
+
+# region [03] Direct handlers
+
+
+def run_knowledge_status(args: argparse.Namespace) -> int:
+    try:
+        snapshot = _with_cancellation(
+            lambda checkpoint: _service(args).status(
+                cancellation_check=checkpoint
+            )
+        )
+    except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+        return _failure("knowledge-status", exc)
+    if args.knowledge_json:
+        print(snapshot.to_json())
+    else:
+        _print_snapshot(snapshot)
+    return int(_snapshot_exit_code(snapshot))
+
+
+def run_knowledge_search(args: argparse.Namespace) -> int:
+    try:
+        query = _query(args, args.knowledge_search)
+        result = _with_cancellation(
+            lambda checkpoint: _service(args).search(
+                query,
+                cancellation_check=checkpoint,
+            )
+        )
+    except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+        return _failure("knowledge-search", exc)
+    if args.knowledge_json:
+        print(result.to_json())
+    else:
+        _print_search(result)
+    return int(knowledge_search_exit_code(result))
+
+
+def run_knowledge_context(args: argparse.Namespace) -> int:
+    try:
+        query = _query(args, args.knowledge_context)
+        bundle = _with_cancellation(
+            lambda checkpoint: _service(args).context(
+                query,
+                max_characters=args.knowledge_context_characters,
+                max_hits=args.knowledge_limit,
+                cancellation_check=checkpoint,
+            )
+        )
+    except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
+        return _failure("knowledge-context", exc)
+    if args.knowledge_json:
+        print(bundle.to_json())
+    else:
+        print(
+            f"KNOWLEDGE_CONTEXT completeness={bundle.completeness.value} "
+            f"citations={len(bundle.citation_ids)} "
+            f"characters={bundle.budget.characters_used}"
+        )
+        print(bundle.rendered_context)
+    return int(knowledge_context_exit_code(bundle))
+
+
+# endregion [03]
+
+
+__all__ = (
+    "KnowledgeExitCode",
+    "knowledge_context_exit_code",
+    "knowledge_search_exit_code",
+    "run_knowledge_context",
+    "run_knowledge_search",
+    "run_knowledge_status",
+)

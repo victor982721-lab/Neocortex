@@ -1,0 +1,67 @@
+"""Stable per-user application paths shared by CLI and desktop frontends."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+# region [01] Per-user paths
+
+APPLICATION_DIRECTORY_NAME = "Neocortex"
+
+
+def local_application_data_directory() -> Path:
+    """Return the conventional local, non-roaming application directory."""
+
+    configured = os.environ.get("LOCALAPPDATA")
+    if configured:
+        base = Path(configured)
+    elif os.name == "nt":
+        base = Path.home() / "AppData" / "Local"
+    else:
+        base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    if not base.is_absolute():
+        raise ValueError(f"local application data path must be absolute: {base}")
+    return base / APPLICATION_DIRECTORY_NAME
+
+
+def default_state_directory() -> Path:
+    """Return the fixed durable state location for normal application use."""
+
+    return local_application_data_directory() / "state"
+
+
+def default_ui_settings_path() -> Path:
+    return local_application_data_directory() / "ui.ini"
+
+
+def source_repository_directory() -> Path:
+    """Return the canonical editable source repository for this user."""
+
+    return Path.home() / APPLICATION_DIRECTORY_NAME / "Repository"
+
+
+def program_installation_directory() -> Path:
+    """Return the per-user root for immutable, versioned installations."""
+
+    return (
+        local_application_data_directory().parent
+        / "Programs"
+        / APPLICATION_DIRECTORY_NAME
+    )
+
+
+def self_analysis_data_directory() -> Path:
+    """Return the non-production root for self-analysis state and artifacts."""
+
+    return local_application_data_directory() / "self-analysis"
+
+
+def stable_launcher_path() -> Path:
+    """Return the stable per-user launcher path outside version directories."""
+
+    return program_installation_directory() / "bin" / "Neocortex.exe"
+
+
+# endregion [01]
