@@ -26,7 +26,9 @@ def test_source_manifest_includes_repository_instruction_files() -> None:
     project_root = Path(__file__).resolve().parents[1]
     manifest_lines = {
         line.strip()
-        for line in (project_root / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+        for line in (project_root / "MANIFEST.in")
+        .read_text(encoding="utf-8")
+        .splitlines()
     }
 
     assert "include AGENTS.md" in manifest_lines
@@ -37,7 +39,9 @@ def test_sdist_manifest_includes_audit_and_python_test_support_only() -> None:
     project_root = Path(__file__).resolve().parents[1]
     manifest_lines = {
         line.strip()
-        for line in (project_root / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
+        for line in (project_root / "MANIFEST.in")
+        .read_text(encoding="utf-8")
+        .splitlines()
     }
 
     assert "include docs/TECHNICAL_EVOLUTION_*.md" in manifest_lines
@@ -53,9 +57,7 @@ def test_sdist_manifest_includes_audit_and_python_test_support_only() -> None:
         "semantic_test_backend.py",
         "synthetic_usn.py",
     }
-    packaged_test_python = {
-        path.name for path in (project_root / "tests").glob("*.py")
-    }
+    packaged_test_python = {path.name for path in (project_root / "tests").glob("*.py")}
     assert expected_helpers <= packaged_test_python
 
     with (project_root / "pyproject.toml").open("rb") as stream:
