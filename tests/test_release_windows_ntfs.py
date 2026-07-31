@@ -933,7 +933,8 @@ def test_external_lock_acquire_baseexception_closes_handle_and_allows_retry(
     with pytest.raises(_FatalCheckpoint) as captured:
         lock.acquire()
     assert captured.value is primary
-    assert len(opened) == 1 and closed == opened
+    assert len(opened) == 5
+    assert closed == [opened[-1], *reversed(opened[:-1])]
 
     proxy.overrides.pop("lock_file")
     retry = ops.open_external_lock(ntfs_case.layout.lock_path)
@@ -946,20 +947,29 @@ def test_external_lock_release_baseexception_closes_once_and_is_idempotent(
     ntfs_case: _NtfsCase,
 ) -> None:
     base, proxy = _base_and_proxy(ntfs_module)
+    original_open = base.open_file
     original_close = base.close_handle
     original_unlock = base.unlock_file
+    opened: list[int] = []
     closed: list[int] = []
     unlocks: list[int] = []
+
+    def record_open(path: Path, spec: Any) -> int:
+        handle = int(original_open(path, spec))
+        opened.append(handle)
+        return handle
 
     def record_close(handle: int) -> None:
         closed.append(handle)
         original_close(handle)
 
-    proxy.overrides["close_handle"] = record_close
+    proxy.overrides.update({"open_file": record_open, "close_handle": record_close})
     ops = _ops(ntfs_module, ntfs_case, proxy=proxy)
+    opened.clear()
     closed.clear()
     lock = ops.open_external_lock(ntfs_case.layout.lock_path)
     lock.acquire()
+    assert len(opened) == 5
     primary = _FatalCheckpoint("synthetic post-unlock BaseException")
 
     def unlock_then_fail(handle: int) -> None:
@@ -971,9 +981,11 @@ def test_external_lock_release_baseexception_closes_once_and_is_idempotent(
     with pytest.raises(_FatalCheckpoint) as captured:
         lock.release()
     assert captured.value is primary
-    assert len(unlocks) == 1 and closed == unlocks
+    assert unlocks == [opened[-1]]
+    assert closed == [opened[-1], *reversed(opened[:-1])]
     lock.release()
-    assert len(unlocks) == 1 and closed == unlocks
+    assert unlocks == [opened[-1]]
+    assert closed == [opened[-1], *reversed(opened[:-1])]
 
     proxy.overrides.pop("unlock_file")
     retry = ops.open_external_lock(ntfs_case.layout.lock_path)

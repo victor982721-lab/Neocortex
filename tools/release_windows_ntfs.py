@@ -22,6 +22,7 @@ from tools.release_windows_ntfs_native import (
     _NtfsApiProtocol,
     _OBSERVATION_SPEC,
     _OpenSpec,
+    _PARENT_GUARD_SPEC,
     _REMOVE_SPEC,
     _SECURITY_INFORMATION,
 )
@@ -189,23 +190,109 @@ def _read_sized(api: _NtfsApiProtocol, handle: int, size: int) -> bytes:
     return b"".join(chunks)
 
 
+def _require_parent_guard(
+    facts: _HandleFacts,
+    binding: _DirectoryBinding,
+) -> None:
+    if not same_path(Path(facts.path), binding.path):
+        raise ReleaseTransitionError("layout parent guard is not canonical")
+    if facts.file_system.casefold() != "ntfs" or facts.volume_id != binding.volume_id:
+        raise ReleaseTransitionError("layout parent guard left its NTFS volume")
+    if facts.is_reparse_point or not facts.is_directory:
+        raise ReleaseTransitionError("layout parent guard is not a plain directory")
+    if facts.file_id != binding.file_id:
+        raise ReleaseTransitionError("layout parent guard identity changed")
+
+
+def _open_parent_guard(
+    api: _NtfsApiProtocol,
+    binding: _DirectoryBinding,
+) -> int:
+    handle = api.open_file(binding.path, _PARENT_GUARD_SPEC)
+    try:
+        facts = api.inspect_handle(handle, security_information=_SECURITY_INFORMATION)
+        _require_parent_guard(facts, binding)
+    except BaseException as primary:
+        try:
+            api.close_handle(handle)
+        except BaseException as cleanup:
+            _add_cleanup_note(primary, "parent guard close", cleanup)
+        raise
+    return handle
+
+
+@contextmanager
+def _retained_parent_guard(
+    api: _NtfsApiProtocol,
+    binding: _DirectoryBinding,
+    *,
+    preserve_observation_hooks: bool,
+) -> Iterator[None]:
+    handle = (
+        api.open_parent_guard(binding.path)
+        if preserve_observation_hooks
+        else api.open_file(binding.path, _PARENT_GUARD_SPEC)
+    )
+    with _preopened_handle(api, handle):
+        facts = (
+            api.inspect_parent_guard(handle)
+            if preserve_observation_hooks
+            else api.inspect_handle(
+                handle,
+                security_information=_SECURITY_INFORMATION,
+            )
+        )
+        _require_parent_guard(facts, binding)
+        yield
+
+
+def _record_external_cleanup(
+    primary: BaseException | None,
+    cleanup: BaseException,
+) -> BaseException:
+    if primary is None:
+        return cleanup
+    _add_cleanup_note(primary, "external lock cleanup", cleanup)
+    return primary
+
+
+def _close_external_handles(
+    api: _NtfsApiProtocol,
+    handles: Iterator[int],
+    primary: BaseException | None,
+) -> BaseException | None:
+    for handle in handles:
+        try:
+            api.close_handle(handle)
+        except BaseException as cleanup:
+            primary = _record_external_cleanup(primary, cleanup)
+    return primary
+
+
 class _WindowsExternalLock:
     def __init__(
         self,
         api: _NtfsApiProtocol,
         path: Path,
         volume_id: int,
+        parent_bindings: tuple[_DirectoryBinding, ...],
     ) -> None:
         self._api = api
         self._path = path
         self._volume_id = volume_id
+        self._parent_bindings = parent_bindings
         self._handle: int | None = None
+        self._guard_handles: tuple[int, ...] = ()
 
     def acquire(self) -> None:
-        if self._handle is not None:
+        if self._handle is not None or self._guard_handles:
             raise ReleaseTransitionError("external lock is already acquired")
-        handle = self._api.open_file(self._path, _LOCK_SPEC)
+        guards: list[int] = []
+        handle: int | None = None
         try:
+            for binding in self._parent_bindings:
+                guards.append(_open_parent_guard(self._api, binding))
+            handle = self._api.open_file(self._path, _LOCK_SPEC)
             facts = self._api.inspect_handle(
                 handle,
                 security_information=_SECURITY_INFORMATION,
@@ -220,29 +307,34 @@ class _WindowsExternalLock:
                 raise ReleaseTransitionError("canonical lock has physical aliases")
             self._api.lock_file(handle)
         except BaseException as primary:
-            try:
-                self._api.close_handle(handle)
-            except BaseException as cleanup:
-                _add_cleanup_note(primary, "external lock close", cleanup)
+            handles = iter(
+                (() if handle is None else (handle,)) + tuple(reversed(guards))
+            )
+            _close_external_handles(self._api, handles, primary)
             raise
+        assert handle is not None
+        self._guard_handles = tuple(guards)
         self._handle = handle
 
     def release(self) -> None:
         handle = self._handle
-        if handle is None:
+        guards = self._guard_handles
+        if handle is None and not guards:
             return
         self._handle = None
+        self._guard_handles = ()
         primary: BaseException | None = None
-        try:
-            self._api.unlock_file(handle)
-        except BaseException as exc:
-            primary = exc
-        try:
-            self._api.close_handle(handle)
-        except BaseException as cleanup:
-            if primary is None:
-                raise
-            _add_cleanup_note(primary, "external lock close", cleanup)
+        if handle is not None:
+            try:
+                self._api.unlock_file(handle)
+            except BaseException as exc:
+                primary = exc
+            primary = _close_external_handles(self._api, iter((handle,)), primary)
+        primary = _close_external_handles(
+            self._api,
+            iter(reversed(guards)),
+            primary,
+        )
         if primary is not None:
             raise primary
 
@@ -338,22 +430,28 @@ class WindowsNtfsReleaseFileOperations:
         if (facts.volume_id, facts.file_id) in identities:
             raise ReleaseTransitionError("layout launcher identity aliases a directory")
 
-    def _validate_parent(self, parent: Path) -> None:
+    def _binding_for_parent(self, parent: Path) -> _DirectoryBinding:
         binding = self._bindings.get(_path_key(parent))
         if binding is None:
             raise ReleaseTransitionError(
                 "mutation parent is outside the release layout"
             )
-        facts = self._inspect_path(parent, directory=True)
-        self._check_layout_fact(
-            "mutation parent",
-            binding.path,
-            facts,
-            directory=True,
-            volume_id=binding.volume_id,
-        )
-        if facts.file_id != binding.file_id:
-            raise ReleaseTransitionError("layout mutation parent identity changed")
+        return binding
+
+    @contextmanager
+    def _retain_parent(
+        self,
+        parent: Path,
+        *,
+        preserve_observation_hooks: bool = False,
+    ) -> Iterator[None]:
+        binding = self._binding_for_parent(parent)
+        with _retained_parent_guard(
+            self._api,
+            binding,
+            preserve_observation_hooks=preserve_observation_hooks,
+        ):
+            yield
 
     def _copy_destination(self, destination: Path) -> Path:
         path = absolute_path(destination)
@@ -365,7 +463,7 @@ class WindowsNtfsReleaseFileOperations:
         )
         if not allowed:
             raise ReleaseTransitionError("copy destination is outside its allowlist")
-        self._validate_parent(path.parent)
+        self._binding_for_parent(path.parent)
         return path
 
     def _receipt_destination(self, destination: Path) -> Path:
@@ -374,7 +472,7 @@ class WindowsNtfsReleaseFileOperations:
             self._layout.receipts_directory
         ) or not _RECEIPT_NAME.fullmatch(path.name):
             raise ReleaseTransitionError("receipt destination is outside its allowlist")
-        self._validate_parent(path.parent)
+        self._binding_for_parent(path.parent)
         return path
 
     def _cleanup_destination(self, destination: Path) -> Path:
@@ -385,46 +483,57 @@ class WindowsNtfsReleaseFileOperations:
         )
         if _path_key(path.parent) != launcher or not valid_name:
             raise ReleaseTransitionError("cleanup target is outside its allowlist")
-        self._validate_parent(path.parent)
+        self._binding_for_parent(path.parent)
         return path
 
     def open_external_lock(self, path: Path) -> _WindowsExternalLock:
         candidate = absolute_path(path)
         if not same_path(candidate, self._layout.lock_path):
             raise ReleaseTransitionError("only the canonical lock path is authorized")
-        return _WindowsExternalLock(self._api, candidate, self._volume_id)
+        return _WindowsExternalLock(
+            self._api,
+            candidate,
+            self._volume_id,
+            tuple(self._bindings.values()),
+        )
 
     def snapshot_by_handle(self, path: Path) -> FileSnapshot:
         candidate = absolute_path(path)
-        with _owned_handle(self._api, candidate, _OBSERVATION_SPEC) as handle:
-            return _snapshot_retained_handle(
-                self._api,
-                handle,
-                candidate,
-                self._volume_id,
-            )
+        with self._retain_parent(
+            candidate.parent,
+            preserve_observation_hooks=True,
+        ):
+            with _owned_handle(self._api, candidate, _OBSERVATION_SPEC) as handle:
+                return _snapshot_retained_handle(
+                    self._api,
+                    handle,
+                    candidate,
+                    self._volume_id,
+                )
 
     def copy_create_new_and_flush(
         self, source: Path, destination: Path
     ) -> FileSnapshot:
         source = absolute_path(source)
         destination = self._copy_destination(destination)
-        with _owned_handle(self._api, source, _OBSERVATION_SPEC) as source_handle:
-            source_before = self._api.inspect_handle(
-                source_handle,
-                security_information=_SECURITY_INFORMATION,
-            )
-            _require_ntfs_file(
-                source_before,
-                source,
-                self._volume_id,
-                role="copy source",
-            )
-            return self._copy_to_creator(
-                source_handle,
-                source_before,
-                destination,
-            )
+        with self._retain_parent(source.parent):
+            with _owned_handle(self._api, source, _OBSERVATION_SPEC) as source_handle:
+                source_before = self._api.inspect_handle(
+                    source_handle,
+                    security_information=_SECURITY_INFORMATION,
+                )
+                _require_ntfs_file(
+                    source_before,
+                    source,
+                    self._volume_id,
+                    role="copy source",
+                )
+                with self._retain_parent(destination.parent):
+                    return self._copy_to_creator(
+                        source_handle,
+                        source_before,
+                        destination,
+                    )
 
     def _copy_to_creator(
         self,
@@ -498,92 +607,102 @@ class WindowsNtfsReleaseFileOperations:
 
     def write_create_new_and_flush(self, path: Path, payload: bytes) -> None:
         destination = self._receipt_destination(path)
-        with _owned_handle(self._api, destination, _CREATOR_SPEC) as creator:
-            try:
-                created = self._api.inspect_handle(
-                    creator,
-                    security_information=_SECURITY_INFORMATION,
-                )
-                _require_ntfs_file(
-                    created,
-                    destination,
-                    self._volume_id,
-                    role="receipt",
-                )
-                _write_all(self._api, creator, payload)
-                self._api.flush_file_buffers(creator)
-                final = self._api.inspect_handle(
-                    creator,
-                    security_information=_SECURITY_INFORMATION,
-                )
-                _require_ntfs_file(
-                    final,
-                    destination,
-                    self._volume_id,
-                    role="receipt",
-                )
-                if final.size != len(payload) or final.link_count != 1:
-                    raise ReleaseTransitionError("receipt write is not exact")
-            except BaseException as primary:
-                _delete_creator_preserving(self._api, creator, primary)
-                raise
+        with self._retain_parent(destination.parent):
+            with _owned_handle(self._api, destination, _CREATOR_SPEC) as creator:
+                try:
+                    created = self._api.inspect_handle(
+                        creator,
+                        security_information=_SECURITY_INFORMATION,
+                    )
+                    _require_ntfs_file(
+                        created,
+                        destination,
+                        self._volume_id,
+                        role="receipt",
+                    )
+                    _write_all(self._api, creator, payload)
+                    self._api.flush_file_buffers(creator)
+                    final = self._api.inspect_handle(
+                        creator,
+                        security_information=_SECURITY_INFORMATION,
+                    )
+                    _require_ntfs_file(
+                        final,
+                        destination,
+                        self._volume_id,
+                        role="receipt",
+                    )
+                    if final.size != len(payload) or final.link_count != 1:
+                        raise ReleaseTransitionError("receipt write is not exact")
+                except BaseException as primary:
+                    _delete_creator_preserving(self._api, creator, primary)
+                    raise
 
     def read_bytes(self, path: Path, *, max_bytes: int) -> bytes:
         if max_bytes < 0:
             raise ValueError("receipt size limit must be non-negative")
         candidate = absolute_path(path)
-        with _owned_handle(self._api, candidate, _OBSERVATION_SPEC) as handle:
-            before = self._api.inspect_handle(
-                handle,
-                security_information=_SECURITY_INFORMATION,
-            )
-            _require_ntfs_file(
-                before,
-                candidate,
-                self._volume_id,
-                role="receipt",
-            )
-            if before.size > max_bytes:
-                raise ReceiptValidationError("receipt exceeds its size limit")
-            payload = _read_sized(self._api, handle, before.size)
-            after = self._api.inspect_handle(
-                handle,
-                security_information=_SECURITY_INFORMATION,
-            )
-            if before != after or len(payload) != before.size:
-                raise ReceiptValidationError("receipt changed during its handle read")
-            return payload
+        with self._retain_parent(
+            candidate.parent,
+            preserve_observation_hooks=True,
+        ):
+            with _owned_handle(self._api, candidate, _OBSERVATION_SPEC) as handle:
+                before = self._api.inspect_handle(
+                    handle,
+                    security_information=_SECURITY_INFORMATION,
+                )
+                _require_ntfs_file(
+                    before,
+                    candidate,
+                    self._volume_id,
+                    role="receipt",
+                )
+                if before.size > max_bytes:
+                    raise ReceiptValidationError("receipt exceeds its size limit")
+                payload = _read_sized(self._api, handle, before.size)
+                after = self._api.inspect_handle(
+                    handle,
+                    security_information=_SECURITY_INFORMATION,
+                )
+                if before != after or len(payload) != before.size:
+                    raise ReceiptValidationError(
+                        "receipt changed during its handle read"
+                    )
+                return payload
 
     def path_exists(self, path: Path) -> bool:
-        return self._api.path_exists(absolute_path(path))
+        candidate = absolute_path(path)
+        with self._retain_parent(candidate.parent):
+            return self._api.path_exists(candidate)
 
     def remove_file_if_snapshot(self, path: Path, expected: FileSnapshot) -> None:
         candidate = self._cleanup_destination(path)
         if not same_path(Path(expected.path), candidate):
             raise ReleaseTransitionError("cleanup snapshot path mismatch")
-        try:
-            handle = self._api.open_file(candidate, _REMOVE_SPEC)
-        except FileNotFoundError:
-            return
-        with _preopened_handle(self._api, handle):
-            actual = _snapshot_retained_handle(
-                self._api,
-                handle,
-                candidate,
-                self._volume_id,
-            )
-            if (actual.volume_id, actual.file_id) != (
-                expected.volume_id,
-                expected.file_id,
-            ):
-                raise ReleaseTransitionError("cleanup identity mismatch")
-            if actual != expected:
-                raise ReleaseTransitionError("cleanup exact snapshot mismatch")
-            self._api.set_delete_disposition(
-                handle,
-                information_class=_FILE_DISPOSITION_INFO_EX_CLASS,
-                flags=_FILE_DISPOSITION_FLAG_DELETE,
-            )
+        with self._retain_parent(candidate.parent):
+            try:
+                handle = self._api.open_file(candidate, _REMOVE_SPEC)
+            except FileNotFoundError:
+                return
+            with _preopened_handle(self._api, handle):
+                actual = _snapshot_retained_handle(
+                    self._api,
+                    handle,
+                    candidate,
+                    self._volume_id,
+                )
+                if (actual.volume_id, actual.file_id) != (
+                    expected.volume_id,
+                    expected.file_id,
+                ):
+                    raise ReleaseTransitionError("cleanup identity mismatch")
+                if actual != expected:
+                    raise ReleaseTransitionError("cleanup exact snapshot mismatch")
+                self._api.set_delete_disposition(
+                    handle,
+                    information_class=_FILE_DISPOSITION_INFO_EX_CLASS,
+                    flags=_FILE_DISPOSITION_FLAG_DELETE,
+                )
 
 
 @contextmanager

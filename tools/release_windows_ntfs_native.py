@@ -115,6 +115,8 @@ class _HandleFacts:
 class _NtfsApiProtocol(Protocol):
     def open_file(self, path: Path, spec: _OpenSpec) -> int: ...
 
+    def open_parent_guard(self, path: Path) -> int: ...
+
     def close_handle(self, handle: int) -> None: ...
 
     def read_file(self, handle: int, max_bytes: int) -> bytes: ...
@@ -126,6 +128,8 @@ class _NtfsApiProtocol(Protocol):
     def inspect_handle(
         self, handle: int, *, security_information: int
     ) -> _HandleFacts: ...
+
+    def inspect_parent_guard(self, handle: int) -> _HandleFacts: ...
 
     def set_security_descriptor(
         self,
@@ -155,6 +159,12 @@ _OBSERVATION_SPEC = _OpenSpec(
 _DIRECTORY_SPEC = _OpenSpec(
     _FILE_READ_ATTRIBUTES | _READ_CONTROL,
     _FILE_SHARE_READ | _FILE_SHARE_WRITE | _FILE_SHARE_DELETE,
+    _OPEN_EXISTING,
+    _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
+)
+_PARENT_GUARD_SPEC = _OpenSpec(
+    _GENERIC_READ | _READ_CONTROL,
+    _FILE_SHARE_READ | _FILE_SHARE_WRITE,
     _OPEN_EXISTING,
     _FILE_FLAG_BACKUP_SEMANTICS | _FILE_FLAG_OPEN_REPARSE_POINT,
 )
@@ -383,6 +393,9 @@ class WindowsNtfsApi:
             _raise_last_error()
         return int(handle)
 
+    def open_parent_guard(self, path: Path) -> int:
+        return self.open_file(path, _PARENT_GUARD_SPEC)
+
     def close_handle(self, handle: int) -> None:
         _require_windows()
         if not _kernel32.CloseHandle(handle):
@@ -452,6 +465,9 @@ class WindowsNtfsApi:
             is_reparse_point=bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT),
             is_directory=bool(attributes & _FILE_ATTRIBUTE_DIRECTORY),
         )
+
+    def inspect_parent_guard(self, handle: int) -> _HandleFacts:
+        return self.inspect_handle(handle, security_information=_SECURITY_INFORMATION)
 
     def set_security_descriptor(
         self,
