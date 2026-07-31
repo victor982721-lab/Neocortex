@@ -14,6 +14,10 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from .knowledge_contract_validation import (
+    optional_text as _contract_optional_text_impl,
+    required_text as _contract_required_text_impl,
+)
 from .semantic_models import canonical_json, fingerprint_text
 
 # region [01] Versions, bounds and stable vocabulary
@@ -100,16 +104,11 @@ class KnowledgeTelemetryOperation(StrEnum):
 
 
 def _required_text(name: str, value: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError(f"{name} cannot be blank")
-    return normalized
+    return _contract_required_text_impl(name, value)
 
 
 def _optional_text(name: str, value: str | None) -> str | None:
-    if value is not None and not value.strip():
-        raise ValueError(f"{name} cannot be blank when present")
-    return value
+    return _contract_optional_text_impl(name, value)
 
 
 def _base_payload(kind: str) -> dict[str, object]:
@@ -234,9 +233,7 @@ class KnowledgePhaseTiming:
             raise ValueError("Knowledge timing snapshot_id is too long")
         if not isinstance(self.ranking_names, tuple):
             raise ValueError("Knowledge timing ranking_names must be a tuple")
-        if len(self.ranking_names) > (
-            MAX_KNOWLEDGE_TELEMETRY_RANKINGS_PER_PHASE
-        ):
+        if len(self.ranking_names) > (MAX_KNOWLEDGE_TELEMETRY_RANKINGS_PER_PHASE):
             raise ValueError("Knowledge timing has too many ranking names")
         for ranking_name in self.ranking_names:
             if not isinstance(ranking_name, str):
@@ -263,9 +260,7 @@ class KnowledgePhaseTiming:
                 "attempt-scoped Knowledge timing requires attempt one or two"
             )
         if self.phase not in attempt_phases and self.service_attempt != 0:
-            raise ValueError(
-                "operation-scoped Knowledge timing must use attempt zero"
-            )
+            raise ValueError("operation-scoped Knowledge timing must use attempt zero")
         if self.phase is KnowledgeTimingPhase.OWNER_RANKING:
             if self.owner is None or not self.ranking_names:
                 raise ValueError(
@@ -332,8 +327,7 @@ class KnowledgeQueryTelemetry:
         if any(not isinstance(phase, KnowledgePhaseTiming) for phase in self.phases):
             raise ValueError("Knowledge telemetry phases are invalid")
         context_phases = sum(
-            phase.phase is KnowledgeTimingPhase.CONTEXT_COMPILE
-            for phase in self.phases
+            phase.phase is KnowledgeTimingPhase.CONTEXT_COMPILE for phase in self.phases
         )
         if self.operation is KnowledgeTelemetryOperation.SEARCH and context_phases:
             raise ValueError("search telemetry cannot contain context compilation")
@@ -341,9 +335,7 @@ class KnowledgeQueryTelemetry:
             self.operation is KnowledgeTelemetryOperation.CONTEXT
             and context_phases != 1
         ):
-            raise ValueError(
-                "context telemetry requires one context compilation phase"
-            )
+            raise ValueError("context telemetry requires one context compilation phase")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -404,7 +396,9 @@ class ResourceRef:
         if self.disposition is ResourceDisposition.DUPLICATE:
             _required_text(
                 "canonical_resource_id",
-                "" if self.canonical_resource_id is None else self.canonical_resource_id,
+                ""
+                if self.canonical_resource_id is None
+                else self.canonical_resource_id,
             )
         if self.canonical_resource_id == self.resource_id:
             raise ValueError("a resource cannot name itself as its canonical resource")
@@ -509,9 +503,7 @@ class EvidenceRef:
             ("extractor_version", self.extractor_version),
         ):
             _optional_text(name, value)
-        if self.page is not None and (
-            isinstance(self.page, bool) or self.page < 0
-        ):
+        if self.page is not None and (isinstance(self.page, bool) or self.page < 0):
             raise ValueError("page cannot be negative")
         if (self.start_line is None) != (self.end_line is None):
             raise ValueError("line locator requires both start and end")
@@ -828,7 +820,10 @@ class OwnerSnapshot:
         _required_text("owner", self.owner)
         if self.expected_schema_version < 1:
             raise ValueError("expected schema version must be positive")
-        if self.observed_schema_version is not None and self.observed_schema_version < 0:
+        if (
+            self.observed_schema_version is not None
+            and self.observed_schema_version < 0
+        ):
             raise ValueError("observed schema version cannot be negative")
         if self.state is OwnerAvailability.AVAILABLE:
             if self.observed_schema_version != self.expected_schema_version:
@@ -939,8 +934,7 @@ class KnowledgeSnapshot:
                     if head.model_signature is not None
                 }
             if any(
-                (model.signature, model.generation)
-                not in compatible_publications
+                (model.signature, model.generation) not in compatible_publications
                 for model in self.active_models
             ):
                 raise ValueError(
@@ -963,9 +957,7 @@ class KnowledgeSnapshot:
         warnings: tuple[str, ...] = (),
     ) -> KnowledgeSnapshot:
         ordered_owners = tuple(sorted(owners, key=lambda owner: owner.owner))
-        ordered_models = tuple(
-            sorted(active_models, key=lambda model: model.signature)
-        )
+        ordered_models = tuple(sorted(active_models, key=lambda model: model.signature))
         identity_payload: dict[str, object] = {
             "schema_version": KNOWLEDGE_CONTRACT_SCHEMA_VERSION,
             "source_version": source_version,
@@ -1249,11 +1241,7 @@ class ContextGraphBudget:
 
     @property
     def omitted_total(self) -> int:
-        return (
-            self.omitted_identifiers
-            + self.omitted_entities
-            + self.omitted_relations
-        )
+        return self.omitted_identifiers + self.omitted_entities + self.omitted_relations
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -1292,9 +1280,7 @@ class ContextBudget:
             raise ValueError(
                 "context budget measurement_scope must be rendered_context"
             )
-        if len(set(self.truncated_evidence_ids)) != len(
-            self.truncated_evidence_ids
-        ):
+        if len(set(self.truncated_evidence_ids)) != len(self.truncated_evidence_ids):
             raise ValueError("truncated evidence identifiers must be unique")
 
     def to_dict(self) -> dict[str, object]:
@@ -1650,9 +1636,7 @@ class ContextBundle:
             if not relation_evidence.issubset(
                 source_evidence.intersection(target_evidence)
             ):
-                raise ValueError(
-                    "context relation evidence must ground both endpoints"
-                )
+                raise ValueError("context relation evidence must ground both endpoints")
         identifiers_considered = sum(
             len(hit.evidence.identifiers) for hit in self.selected_hits
         )
