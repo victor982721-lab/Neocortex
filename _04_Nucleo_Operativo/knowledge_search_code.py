@@ -1,16 +1,10 @@
 """Code-owner retrieval support for the Knowledge Search facade.
-# region [00] Contexto del módulo
-# Módulo: _04_Nucleo_Operativo/knowledge_search_code.py
-# Propósito: documentación embebida y separación visual de regiones.
-# endregion [00]
-
 
 Facade seams and mutable runtime collaborators are injected on every call.  The
 module deliberately has no dependency on :mod:`knowledge_search`, so either
 side can be imported first without creating a cycle.
 """
 
-# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -35,9 +29,6 @@ from .knowledge_search_contracts import KnowledgeCandidate, RankingExecution
 from .knowledge_snapshot import KnowledgeStatePaths
 from .semantic_models import ContentFingerprint
 from .sqlite_cancellation import SQLiteCancellationBridge
-# endregion [01]
-
-# region [02] Implementación
 
 
 _CleanupPreservingPrimary = Callable[..., None]
@@ -904,4 +895,3 @@ __all__ = [
     "code_resource_revision",
     "code_version_metadata",
 ]
-# endregion [02]

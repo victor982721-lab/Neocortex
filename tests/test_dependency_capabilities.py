@@ -33,6 +33,7 @@ DEV_DEPENDENCIES = (
     "coverage>=7.14,<8",
     "mypy>=2.1,<3",
     "pytest>=9.1,<10",
+    "radon>=6,<7",
     "ruff>=0.15,<0.16",
     "vulture>=2.16,<3",
 )

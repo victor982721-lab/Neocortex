@@ -1,11 +1,5 @@
 """Inventory relationship support for the Knowledge Search facade."""
-# region [00] Contexto del módulo
-# Módulo: _04_Nucleo_Operativo/knowledge_search_inventory.py
-# Propósito: documentación embebida y separación visual de regiones.
-# endregion [00]
 
-
-# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -17,9 +11,6 @@ from typing import Any, cast
 from .knowledge_contracts import KnowledgeSnapshot, ResourceRef
 from .knowledge_search_contracts import KnowledgeCandidate, RankingExecution
 from .knowledge_snapshot import KnowledgeStatePaths
-# endregion [01]
-
-# region [02] Implementación
 
 
 InventoryIdentity = tuple[int, int, int]
@@ -907,4 +898,3 @@ __all__ = (
     "valid_full_fingerprint",
     "validated_inventory_blob",
 )
-# endregion [02]
