@@ -26,9 +26,7 @@ def test_security_descriptor_canonicalization_clears_only_auto_inherited() -> No
     expected[2:4] = (control & ~_SE_DACL_AUTO_INHERITED).to_bytes(2, "little")
     byte_pairs = zip(descriptor, canonical, strict=True)
     changed_indices = [
-        index
-        for index, (before, after) in enumerate(byte_pairs)
-        if before != after
+        index for index, (before, after) in enumerate(byte_pairs) if before != after
     ]
 
     assert canonical == bytes(expected)
