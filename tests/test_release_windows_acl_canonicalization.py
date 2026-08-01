@@ -1,4 +1,5 @@
 """Pure regressions for canonical Windows security-descriptor comparison."""
+
 # region [00] Contexto del módulo
 # Módulo: tests/test_release_windows_acl_canonicalization.py
 # Propósito: validar la única normalización ACL permitida durante release.
@@ -39,7 +40,9 @@ def test_security_descriptor_canonicalization_clears_only_auto_inherited() -> No
     assert canonical[4:] == descriptor[4:]
     assert [
         index
-        for index, (before, after) in enumerate(zip(descriptor, canonical, strict=True))
+        for index, (before, after) in enumerate(
+            zip(descriptor, canonical, strict=True)
+        )
         if before != after
     ] == [3]
     assert _canonical_security_descriptor(canonical) == canonical
