@@ -1,5 +1,11 @@
 """Explicit, revalidated and resumable document-organization application."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_organization_application.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -55,6 +61,9 @@ from .windows_handle_mutation import (
     UnsupportedIdentityBoundMutation,
     rename_no_replace_by_identity,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def apply_document_organization(
@@ -1143,3 +1152,4 @@ def _require_organization_tree_allowed(
 def _is_junction(path: Path) -> bool:
     checker = getattr(path, "is_junction", None)
     return bool(checker is not None and checker())
+# endregion [02]

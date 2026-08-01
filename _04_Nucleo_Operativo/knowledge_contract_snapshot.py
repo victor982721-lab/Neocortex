@@ -1,13 +1,22 @@
 """Validation and deterministic construction for logical Knowledge snapshots.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_contract_snapshot.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The public dataclasses remain in ``knowledge_contracts`` for stable type and
 pickle identity. This helper has no runtime dependency on that facade.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .knowledge_contracts import (
@@ -257,3 +266,4 @@ __all__ = [
     "validate_owner_snapshot",
     "validate_publication_head",
 ]
+# endregion [02]

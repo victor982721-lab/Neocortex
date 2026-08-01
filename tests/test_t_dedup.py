@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_t_dedup.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -18,6 +23,9 @@ from _02_Deduplicacion import (
     partial_fingerprint,
     snapshot_path,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class HashingTests(unittest.TestCase):
@@ -339,3 +347,4 @@ class PlannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

@@ -1,5 +1,11 @@
 """Public Knowledge Search contracts with legacy facade identities."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_search_contracts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import math
@@ -12,6 +18,9 @@ from .knowledge_contracts import (
     KnowledgeTelemetryOperation,
 )
 from .semantic_models import canonical_json
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .knowledge_contracts import (
@@ -196,3 +205,4 @@ __all__ = (
     "KnowledgeSearchResult",
     "RankingExecution",
 )
+# endregion [02]

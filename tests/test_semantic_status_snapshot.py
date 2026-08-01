@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_status_snapshot.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -17,6 +22,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     register_embedding_model,
     semantic_database,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _populate_generations(database: Path, count: int) -> None:
@@ -150,3 +158,4 @@ def test_semantic_status_generation_rows_share_the_count_snapshot(
     assert not thread.is_alive()
     assert writer_errors == []
     assert tuple(summary.generation_id for summary in status.generations) == (2, 1)
+# endregion [02]

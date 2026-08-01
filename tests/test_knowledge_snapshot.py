@@ -1,5 +1,11 @@
 """Cross-owner logical snapshots use only bounded read-only observations."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_snapshot.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -31,6 +37,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     register_embedding_model,
     semantic_database,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _owner(snapshot, name: str):
@@ -872,3 +881,4 @@ def test_snapshot_rejects_invalid_inventory_checkpoint_head(tmp_path: Path) -> N
     assert mismatched_inventory.state is OwnerAvailability.INCOMPATIBLE
     assert mismatched_inventory.warning is not None
     assert "root-mismatched scan" in mismatched_inventory.warning
+# endregion [02]

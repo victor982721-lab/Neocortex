@@ -1,5 +1,11 @@
 """Read-only, bounded retention planning contracts."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_retention_planner.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -32,6 +38,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     register_embedding_model,
     semantic_database,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 NOW_NS = 10_000_000_000
@@ -743,3 +752,4 @@ def test_cli_rejects_unbounded_or_orphaned_retention_options() -> None:
     with pytest.raises(SystemExit) as route:
         cli_main(["--retention-status", "--route", "pdf"])
     assert route.value.code == 2
+# endregion [02]

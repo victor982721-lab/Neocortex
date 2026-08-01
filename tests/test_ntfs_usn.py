@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ntfs_usn.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import struct
@@ -15,6 +20,9 @@ from _01_Enumeracion import (
 )
 from _01_Enumeracion.parser import parse_enum_buffer, parse_journal_buffer
 from _01_Enumeracion.windows import normalize_volume
+# endregion [01]
+
+# region [02] Implementación
 
 
 def v2_record(
@@ -156,3 +164,4 @@ class PathIndexTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

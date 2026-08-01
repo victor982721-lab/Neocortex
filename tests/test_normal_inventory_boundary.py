@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_normal_inventory_boundary.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -34,6 +39,9 @@ from tests.internal_paths_test_support import (
     begin_signed_normal_run,
     disjoint_internal_paths_policy,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _internal_policy_factory(base: Path):
@@ -713,3 +721,4 @@ def test_failed_checkpoint_owner_forces_full_inventory(
     assert not allowed
     assert reason == "checkpoint_scan_mismatch"
     assert source_run_id is not None
+# endregion [02]

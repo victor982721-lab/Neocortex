@@ -1,5 +1,11 @@
 """Exact Knowledge owner lookup is bounded, pinned where possible and honest."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_exact.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -38,6 +44,9 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     plan_knowledge_query,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(*owners: OwnerSnapshot) -> KnowledgeSnapshot:
@@ -1294,3 +1303,4 @@ def test_plan_exact_candidate_limit_override_is_backward_compatible(
     assert override_result is None
     assert [request.limit for request in observed] == [plan.limit, 7]
     assert [request.max_observed_rows for request in observed] == [plan.limit, 7]
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_sqlite_connection_contracts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -21,6 +26,9 @@ from _04_Nucleo_Operativo import (
 from _04_Nucleo_Operativo import framework_route_state, framework_state_writer
 from _04_Nucleo_Operativo.framework_route_state import FrameworkRouteState
 from _04_Nucleo_Operativo.framework_state_writer import FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,3 +279,4 @@ def test_framework_connections_close_if_configuration_aborts(
             FrameworkRouteState(tmp_path / "framework.sqlite3")._connect(readonly=False)
 
     assert connection.closed is True
+# endregion [02]

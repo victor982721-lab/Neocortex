@@ -1,5 +1,11 @@
 """Single-writer lifecycle, routing snapshot, and cache repository."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/framework_state_writer.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -47,6 +53,9 @@ from .self_analysis_finalization import (
     SelfAnalysisSafetyCounts,
 )
 from .sqlite_paths import existing_sqlite_uri, readonly_sqlite_uri
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -1654,3 +1663,4 @@ class FrameworkState:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+# endregion [02]

@@ -1,5 +1,11 @@
 """CLI contracts for durable, non-mutating reconciliation observations."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_action_reconciliation_record.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -14,6 +20,9 @@ from _04_Nucleo_Operativo.file_action_recovery import expected_identity_json
 from _04_Nucleo_Operativo.framework_state_writer import FrameworkState
 from tests.internal_paths_test_support import begin_signed_normal_run
 from tests.mutation_containment import ContainedMutationRoot
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _create_uncertain_action(
@@ -243,3 +252,4 @@ def test_reconciliation_record_cli_requires_scoped_explicit_authorization(
 ) -> None:
     with pytest.raises(SystemExit):
         cli_main(list(arguments))
+# endregion [02]

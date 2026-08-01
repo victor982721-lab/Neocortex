@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_assets.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import unittest
@@ -8,6 +13,9 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from _05_Interfaz.assets import application_icon_path, asset_directory
+# endregion [01]
+
+# region [02] Implementación
 
 
 class UiAssetTests(unittest.TestCase):
@@ -42,3 +50,4 @@ class UiAssetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

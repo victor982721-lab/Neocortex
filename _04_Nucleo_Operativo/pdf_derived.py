@@ -1,5 +1,11 @@
 """Derived PDF indexes built from persisted page text and document structure."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/pdf_derived.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -36,6 +42,9 @@ from .pdf_profile import profile_page as _profile_page
 from .pdf_runtime import PdfResourceGate, ensure_free_space
 from .pdf_state import pdf_database
 from .pdf_writer import serialized_pdf_write
+# endregion [01]
+
+# region [02] Implementación
 
 
 PROFILE_VERSION = 2
@@ -1154,3 +1163,4 @@ class PdfDerivedIndexer:
                 )
                 group_count += 1
             return group_count
+# endregion [02]

@@ -1,8 +1,17 @@
 """Semantic planning errors and primary-preserving cleanup support."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_plan_errors.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable
+# endregion [01]
+
+# region [02] Implementación
 
 
 _PLANNER_COMPATIBILITY_MODULE = "_04_Nucleo_Operativo.semantic_planner"
@@ -40,3 +49,4 @@ __all__ = [
     "SemanticPlanBlocked",
     "SemanticScratchLimitExceeded",
 ]
+# endregion [02]

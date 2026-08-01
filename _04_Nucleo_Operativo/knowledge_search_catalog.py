@@ -1,10 +1,16 @@
 """Bounded catalog retrieval for Knowledge Search.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_search_catalog.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The facade injects owner services and public contract types on every call. This
 module deliberately has no dependency on ``knowledge_search`` or
 ``document_catalog`` so import order and runtime monkeypatching remain stable.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -27,6 +33,9 @@ from .knowledge_search_contracts import KnowledgeCandidate, RankingExecution
 from .knowledge_snapshot import KnowledgeStatePaths
 from .semantic_models import ContentFingerprint
 from .sqlite_cancellation import SQLiteCancellationBridge
+# endregion [01]
+
+# region [02] Implementación
 
 
 class _CatalogCursor(Protocol):
@@ -552,3 +561,4 @@ def catalog_ranking(
 
 
 __all__ = ["catalog_identifiers", "catalog_ranking", "escape_like"]
+# endregion [02]

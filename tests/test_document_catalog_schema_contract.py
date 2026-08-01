@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_catalog_schema_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -19,6 +24,9 @@ from _04_Nucleo_Operativo.sqlite_schema_contract import (
     SQLiteSchemaContractError,
     validate_sqlite_schema_contract,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _metadata_value(database: Path, key: str) -> str | None:
@@ -365,3 +373,4 @@ def test_v5_to_v6_failure_rolls_back_populated_generation_objects(
     assert generation_objects == 0
     assert path == r"C:\Fixture\legacy.pdf"
     assert integrity == "ok"
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_route_schema_contracts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -15,6 +20,9 @@ from _04_Nucleo_Operativo.office_state import (
     initialize_office_state,
 )
 from _04_Nucleo_Operativo.sqlite_schema_contract import SQLiteSchemaContractError
+# endregion [01]
+
+# region [02] Implementación
 
 
 Initializer = Callable[[Path], None]
@@ -172,3 +180,4 @@ def test_failed_route_schema_upgrade_rolls_back_all_schema_changes(
         "legacy_marker": "preserve-me",
         "schema_version": "0",
     }
+# endregion [02]

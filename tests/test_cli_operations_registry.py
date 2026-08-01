@@ -1,5 +1,11 @@
 """Parity tests for the declarative direct-operation CLI registry."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_operations_registry.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import subprocess
@@ -18,6 +24,9 @@ from _04_Nucleo_Operativo.cli_operations import (
 )
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 DIRECT_ARGUMENT_CASES = (
@@ -259,3 +268,4 @@ def test_all_remains_incompatible_with_any_registered_direct_operation() -> None
     assert (
         str(raised.value) == "--all cannot be combined with direct query/doctor options"
     )
+# endregion [02]

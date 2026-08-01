@@ -1,5 +1,11 @@
 """No native mutation test may run before these containment contracts pass."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_mutation_containment.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +17,9 @@ from tests.mutation_containment import (
     ContainedMutationRoot,
     MutationContainmentError,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _base(tmp_path: Path) -> Path:
@@ -146,3 +155,4 @@ def test_native_wrappers_execute_and_record_only_identity_bound_effects(
     assert conflicting_source.read_bytes() == b"source"
     assert conflicting_target.read_bytes() == b"target"
     sandbox.assert_no_leaks()
+# endregion [02]

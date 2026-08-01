@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_release_artifacts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import base64
@@ -31,6 +36,9 @@ from tools.release_artifacts import (
     validate_sdist,
     validate_wheel,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _DIST_INFO = "neocortex_framework-0.7.2.dist-info"
@@ -1014,3 +1022,4 @@ def test_release_artifact_tests_do_not_self_contaminate(tmp_path: Path) -> None:
     assert tuple(member.path for member in report.members) == (
         "package/test_source.py",
     )
+# endregion [02]

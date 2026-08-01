@@ -1,8 +1,17 @@
 """Immutable public models used by the deduplication pipeline."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/models.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,3 +103,4 @@ class DedupPlan:
         if self.total_reclaimable_bytes is not None:
             return self.total_reclaimable_bytes
         return sum(group.reclaimable_bytes for group in self.groups)
+# endregion [02]

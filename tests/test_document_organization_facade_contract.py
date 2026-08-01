@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_organization_facade_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -6,6 +11,9 @@ from _04_Nucleo_Operativo import document_organization as facade
 from _04_Nucleo_Operativo import document_organization_application as application
 from _04_Nucleo_Operativo import document_organization_models as models
 from _04_Nucleo_Operativo import document_organization_planning as planning
+# endregion [01]
+
+# region [02] Implementación
 
 
 EXPECTED_PUBLIC_NAMES = (
@@ -86,3 +94,4 @@ def test_document_organization_public_signatures_require_mutation_guard() -> Non
             "-> 'tuple[OrganizationPlanView, ...]'"
         ),
     }
+# endregion [02]

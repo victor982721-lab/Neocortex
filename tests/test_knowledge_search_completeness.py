@@ -1,5 +1,11 @@
 """Required-ranking completeness and filter-alias regressions for Knowledge Search."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_completeness.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -35,6 +41,9 @@ from _04_Nucleo_Operativo.semantic_service_contracts import (
     SemanticRanking,
     SemanticSearchResult,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _LEXICAL_RANKINGS = ("fts_audio", "fts_docx", "fts_office", "fts_pdf")
@@ -893,3 +902,4 @@ def test_image_ocr_filter_accepts_only_ocr_evidence_from_image_resources() -> No
     )
 
     assert filtered == {"semantic_image": (ocr,)}
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_generation_fixed_point.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -31,6 +36,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     start_embedding_generation,
     upsert_semantic_item,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 CHUNKING = TextChunkingConfig(
@@ -314,3 +322,4 @@ def test_request_construction_failure_releases_exact_leases_without_publication(
     assert jobs == (("pending", 1, None, None), ("pending", 1, None, None))
     assert generation_status == "building"
     assert heads == 0
+# endregion [02]

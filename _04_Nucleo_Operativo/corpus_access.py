@@ -1,10 +1,16 @@
 """Fail-closed access contracts for corpus roots.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/corpus_access.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 State databases and other NeoCortex-managed artifacts are deliberately outside
 this boundary.  The policy describes only the corpus tree observed by a run;
 ``analyze_only`` never authorizes a filesystem mutation.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -12,6 +18,9 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .internal_paths import InternalPathsPolicy
@@ -379,3 +388,4 @@ __all__ = [
     "ProtectedAnalysisRootError",
     "path_trees_intersect",
 ]
+# endregion [02]

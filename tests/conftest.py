@@ -1,5 +1,11 @@
 """Repository-wide pytest hooks with an opt-in audit containment contract."""
+# region [00] Contexto del módulo
+# Módulo: tests/conftest.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -14,6 +20,9 @@ from tests.audit_lab_guard import (
     validate_audit_lab_environment,
     validate_pytest_artifact_paths,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _guarded_directory_identities(
@@ -68,3 +77,4 @@ def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
         base_temp=session.config.option.basetemp,
         cache_directory=session.config.getini("cache_dir"),
     )
+# endregion [02]

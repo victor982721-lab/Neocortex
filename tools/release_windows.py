@@ -1,5 +1,11 @@
 """Fail-closed injected Windows launcher transition state machine."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_windows.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ctypes
@@ -68,6 +74,9 @@ from tools.release_windows_receipts import (
     validate_result_identity,
     validate_stage_snapshot,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 REPLACEFILE_WRITE_THROUGH = 0x00000001
@@ -897,3 +906,4 @@ __all__ = [
     "recover_pending_transition",
     "transition_launcher",
 ]
+# endregion [02]

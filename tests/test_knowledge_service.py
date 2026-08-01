@@ -1,5 +1,11 @@
 """Stable, retry-bounded service semantics for read-only Knowledge queries."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_service.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -41,6 +47,9 @@ from _04_Nucleo_Operativo.knowledge_service import (
     KnowledgeStateRootError,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(marker: str) -> KnowledgeSnapshot:
@@ -497,3 +506,4 @@ def test_inaccessible_state_root_fails_before_owner_collection(
     assert raised.value.root == state.resolve()
     assert raised.value.reason == "is inaccessible"
     assert snapshots.calls == 0
+# endregion [02]

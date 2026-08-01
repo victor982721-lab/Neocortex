@@ -1,5 +1,11 @@
 """Durability contracts for explicit file-action reconciliation evidence."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_file_action_reconciliation_store.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -32,6 +38,9 @@ from _04_Nucleo_Operativo.framework_schema import (
 )
 from _04_Nucleo_Operativo.state import FrameworkState
 from tests.internal_paths_test_support import begin_signed_normal_run
+# endregion [01]
+
+# region [02] Implementación
 
 
 _TABLE = "file_action_reconciliation_events"
@@ -933,3 +942,4 @@ def test_temporary_sqlite_lock_leaves_no_partial_record(tmp_path: Path) -> None:
             blocker.rollback()
         blocker.close()
         candidate.close()
+# endregion [02]

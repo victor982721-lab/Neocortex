@@ -1,5 +1,11 @@
 """Private Win32 handle bindings for the release NTFS adapter."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_windows_ntfs_native.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ctypes
@@ -10,6 +16,9 @@ from typing import Any, NoReturn, Protocol
 from ctypes import wintypes
 
 from tools.release_windows_receipts import ReleaseTransitionError, absolute_path
+# endregion [01]
+
+# region [02] Implementación
 
 
 _GENERIC_READ = 0x80000000
@@ -529,3 +538,4 @@ class WindowsNtfsApi:
         if error in {_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND}:
             return False
         raise _winerror(error)
+# endregion [02]

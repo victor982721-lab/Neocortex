@@ -1,5 +1,11 @@
 """Public CLI contracts for the integrated code route and direct queries."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_cli.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -11,6 +17,9 @@ from _04_Nucleo_Operativo.cli_app import dispatch_direct
 from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _validated(*arguments: str):
@@ -113,3 +122,4 @@ def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:
     validate_arguments(args)
 
     assert args.semantic_source == ["code"]
+# endregion [02]

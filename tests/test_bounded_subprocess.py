@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_bounded_subprocess.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ctypes
@@ -16,6 +21,9 @@ from _04_Nucleo_Operativo.bounded_subprocess import (
     SubprocessOutputLimitError,
     run_bounded_capture,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _python(script: str) -> tuple[str, str, str]:
@@ -249,3 +257,4 @@ def test_windows_job_handle_close_is_idempotent() -> None:
     assert job.closed
     job.close()
     assert job.closed
+# endregion [02]

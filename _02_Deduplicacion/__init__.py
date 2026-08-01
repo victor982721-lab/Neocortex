@@ -1,5 +1,11 @@
 """Reusable, non-destructive deduplication for all content routes."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/__init__.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from .errors import DedupError, FileChangedError, InventoryError, MissingDependencyError
 from .hashing import (
     FULL_ALGORITHM,
@@ -24,6 +30,9 @@ from .models import (
     ScanSummary,
 )
 from .planner import DedupPlanner
+# endregion [01]
+
+# region [02] Implementación
 
 __all__ = [
     "DedupError",
@@ -48,3 +57,4 @@ __all__ = [
     "snapshot_path",
     "stat_matches_snapshot",
 ]
+# endregion [02]

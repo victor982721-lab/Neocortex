@@ -1,5 +1,11 @@
 """Process-level exclusion for foreground watchers on controlled fixtures."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_watcher_life_lease.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -17,6 +23,9 @@ from _04_Nucleo_Operativo.watcher_life_lease import (
     WatcherLifeLease,
     WatcherLifeLeaseConflict,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _CHILD_SCRIPT = r"""
@@ -223,3 +232,4 @@ def test_base_exception_releases_life_lease(tmp_path: Path) -> None:
 
     with WatcherLifeLease(root, state):
         pass
+# endregion [02]

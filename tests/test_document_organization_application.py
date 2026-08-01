@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_organization_application.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -28,6 +33,9 @@ from _04_Nucleo_Operativo.protected_content import (
     ProtectedPathSpec,
 )
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _normal_mutation_guard(root: Path) -> CorpusMutationGuard:
@@ -312,3 +320,4 @@ def test_apply_propagates_systemic_preadmission_failure(
     assert run["status"] == "failed"
     assert run["error_type"] == "OSError"
     assert run["error_message"] == "systemic preadmission failure"
+# endregion [02]

@@ -1,5 +1,11 @@
 """Retrieval-step validation and canonical routing for knowledge plans."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_planner_steps.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
@@ -9,6 +15,9 @@ from datetime import date
 from typing import Protocol, TypeVar
 
 from .code_detection import LANGUAGE_EXTENSIONS
+# endregion [01]
+
+# region [02] Implementación
 
 
 CODE_FORMATS = frozenset(
@@ -774,3 +783,4 @@ __all__ = (
     "validate_knowledge_plan_v2",
     "validate_retrieval_step",
 )
+# endregion [02]

@@ -1,10 +1,19 @@
 """Safe cooperative-cancellation bridge for bounded SQLite work."""
+# region [00] Contexto del módulo
+# Módulo: neocortex/sqlite_cancellation.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+# endregion [01]
+
+# region [02] Implementación
 
 
 CancellationCheck = Callable[[], None]
@@ -105,3 +114,4 @@ __all__ = [
     "SQLiteCancellationBridge",
     "sqlite_cancellation_scope",
 ]
+# endregion [02]

@@ -1,5 +1,11 @@
 """Handle-bound Windows NTFS operations for launcher transitions."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_windows_ntfs.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -34,6 +40,9 @@ from tools.release_windows_receipts import (
     absolute_path,
     same_path,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 __all__ = ["WindowsNtfsApi", "WindowsNtfsReleaseFileOperations"]
@@ -717,3 +726,4 @@ def _preopened_handle(api: _NtfsApiProtocol, handle: int) -> Iterator[None]:
         raise
     else:
         api.close_handle(handle)
+# endregion [02]

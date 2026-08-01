@@ -1,5 +1,11 @@
 """Regression tests for identity-bound Windows rename boundaries."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_windows_handle_mutation.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -18,6 +24,9 @@ from _04_Nucleo_Operativo.windows_handle_mutation import (
     rename_no_replace_by_identity,
 )
 from tests.mutation_containment import ContainedMutationRoot
+# endregion [01]
+
+# region [02] Implementación
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows handle contract")
@@ -454,3 +463,4 @@ def test_unsupported_volume_abstains_before_native_call(
 
     assert source.exists()
     assert not destination.exists()
+# endregion [02]

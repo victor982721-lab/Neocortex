@@ -1,5 +1,11 @@
 """Deterministic, non-mutating destination planning for technical documents."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_organization_planning.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -29,6 +35,9 @@ from .document_organization_models import (
     _fail_organization_run,
 )
 from .protected_content import ProtectedContentError
+# endregion [01]
+
+# region [02] Implementación
 
 _WINDOWS_RESERVED_NAMES = frozenset(
     {
@@ -829,3 +838,4 @@ def _reject_state_destination(catalog_path: Path, root: Path) -> None:
         raise ValueError(
             "organization root and framework state directory must be disjoint"
         )
+# endregion [02]

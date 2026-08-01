@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_pdf_profile_progress.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import time
@@ -5,6 +10,9 @@ from unittest.mock import patch
 
 from _03_Progreso import ProgressEvent
 from _04_Nucleo_Operativo.pdf_derived import PdfDerivedIndexer
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_profile_wait_emits_periodic_liveness_metrics() -> None:
@@ -40,3 +48,4 @@ def test_profile_wait_emits_periodic_liveness_metrics() -> None:
         {metric.name: metric.value for metric in event.metrics}.get("in_flight") == 1
         for event in waiting
     )
+# endregion [02]

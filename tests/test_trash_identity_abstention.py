@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_trash_identity_abstention.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -11,6 +16,9 @@ from _04_Nucleo_Operativo.actions import (
 )
 from _04_Nucleo_Operativo.state import FrameworkState
 from tests.internal_paths_test_support import begin_signed_normal_run
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_apply_abstains_when_recycle_backend_is_path_bound(tmp_path: Path) -> None:
@@ -91,3 +99,4 @@ def test_dry_run_retains_planned_recycle_action(tmp_path: Path) -> None:
             "SELECT status FROM file_actions WHERE action_type='trash_duplicate'"
         ).fetchone()[0]
     assert status == "planned"
+# endregion [02]

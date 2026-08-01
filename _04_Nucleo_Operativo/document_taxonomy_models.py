@@ -1,8 +1,17 @@
 """Stable value objects shared by document-taxonomy components."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_models.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,3 +130,4 @@ class TechnicalTaxonomy:
     organizations: tuple[OrganizationSpec, ...]
     clients: tuple[ClientSpec, ...]
     projects: tuple[ProjectSpec, ...]
+# endregion [02]

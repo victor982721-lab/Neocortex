@@ -1,5 +1,11 @@
 """Compatibility characterization for the knowledge-plan-v2 planner facade."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_planner_characterization.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -26,6 +32,9 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     RetrievalStep,
     plan_knowledge_query,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _EXPECTED_ALL = (
@@ -422,3 +431,4 @@ print(
         "_04_Nucleo_Operativo.route_filters",
         "_04_Nucleo_Operativo.semantic_models",
     }
+# endregion [02]

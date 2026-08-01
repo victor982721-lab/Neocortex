@@ -1,5 +1,11 @@
 """Flat CLI, exit-code and non-creation contracts for Knowledge commands."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_knowledge.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -22,6 +28,9 @@ from _04_Nucleo_Operativo.knowledge_contracts import (
 )
 from _04_Nucleo_Operativo.knowledge_planner import KnowledgeQuery, plan_knowledge_query
 from _04_Nucleo_Operativo.knowledge_search import KnowledgeSearchResult
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(
@@ -431,3 +440,4 @@ def test_handler_does_not_swallow_keyboard_interrupt(
     monkeypatch.setattr(cli_knowledge, "_with_cancellation", interrupt)
     with pytest.raises(KeyboardInterrupt):
         cli_knowledge.run_knowledge_status(args)
+# endregion [02]

@@ -1,5 +1,11 @@
 """Safely apply exact-duplicate and extension-correction actions."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/actions.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -46,6 +52,9 @@ from .windows_handle_mutation import (
     UnsupportedIdentityBoundMutation,
     rename_no_replace_by_identity,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 TRASH_BATCH_SIZE = 256
@@ -1365,3 +1374,4 @@ class FrameworkActions:
         """Reload the current fail-closed guard at every mutation boundary."""
 
         return self._state.corpus_mutation_guard(self._run_id)
+# endregion [02]

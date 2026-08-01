@@ -1,11 +1,20 @@
 """Owner-specific connection policy for existing framework state."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/framework_connection.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
 from .sqlite_paths import existing_sqlite_uri, readonly_sqlite_uri
+# endregion [01]
+
+# region [02] Implementación
 
 
 def connect_existing_framework(
@@ -39,3 +48,4 @@ def connect_existing_framework(
 
 
 __all__ = ["connect_existing_framework"]
+# endregion [02]

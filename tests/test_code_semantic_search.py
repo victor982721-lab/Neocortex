@@ -1,5 +1,11 @@
 """Optional semantic-code search integration without downloading a model."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_semantic_search.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -22,6 +28,9 @@ from _04_Nucleo_Operativo.semantic_models import (
     EmbeddingModelSpec,
     EmbeddingRequest,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(path: Path) -> FileSnapshot:
@@ -318,3 +327,4 @@ def test_code_semantic_search_cancels_inside_exact_vector_scan(
     assert raised.value is cancellation
     assert entered_vector_scan
     assert repository_checkpoints == 2
+# endregion [02]

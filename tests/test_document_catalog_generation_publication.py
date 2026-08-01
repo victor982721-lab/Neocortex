@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_catalog_generation_publication.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -16,6 +21,9 @@ from _04_Nucleo_Operativo.cancellation import CancellationRequested, Cancellatio
 from _04_Nucleo_Operativo.docx_state import initialize_docx_state
 from _04_Nucleo_Operativo.document_organization_models import _begin_organization_run
 from _02_Deduplicacion import snapshot_path
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _upsert_docx_source(
@@ -501,3 +509,4 @@ def test_publish_handles_add_modify_delete_and_rename(tmp_path: Path) -> None:
         ).fetchone()[0]
     assert stale == 0
     assert plan_status == "superseded"
+# endregion [02]

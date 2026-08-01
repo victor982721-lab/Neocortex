@@ -1,8 +1,17 @@
 """Exact-syntax recognition primitives for deterministic knowledge planning."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_planner_exact.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
+# endregion [01]
+
+# region [02] Implementación
 
 
 _PATH_PREFIX = (
@@ -382,3 +391,4 @@ __all__ = (
     "has_temporal_year",
     "token_words",
 )
+# endregion [02]

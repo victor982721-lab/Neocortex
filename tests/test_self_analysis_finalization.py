@@ -1,5 +1,11 @@
 """Transactional publication tests for protected self-analysis completion."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_self_analysis_finalization.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -19,6 +25,9 @@ from _04_Nucleo_Operativo.self_analysis import (
     build_self_analysis_completion_manifest,
 )
 from _04_Nucleo_Operativo.state import FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 _CODE_SIGNATURE = "code-v2:fixture|code-analyzers-v1:fixture"
@@ -400,3 +409,4 @@ def test_generic_finalizers_cannot_complete_self_analysis(tmp_path: Path) -> Non
             "SELECT status,completed_ns FROM initial_runs WHERE run_id=?",
             (run_id,),
         ).fetchone() == ("running", None)
+# endregion [02]

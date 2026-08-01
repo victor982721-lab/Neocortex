@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_zip_safety.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import struct
@@ -10,6 +15,9 @@ from _04_Nucleo_Operativo.zip_safety import (
     ZipStructureError,
     inspect_zip_structure,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class ZipSafetyTests(unittest.TestCase):
@@ -62,3 +70,4 @@ class ZipSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

@@ -1,5 +1,11 @@
 """Configuration and results for the integrated framework."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/models.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -11,6 +17,9 @@ from _02_Deduplicacion import DedupPlan, ScanSummary
 
 from .app_paths import default_state_directory
 from .route_filters import CandidateSelection
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .audio_models import AudioRouteSummary
@@ -276,3 +285,4 @@ class ActionSummary:
     empty_directories_trashed: int = 0
     empty_directory_skips: int = 0
     errors: int = 0
+# endregion [02]

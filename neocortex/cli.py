@@ -1,10 +1,19 @@
 """Installed command entry point for the integrated NeoCortex application."""
+# region [00] Contexto del módulo
+# Módulo: neocortex/cli.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
 import sys
 from collections.abc import Sequence
+# endregion [01]
+
+# region [02] Implementación
 
 
 _CAPABILITIES_COMMAND = ("doctor", "capabilities")
@@ -96,3 +105,4 @@ def entrypoint(arguments: Sequence[str] | None = None) -> int:
 
 
 __all__ = ["entrypoint"]
+# endregion [02]

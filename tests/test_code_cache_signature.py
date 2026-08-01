@@ -1,11 +1,20 @@
 """Regression for cache-validation policy and analysis compatibility."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_cache_signature.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
 
 from _04_Nucleo_Operativo.code_analyzers import AnalyzerRegistry, AnalyzerSpec
 from _04_Nucleo_Operativo.code_contracts import CodeRouteConfig
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_cache_validation_strength_does_not_invalidate_analysis_results(
@@ -36,3 +45,4 @@ def test_analyzer_version_changes_the_registry_processing_signature() -> None:
         )
 
     assert registry("1").processing_signature != registry("2").processing_signature
+# endregion [02]

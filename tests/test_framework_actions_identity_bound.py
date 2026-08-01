@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_framework_actions_identity_bound.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -42,6 +47,9 @@ from tests.internal_paths_test_support import (
     disjoint_internal_paths_policy,
 )
 from tests.mutation_containment import ContainedMutationRoot
+# endregion [01]
+
+# region [02] Implementación
 
 
 pytestmark = pytest.mark.skipif(
@@ -886,3 +894,4 @@ def test_normal_internal_source_is_rejected_before_native_rename(
     assert native_calls == 0
     assert source.read_bytes() == b"protected-source"
     assert not destination.exists()
+# endregion [02]

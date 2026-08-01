@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_smoke.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -6,6 +11,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import ClassVar
+# endregion [01]
+
+# region [02] Implementación
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -134,3 +142,4 @@ class UiSmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

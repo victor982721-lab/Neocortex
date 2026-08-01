@@ -1,5 +1,11 @@
 """Built-in electrical-sector vocabulary for document classification."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_vocabulary.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from typing import Mapping
@@ -11,6 +17,9 @@ from .document_taxonomy_models import (
     ProjectSpec,
     TechnicalTaxonomy,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 BUILTIN_TAXONOMY_VERSION = "electrical-document-taxonomy-v13"
@@ -1047,3 +1056,4 @@ def semantic_label_inventory() -> Mapping[str, tuple[str, ...]]:
         "equipment": tuple(_EQUIPMENT_PATTERNS),
         "activity": tuple(_ACTIVITY_PATTERNS),
     }
+# endregion [02]

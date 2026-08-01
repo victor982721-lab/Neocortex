@@ -1,5 +1,11 @@
 """Executable Phase-1 Knowledge golden-suite acceptance tests."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_evaluation.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -39,6 +45,9 @@ from _04_Nucleo_Operativo.knowledge_evaluation import (
 )
 from _04_Nucleo_Operativo.knowledge_planner import KnowledgeQuery
 from _04_Nucleo_Operativo.knowledge_search import KnowledgeSearchResult
+# endregion [01]
+
+# region [02] Implementación
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "knowledge" / "phase1_golden_v1.json"
@@ -558,3 +567,4 @@ def test_integrity_rate_guards_reject_incoherent_denominators() -> None:
         replace(stale, stale_retrieved=2, stale_candidates=1, stale_rate=2.0)
     with pytest.raises(ValueError, match="duplicate rate/denominator"):
         replace(report.integrity, duplicate_rate=1.0)
+# endregion [02]

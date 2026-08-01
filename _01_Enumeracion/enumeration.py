@@ -1,5 +1,11 @@
 """Streaming initial enumeration of an NTFS volume."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/enumeration.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -9,6 +15,9 @@ from .errors import CorruptBufferError, JournalDiscontinuityError
 from .models import EnumerationCheckpoint, JournalCursor, NtfsEntry
 from .parser import parse_enum_buffer
 from .windows import VolumeHandle
+# endregion [01]
+
+# region [02] Implementación
 
 
 DEFAULT_BUFFER_SIZE = 1024 * 1024
@@ -160,3 +169,4 @@ def query_journal_cursor(volume: str | Path) -> JournalCursor:
     with VolumeHandle(volume) as handle:
         journal = handle.query_journal()
         return JournalCursor(handle.display, journal.journal_id, journal.next_usn)
+# endregion [02]

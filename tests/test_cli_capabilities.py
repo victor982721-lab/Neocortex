@@ -1,5 +1,11 @@
 """Canonical doctor-capabilities facade, output, safety and lazy contracts."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_capabilities.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -24,6 +30,9 @@ from neocortex.cli import _translate_canonical_arguments, entrypoint
 from _04_Nucleo_Operativo.cli_app import main
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -392,3 +401,4 @@ def test_cold_canonical_probe_loads_no_optional_engine_and_creates_no_state(
 
     assert completed.returncode == 0, completed.stderr
     assert "CAPABILITIES_COLD_OK" in completed.stdout
+# endregion [02]

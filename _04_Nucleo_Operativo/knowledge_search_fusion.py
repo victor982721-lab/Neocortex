@@ -1,5 +1,11 @@
 """Evidence-key RRF fusion and post-retrieval diversity."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_search_fusion.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import math
@@ -14,6 +20,9 @@ from .knowledge_contracts import (
     RevisionState,
 )
 from .knowledge_search_contracts import KnowledgeCandidate
+# endregion [01]
+
+# region [02] Implementación
 
 
 _EvidenceKey = tuple[str, str, str]
@@ -389,3 +398,4 @@ def fuse_evidence_rankings(
 
 
 __all__ = ("fuse_evidence_rankings", "overlaps_or_too_close")
+# endregion [02]

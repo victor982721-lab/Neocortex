@@ -1,5 +1,11 @@
 """Normalized Rich and headless progress reporters."""
+# region [00] Contexto del módulo
+# Módulo: _03_Progreso/reporters.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from threading import RLock
@@ -20,6 +26,9 @@ from rich.progress import (
 from rich.text import Text
 
 from .models import ProgressEvent, ProgressMetric
+# endregion [01]
+
+# region [02] Implementación
 
 
 _METRIC_PRESENTATION = {
@@ -196,3 +205,4 @@ class RecordingProgress:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         return None
+# endregion [02]

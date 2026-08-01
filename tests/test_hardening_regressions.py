@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_hardening_regressions.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -20,6 +25,9 @@ from _04_Nucleo_Operativo.document_taxonomy import (
 from _04_Nucleo_Operativo.pdf_isolation import _read_file_tail
 from _05_Interfaz.controller import MAX_PROCESS_LINE_BYTES, WorkerController
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_qpdf_diagnostic_tail_read_is_bounded(tmp_path: Path) -> None:
@@ -134,3 +142,4 @@ def test_destination_parent_creation_rejects_existing_reparse_component(
             )
 
     assert not (unsafe_parent / "nested").exists()
+# endregion [02]

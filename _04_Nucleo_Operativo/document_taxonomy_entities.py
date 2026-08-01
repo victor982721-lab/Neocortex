@@ -1,5 +1,11 @@
 """Entity, context, and generic pattern evidence for document taxonomy."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_entities.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
@@ -23,6 +29,9 @@ from .document_taxonomy_vocabulary import (
     _EQUIPMENT_PATTERNS,
     _EQUIPMENT_SPECIFICITY,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _managed_top_level_is(path: str, expected: str) -> bool:
@@ -543,3 +552,4 @@ def _pattern_evidence(
 
 def _clean_identifier(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip()).upper()
+# endregion [02]

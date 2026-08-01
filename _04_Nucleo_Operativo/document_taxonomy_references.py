@@ -1,5 +1,11 @@
 """Authority and standards-reference evidence for document taxonomy."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_references.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
@@ -19,6 +25,9 @@ from .document_taxonomy_models import (
     StandardReference,
 )
 from .document_taxonomy_vocabulary import _SHORT_EN_INDUSTRIAL_STANDARDS
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _document_authority_adjustment(
@@ -570,3 +579,4 @@ def _reference_family_key(value: str) -> str:
     without_edition = re.sub(r"[-:](?:19|20)\d{2}\b", "", value)
     without_std = re.sub(r"\bSTD\.?\b", "", without_edition, flags=re.IGNORECASE)
     return re.sub(r"[^A-Z0-9.]", "", without_std.upper())
+# endregion [02]

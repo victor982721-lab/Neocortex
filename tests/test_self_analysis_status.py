@@ -1,5 +1,11 @@
 """Read-only CLI status for durable protected self-analysis manifests."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_self_analysis_status.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -38,6 +44,9 @@ from _04_Nucleo_Operativo.self_analysis_status import (
     read_self_analysis_status,
 )
 from neocortex.cli import entrypoint
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -889,3 +898,4 @@ def test_historical_manifest_decode_does_not_probe_filesystem(
 
     assert decoded["schema"] == "neocortex.self-analysis-manifest/v1"
     assert decoded["run"]["run_id"] == prepared_status.run_id  # type: ignore[index]
+# endregion [02]

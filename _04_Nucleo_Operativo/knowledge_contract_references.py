@@ -1,14 +1,23 @@
 """Validation for Knowledge resource, evidence, ranking and hit contracts.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_contract_references.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The public dataclasses remain in ``knowledge_contracts`` for stable type and
 pickle identity. This helper has no runtime dependency on that facade.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .knowledge_contracts import (
@@ -289,3 +298,4 @@ __all__ = [
     "validate_resource_ref",
     "validate_revision_ref",
 ]
+# endregion [02]

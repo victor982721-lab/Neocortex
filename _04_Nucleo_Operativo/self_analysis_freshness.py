@@ -1,9 +1,18 @@
 """Pure freshness aggregation for protected self-analysis evidence."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/self_analysis_freshness.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+# endregion [01]
+
+# region [02] Implementación
 
 
 JournalStatus = Literal["unchanged", "advanced", "discontinuous", "unavailable"]
@@ -80,3 +89,4 @@ __all__ = [
     "SelfAnalysisFreshness",
     "evaluate_self_analysis_freshness",
 ]
+# endregion [02]

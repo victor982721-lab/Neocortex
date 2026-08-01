@@ -1,5 +1,11 @@
 """Tests-first extraction contract for Knowledge context envelopes."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_contract_context_extraction.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ast
@@ -14,6 +20,9 @@ from pathlib import Path
 import pytest
 
 from _04_Nucleo_Operativo import knowledge_contracts as contracts
+# endregion [01]
+
+# region [02] Implementación
 
 
 CONTRACT_MODULE = "_04_Nucleo_Operativo.knowledge_contracts"
@@ -201,3 +210,4 @@ def test_context_modules_support_both_cold_import_orders(
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "ok"
+# endregion [02]

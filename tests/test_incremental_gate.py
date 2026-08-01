@@ -1,5 +1,11 @@
 """Ordering and fail-closed contracts for the shared incremental gate."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_incremental_gate.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,6 +20,9 @@ from _04_Nucleo_Operativo.incremental_gate import (
     IncrementalGateRequest,
     evaluate_incremental_gate,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _ROOT = Path("C:/fixture/corpus")
@@ -345,3 +354,4 @@ def test_final_boundary_failure_propagates_after_all_durable_evidence() -> None:
         )
 
     assert trace[-1] == "verify_final"
+# endregion [02]

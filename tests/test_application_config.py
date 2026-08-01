@@ -1,5 +1,11 @@
 """Compatibility and domain projections for application configuration."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_application_config.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import fields, replace
@@ -29,6 +35,9 @@ from _04_Nucleo_Operativo.route_registry import (
     docx_route_config_from_framework,
     pdf_route_config_from_framework,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
@@ -421,3 +430,4 @@ def test_orchestrator_consumes_the_domain_projection() -> None:
         cancellation=orchestrator._cancellation,
     )
     assert result is coordinator.return_value
+# endregion [02]

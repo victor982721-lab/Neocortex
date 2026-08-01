@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_contract_payloads.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -15,6 +20,9 @@ from _04_Nucleo_Operativo.semantic_service_contracts import (
     SemanticWorkloadPlan,
 )
 from _04_Nucleo_Operativo.semantic_models import canonical_json, fingerprint_text
+# endregion [01]
+
+# region [02] Implementación
 
 
 EXPECTED_PLAN_KEYS = {
@@ -435,3 +443,4 @@ def test_extracted_payload_builder_matches_wrapper_when_present() -> None:
         "(plan: 'SemanticPlan') -> 'dict[str, object]'"
     )
     assert builder(_plan()) == semantic_planner.semantic_plan_payload(_plan())
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_sqlite_facades.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from _04_Nucleo_Operativo import sqlite_paths
@@ -5,6 +10,9 @@ from _04_Nucleo_Operativo import sqlite_schema_contract as operational_contract
 from _04_Nucleo_Operativo import sqlite_schema_lifecycle as operational_lifecycle
 from neocortex import sqlite_schema_contract as shared_contract
 from neocortex import sqlite_schema_lifecycle as shared_lifecycle
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_operational_sqlite_contract_is_a_shared_compatibility_facade() -> None:
@@ -36,3 +44,4 @@ def test_operational_sqlite_lifecycle_and_uri_are_shared_facades() -> None:
         is shared_lifecycle.readonly_sqlite_uri
     )
     assert sqlite_paths.readonly_sqlite_uri is shared_lifecycle.readonly_sqlite_uri
+# endregion [02]

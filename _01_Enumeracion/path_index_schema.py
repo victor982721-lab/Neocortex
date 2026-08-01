@@ -1,5 +1,11 @@
 """Schema lifecycle for the bounded SQLite NTFS path index."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/path_index_schema.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -16,6 +22,9 @@ from neocortex.sqlite_schema_lifecycle import (
     initialize_versioned_sqlite_schema,
     readonly_sqlite_uri,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 SCHEMA_VERSION = 1
@@ -180,3 +189,4 @@ __all__ = [
     "path_index_schema_contract",
     "validate_path_index_schema",
 ]
+# endregion [02]

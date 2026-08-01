@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_run_request.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import tempfile
@@ -9,6 +14,9 @@ from _04_Nucleo_Operativo.route_selection import (
     normalize_route_selection,
 )
 from _05_Interfaz.run_request import ROUTE_ORDER, RunRequest
+# endregion [01]
+
+# region [02] Implementación
 
 
 class UiRunRequestTests(unittest.TestCase):
@@ -90,3 +98,4 @@ class UiRunRequestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

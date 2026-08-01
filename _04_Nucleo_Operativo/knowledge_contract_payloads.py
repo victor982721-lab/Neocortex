@@ -1,14 +1,23 @@
 """Deterministic payload builders for immutable Knowledge contracts.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_contract_payloads.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 Contract classes remain defined by ``knowledge_contracts`` for historical type
 identity and pickle compatibility. Runtime imports never point back to that
 facade; class names below are available only to static type checkers.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .knowledge_contracts import (
@@ -487,3 +496,4 @@ __all__ = [
     "context_relation_ref_payload",
     "context_bundle_payload",
 ]
+# endregion [02]

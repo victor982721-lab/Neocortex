@@ -1,5 +1,11 @@
 """Hard-bounded subprocess capture with timeout and deterministic cleanup."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/bounded_subprocess.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -11,6 +17,9 @@ from dataclasses import dataclass
 from typing import IO
 
 from .isolated_process import WindowsKillOnCloseJob
+# endregion [01]
+
+# region [02] Implementación
 
 
 _READ_CHUNK_BYTES = 64 * 1024
@@ -309,3 +318,4 @@ def run_bounded_capture(
 
 
 __all__ = ["SubprocessOutputLimitError", "run_bounded_capture"]
+# endregion [02]

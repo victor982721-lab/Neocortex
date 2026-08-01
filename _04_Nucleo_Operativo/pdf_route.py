@@ -1,10 +1,16 @@
 """Incremental PDF route for the integrated framework.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/pdf_route.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The route consumes the surviving inventory instead of walking the filesystem
 again.  Text is persisted page by page so memory use is bounded by one rendered
 page per active worker and interrupted documents can resume.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -74,6 +80,9 @@ from .state import (
     REVIEW_RECONCILIATION_BATCH_SIZE,
     ReviewCandidateReconciliation,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class PdfRouteState(Protocol):
@@ -2718,3 +2727,4 @@ class PdfRoute(PdfRouteStorageMixin, PdfRouteCacheMixin):
                 ),
             ),
         )
+# endregion [02]

@@ -1,5 +1,11 @@
 """Descriptor provenance frozen before moving Knowledge Search contracts."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_extraction_metadata.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from types import FunctionType
@@ -9,6 +15,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     KnowledgeSearchResult,
     RankingExecution,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 PUBLIC_MODULE = "_04_Nucleo_Operativo.knowledge_search"
@@ -63,3 +72,4 @@ def test_contract_method_and_descriptor_modules_are_stable() -> None:
         assert {
             name: _module_of(vars(contract)[name]) for name in dataclass_members
         } == dict.fromkeys(dataclass_members, "dataclasses")
+# endregion [02]

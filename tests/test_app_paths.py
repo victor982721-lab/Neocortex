@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_app_paths.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -16,6 +21,9 @@ from _04_Nucleo_Operativo.app_paths import (
     stable_launcher_path,
 )
 from _04_Nucleo_Operativo.cli_parser import build_parser
+# endregion [01]
+
+# region [02] Implementación
 
 
 class ApplicationPathTests(unittest.TestCase):
@@ -80,3 +88,4 @@ class ApplicationPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

@@ -1,5 +1,11 @@
 """Stable JSON-ready payload builders for Semantic service contracts."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_contract_payloads.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from .semantic_models import canonical_json
@@ -8,6 +14,9 @@ from .semantic_service_contracts import (
     SemanticSourcePlan,
     SemanticWorkloadPlan,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _source_plan_payload(source: SemanticSourcePlan) -> dict[str, object]:
@@ -135,3 +144,4 @@ def build_semantic_plan_payload(plan: SemanticPlan) -> dict[str, object]:
 
 
 __all__ = ["build_semantic_plan_payload"]
+# endregion [02]

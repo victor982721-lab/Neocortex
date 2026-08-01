@@ -1,10 +1,16 @@
 """Read-only authorization gate for reusing one durable inventory boundary.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/incremental_gate.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The evaluator deliberately owns the ordering shared by normal and protected
 self-analysis runs.  It reads evidence from the framework and inventory owners,
 but never creates, updates, or repairs either owner.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -15,6 +21,9 @@ from typing import Literal, Protocol, cast
 
 from _01_Enumeracion import JournalCursor
 from _02_Deduplicacion import InventoryError
+# endregion [01]
+
+# region [02] Implementación
 
 
 IncrementalAccessMode = Literal["normal", "analyze_only"]
@@ -329,3 +338,4 @@ __all__ = (
     "InventoryGateEvidence",
     "evaluate_incremental_gate",
 )
+# endregion [02]

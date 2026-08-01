@@ -1,5 +1,11 @@
 """Read-only, idempotent reconciliation of uncertain filesystem actions."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/file_action_recovery.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -12,6 +18,9 @@ from _02_Deduplicacion import FileSnapshot, snapshot_path
 
 from .framework_connection import connect_existing_framework
 from .framework_schema import SCHEMA_VERSION as FRAMEWORK_SCHEMA_VERSION
+# endregion [01]
+
+# region [02] Implementación
 
 
 RECOVERY_BATCH_LIMIT = 1000
@@ -431,3 +440,4 @@ __all__ = [
     "expected_identity_json",
     "list_file_action_reconciliations",
 ]
+# endregion [02]

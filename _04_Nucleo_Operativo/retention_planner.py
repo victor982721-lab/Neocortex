@@ -1,4 +1,9 @@
 """Bounded, read-only retention planning across durable NeoCortex state.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/retention_planner.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The planner deliberately has no apply/delete path.  It inventories one keyset
 page per selected store, protects publication and recovery invariants, and
@@ -6,6 +11,7 @@ reports lower-bound SQLite payload estimates.  A future deletion implementation
 must define resumable batches and rollback independently of this diagnostic.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -20,6 +26,9 @@ from _02_Deduplicacion import inventory_schema
 from . import document_catalog_schema, framework_schema, semantic_schema
 from .sqlite_paths import readonly_sqlite_uri
 from .sqlite_schema_contract import validate_sqlite_schema_contract
+# endregion [01]
+
+# region [02] Implementación
 
 
 RetentionStore = Literal["semantic", "catalog", "inventory", "framework"]
@@ -1306,3 +1315,4 @@ __all__ = [
     "plan_retention",
     "retention_plan_payload",
 ]
+# endregion [02]

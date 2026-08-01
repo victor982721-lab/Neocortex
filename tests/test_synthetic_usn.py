@@ -1,5 +1,11 @@
 """Contract tests for the contained synthetic USN journal."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_synthetic_usn.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,6 +17,9 @@ from tests.synthetic_usn import (
     SyntheticUsnContainmentError,
     SyntheticUsnJournal,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_synthetic_usn_emits_create_modify_delete_and_rename(
@@ -70,3 +79,4 @@ def test_synthetic_usn_restores_lookup_points_after_base_exception(
         inventory_coordinator.query_journal_cursor,
         reconcile.consume_changes,
     ) == original
+# endregion [02]

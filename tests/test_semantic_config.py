@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_config.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from typing import Any
@@ -9,6 +14,9 @@ from _04_Nucleo_Operativo.semantic_config import (
     fastembed_cache_contract,
     production_models,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _contract(
@@ -128,3 +136,4 @@ def test_valid_nested_required_files_preserve_exact_contract_values() -> None:
 
     assert contract.repository_id == "qdrant/model-name_v1"
     assert contract.required_files == ("onnx/model.onnx", "config.json")
+# endregion [02]

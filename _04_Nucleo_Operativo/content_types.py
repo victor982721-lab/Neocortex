@@ -1,9 +1,15 @@
 """Bounded, signature-based detection of common file formats.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/content_types.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The detector deliberately returns ``None`` when the available bytes are not
 strong enough evidence.  Guessing from an extension would defeat validation.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import struct
@@ -15,6 +21,9 @@ from pathlib import Path
 from _02_Deduplicacion.path_io import absolute_display_path, native_io_path
 
 from .zip_safety import ZipStructureError, inspect_zip_structure
+# endregion [01]
+
+# region [02] Implementación
 
 
 HEADER_LIMIT = 64 * 1024
@@ -313,3 +322,4 @@ def detect_content_type(path: str | Path) -> DetectedType | None:
     if archive is not None:
         return archive
     return _detect_database_or_executable(native, header)
+# endregion [02]

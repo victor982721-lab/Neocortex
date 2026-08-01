@@ -1,5 +1,11 @@
 """Coordination of filesystem checkpoints and pre-index deduplication."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/orchestrator.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -57,6 +63,9 @@ from .self_analysis import (
     self_analysis_commands,
 )
 from .state import FrameworkRouteState, FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .audio_models import AudioRouteSummary
@@ -1606,3 +1615,4 @@ class FrameworkOrchestrator:
             route_results=route_results,
             global_resources=global_resource_summary,
         )
+# endregion [02]

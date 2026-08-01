@@ -1,5 +1,11 @@
 """Atomic lifecycle primitives for versioned SQLite application databases."""
+# region [00] Contexto del módulo
+# Módulo: neocortex/sqlite_schema_lifecycle.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -8,6 +14,9 @@ from pathlib import Path
 from typing import Protocol
 
 from .sqlite_schema_contract import read_application_schema_version
+# endregion [01]
+
+# region [02] Implementación
 
 
 class ConnectionFactory(Protocol):
@@ -136,3 +145,4 @@ __all__ = [
     "initialize_versioned_sqlite_schema",
     "readonly_sqlite_uri",
 ]
+# endregion [02]

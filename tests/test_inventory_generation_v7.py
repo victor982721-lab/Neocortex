@@ -1,9 +1,15 @@
 """Regression contracts for isolated generations and policy-bound schema v8.
+# region [00] Contexto del módulo
+# Módulo: tests/test_inventory_generation_v7.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 Every fixture is synthetic and bounded to ``tmp_path``.  No test opens an
 operational NeoCortex database or traverses the live corpus.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -25,6 +31,9 @@ from _02_Deduplicacion import inventory_schema as inventory_schema_module
 from _02_Deduplicacion.errors import InventoryError
 from _04_Nucleo_Operativo import reconcile as reconcile_module
 from _04_Nucleo_Operativo.reconcile import reconcile_usn_window
+# endregion [01]
+
+# region [02] Implementación
 
 
 _EMPTY_POLICY = InventoryExclusionPolicy.compile(())
@@ -454,3 +463,4 @@ def test_incremental_checkpoint_and_aggregates_commit_or_rollback_together(
         assert committed.bytes_seen == len(b"first") + len(b"second-file")
         assert index.file_count(scan.scan_id) == 2
         assert index.inventory_checkpoint(root) == advanced
+# endregion [02]

@@ -1,5 +1,11 @@
 """Stable models and catalog queries for document organization."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_organization_models.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -12,6 +18,9 @@ from typing import Callable
 
 from .document_catalog import connect_document_catalog
 from .framework_connection import connect_existing_framework
+# endregion [01]
+
+# region [02] Implementación
 
 DEFAULT_ORGANIZATION_DIRECTORY_NAME = "Consulta_Tecnica_Organizada"
 ORGANIZATION_APPLY_BATCH_SIZE = 100
@@ -213,3 +222,4 @@ def _fail_organization_run(
         (time.time_ns(), type(error).__name__, str(error), run_id),
     )
     connection.commit()
+# endregion [02]

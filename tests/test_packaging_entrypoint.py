@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_packaging_entrypoint.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import tomllib
@@ -7,6 +12,9 @@ from unittest.mock import patch
 import neocortex
 from neocortex.cli import entrypoint
 from _02_Deduplicacion.__main__ import main as legacy_dedup_main
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_project_metadata_uses_package_version_and_installed_command() -> None:
@@ -119,3 +127,4 @@ def test_legacy_dedup_entrypoint_delegates_without_legacy_state(
         "3",
     )
     assert "obsoleto" in capsys.readouterr().err
+# endregion [02]

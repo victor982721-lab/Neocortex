@@ -1,5 +1,11 @@
 """Tests-first gates for the P2-5 Knowledge contract extraction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_contracts_cl2_characterization.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import replace
@@ -10,6 +16,9 @@ import _04_Nucleo_Operativo.knowledge_contracts as contracts
 from test_knowledge_contracts_characterization import (
     _contract_instances as make_contract_instances,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 EXPECTED_TO_DICT_KEYS = {
@@ -1011,3 +1020,4 @@ def test_stable_id_seam_is_resolved_at_call_time(
     )
     assert calls == [expected_call, expected_call]
     assert created.contradiction_id == original(*expected_call)
+# endregion [02]

@@ -1,5 +1,11 @@
 """Typed relation provenance exposed by the public code search boundary."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_search_relations.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -38,6 +44,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
 from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes, fingerprint_text
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _range(line: int) -> SourceRange:
@@ -465,3 +474,4 @@ def test_stale_code_relation_target_never_fabricates_a_context_endpoint(
     )
     notices = (*bundle.missing_information, *bundle.warnings)
     assert any("unresolved" in notice.casefold() for notice in notices)
+# endregion [02]

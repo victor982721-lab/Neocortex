@@ -1,6 +1,14 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_framework_state_facade.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import importlib
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_state_facade_preserves_public_import_contract() -> None:
@@ -42,3 +50,4 @@ def test_state_facade_classes_are_physically_separated() -> None:
     assert facade.FrameworkState.__module__.endswith("framework_state_writer")
     assert facade.FrameworkRouteState.__module__.endswith("framework_route_state")
     assert facade.FrameworkState.__module__ != facade.FrameworkRouteState.__module__
+# endregion [02]

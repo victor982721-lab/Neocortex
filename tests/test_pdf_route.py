@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_pdf_route.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -45,6 +50,9 @@ from _04_Nucleo_Operativo.pdf_state import SCHEMA_VERSION as PDF_SCHEMA_VERSION
 from _04_Nucleo_Operativo.review import list_review_candidates
 from _04_Nucleo_Operativo.retry_policy import classify_pdf_failure
 from _04_Nucleo_Operativo.state import FrameworkRouteState, FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 class _State:
@@ -2302,3 +2310,4 @@ class PdfRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

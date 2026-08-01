@@ -1,5 +1,11 @@
 """Durable fail-closed contracts for analyze-only corpus roots."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_corpus_access_policy.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -32,6 +38,9 @@ from _04_Nucleo_Operativo.self_analysis import (
 )
 from _04_Nucleo_Operativo.state import FrameworkRouteState, FrameworkState
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _fixture_paths(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -613,3 +622,4 @@ def test_physical_boundary_inspection_error_fails_closed(
         CorpusMutationGuard(policy, internal_policy).require_paths_allowed(
             outside / "new.py"
         )
+# endregion [02]

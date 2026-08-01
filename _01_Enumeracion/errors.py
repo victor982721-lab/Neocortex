@@ -1,6 +1,15 @@
 """Exceptions raised by :mod:`_01_Enumeracion`."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/errors.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
+# endregion [01]
+
+# region [02] Implementación
 
 
 class NtfsUsnError(Exception):
@@ -37,3 +46,4 @@ class VolumeAccessError(NtfsUsnError):
         super().__init__(
             f"{operation} failed for {volume!r}: [WinError {winerror}] {message}"
         )
+# endregion [02]

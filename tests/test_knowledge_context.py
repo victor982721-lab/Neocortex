@@ -1,5 +1,11 @@
 """Deterministic, evidence-preserving Knowledge context construction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_context.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import replace
@@ -31,6 +37,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     KnowledgeSearchResult,
     RankingExecution,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot() -> KnowledgeSnapshot:
@@ -590,3 +599,4 @@ def test_result_remains_the_only_information_source() -> None:
     second = build_context_bundle(changed_timing, character_limit=4_000)
 
     assert first == second
+# endregion [02]

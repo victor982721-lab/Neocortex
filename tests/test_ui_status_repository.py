@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_status_repository.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -7,6 +12,9 @@ import unittest
 from pathlib import Path
 
 from _05_Interfaz.status_repository import StatusRepository, StatusRepositoryError
+# endregion [01]
+
+# region [02] Implementación
 
 
 class UiStatusRepositoryTests(unittest.TestCase):
@@ -141,3 +149,4 @@ class UiStatusRepositoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

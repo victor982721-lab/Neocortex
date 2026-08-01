@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_organization_identity_bound.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -35,6 +40,9 @@ from _04_Nucleo_Operativo.windows_handle_mutation import (
 )
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
 from tests.mutation_containment import ContainedMutationRoot
+# endregion [01]
+
+# region [02] Implementación
 
 
 pytestmark = pytest.mark.skipif(
@@ -867,3 +875,4 @@ def _insert_plan(
             "not_required",
         ),
     )
+# endregion [02]

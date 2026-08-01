@@ -1,5 +1,11 @@
 """Behavioral contract for identity-bound immutable user content."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_protected_content_policy.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -21,6 +27,9 @@ from _04_Nucleo_Operativo.protected_content import (
     ProtectedPathSpec,
     canonical_protected_content_policy,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -516,3 +525,4 @@ def test_error_is_compatible_with_existing_protected_root_boundary() -> None:
     assert isinstance(error, ProtectedAnalysisRootError)
     assert error.reason_code == "protected_content_root"
     assert str(error) == "protected_content_root: blocked"
+# endregion [02]

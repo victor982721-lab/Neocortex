@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_audio_probe_bounded.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import subprocess
@@ -8,6 +13,9 @@ import pytest
 from _04_Nucleo_Operativo import audio_probe
 from _04_Nucleo_Operativo.audio_models import AudioProcessingError
 from _04_Nucleo_Operativo.bounded_subprocess import SubprocessOutputLimitError
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_audio_probe_uses_hard_output_bounds(
@@ -84,3 +92,4 @@ def test_audio_probe_maps_timeout_to_retryable_error(
     assert captured.value.code == "audio_probe_timeout"
     assert captured.value.recommendation == "retry"
     assert captured.value.retryable is True
+# endregion [02]

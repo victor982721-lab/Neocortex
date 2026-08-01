@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_dedup_pipeline_modularity.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -10,6 +15,9 @@ import pytest
 
 from _02_Deduplicacion import DedupIndex, DedupPlanner, ScanSummary
 from _03_Progreso import RecordingProgress
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _summary_without_identifier(summary: ScanSummary) -> tuple[object, ...]:
@@ -161,3 +169,4 @@ def test_exact_collision_set_limit_abstains_instead_of_merging_distinct_files(
     assert plan.statistics.full_hash_files == 4
     assert plan.statistics.exact_compare_files == 5
     assert plan.statistics.changed_or_unreadable_files == 2
+# endregion [02]

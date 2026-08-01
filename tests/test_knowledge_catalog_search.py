@@ -1,5 +1,11 @@
 """Real-SQLite regressions for catalog filtering and exact evidence."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_catalog_search.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -25,6 +31,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     execute_knowledge_search,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+# endregion [01]
+
+# region [02] Implementación
 
 
 _ALPHA_FILE_KEY = "00000000000000000000000000000001:00000000000000000000000000000002"
@@ -438,3 +447,4 @@ def test_catalog_execution_uses_the_planned_candidate_limit(
     assert report.rows_scanned == step.candidate_limit + 1
     assert not report.complete
     assert report.reason == "catalog_candidate_limit_reached"
+# endregion [02]

@@ -1,6 +1,12 @@
 """Exceptions for :mod:`_02_Deduplicacion`."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/errors.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
 
+
+# region [01] Implementación
 class DedupError(Exception):
     """Base package exception."""
 
@@ -15,3 +21,4 @@ class FileChangedError(DedupError):
 
 class InventoryError(DedupError):
     """An inventory operation could not be completed safely."""
+# endregion [02]

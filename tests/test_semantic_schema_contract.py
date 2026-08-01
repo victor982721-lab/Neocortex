@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_schema_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -7,6 +12,9 @@ import pytest
 
 from _04_Nucleo_Operativo import semantic_schema
 from _04_Nucleo_Operativo import semantic_state
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _create_version_two(path: Path) -> None:
@@ -208,3 +216,4 @@ def test_new_schema_records_exact_complete_migration_history(tmp_path: Path) -> 
                 "SELECT version FROM schema_migrations ORDER BY version"
             )
         ) == (1, 2, 3, 4, 5, 6)
+# endregion [02]

@@ -1,14 +1,23 @@
 """Validation and normalization for immutable Knowledge telemetry contracts.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_contract_telemetry.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 The public dataclasses remain in ``knowledge_contracts`` to preserve their
 historical identity and pickle metadata. Runtime imports in this module never
 point back to that facade.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .knowledge_contracts import (
@@ -302,3 +311,4 @@ __all__ = [
     "validate_query_telemetry",
     "validate_telemetry_clock",
 ]
+# endregion [02]

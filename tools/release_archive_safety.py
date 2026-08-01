@@ -1,5 +1,11 @@
 """Low-level bounded readers for offline release artifact inspection."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_archive_safety.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import gzip
@@ -21,6 +27,9 @@ from _04_Nucleo_Operativo.zip_safety import (
     ZipStructureError,
     inspect_zip_structure,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _CHUNK_BYTES = 1024 * 1024
@@ -504,3 +513,4 @@ __all__ = [
     "ScannedMember",
     "scan_archive",
 ]
+# endregion [02]

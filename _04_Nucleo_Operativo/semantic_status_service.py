@@ -1,11 +1,20 @@
 """Bounded read-only inspection of semantic state."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_status_service.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
 
 from .semantic_service_contracts import SEMANTIC_DATABASE_NAME, SemanticStatus
 from .semantic_state import _generation_summary_rows, semantic_database
+# endregion [01]
+
+# region [02] Implementación
 
 
 def semantic_status(
@@ -68,3 +77,4 @@ def semantic_status(
         counts,
         generation_summaries,
     )
+# endregion [02]

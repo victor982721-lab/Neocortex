@@ -1,5 +1,11 @@
 """Compatibility seams for the incremental Knowledge Search extraction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_modularization_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -39,6 +45,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     execute_knowledge_search,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+# endregion [01]
+
+# region [02] Implementación
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -750,3 +759,4 @@ def test_code_metadata_cleanup_preserves_primary_error_when_close_also_fails(
 
     assert events == ["execute", "close"]
     assert raised.value is primary
+# endregion [02]

@@ -1,5 +1,11 @@
 """Candidate reduction and exact, non-destructive duplicate planning."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/planner.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from .hashing import (
@@ -21,6 +27,9 @@ from .planning_pipeline import (
     PlanningSession,
 )
 from _03_Progreso import ProgressCallback
+# endregion [01]
+
+# region [02] Implementación
 
 
 class DedupPlanner:
@@ -71,3 +80,4 @@ class DedupPlanner:
             capture_snapshot=snapshot_path,
             exact_matcher=files_equal_exact,
         ).run()
+# endregion [02]

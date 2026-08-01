@@ -1,9 +1,15 @@
 """Stable compatibility facade for the modular semantic-state repositories."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_state.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 # The imports in this module intentionally preserve the historical public and
 # private compatibility surface while implementations live in cohesive modules.
 # ruff: noqa: F401
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import heapq
@@ -148,6 +154,9 @@ from .semantic_search_repository import (
     search_exact_evidence_page,
     search_exact_page,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def publish_semantic_evidence_entities(
@@ -179,3 +188,4 @@ def publish_semantic_evidence_entities(
         _max_entities=MAX_EVIDENCE_ENTITIES_PER_PUBLICATION,
         _max_rows=MAX_EVIDENCE_ROWS_PER_PUBLICATION,
     )
+# endregion [02]

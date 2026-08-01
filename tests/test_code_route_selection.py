@@ -1,5 +1,11 @@
 """Regression coverage for code-route candidate selection semantics."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_route_selection.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,6 +15,9 @@ from _02_Deduplicacion import FileSnapshot
 from _04_Nucleo_Operativo.code_contracts import CodeRouteConfig
 from _04_Nucleo_Operativo.code_route import CodeRoute
 from _04_Nucleo_Operativo.route_filters import CandidateSelection
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(path: Path) -> FileSnapshot:
@@ -116,3 +125,4 @@ def test_status_and_diagnostic_selection_uses_current_code_state(tmp_path: Path)
     assert summary.cache_hits == 1
     assert summary.processed == 0
 
+# endregion [02]

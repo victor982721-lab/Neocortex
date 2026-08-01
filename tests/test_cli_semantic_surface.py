@@ -1,5 +1,11 @@
 """Compatibility contract for the flat multimodal Semantic CLI surface."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_semantic_surface.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -8,6 +14,9 @@ import pytest
 
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 SEMANTIC_GROUP_TITLE = "Multimodal semantic index"
@@ -352,3 +361,4 @@ def test_semantic_validation_error_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+# endregion [02]

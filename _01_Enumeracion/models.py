@@ -1,9 +1,18 @@
 """Public immutable data models."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/models.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+# endregion [01]
+
+# region [02] Implementación
 
 
 FILE_ATTRIBUTE_DIRECTORY = 0x00000010
@@ -81,3 +90,4 @@ class UsnChangeBatch:
     cursor_before: JournalCursor
     cursor_after: JournalCursor
     records: tuple[NtfsEntry, ...]
+# endregion [02]

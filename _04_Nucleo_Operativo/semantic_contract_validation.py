@@ -1,5 +1,11 @@
 """Pure validation helpers for the public Semantic service contracts."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_contract_validation.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -7,6 +13,9 @@ import math
 from collections.abc import Set
 from pathlib import Path
 from typing import TYPE_CHECKING
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .semantic_service_contracts import (
@@ -638,3 +647,4 @@ def validate_semantic_plan(
     _validate_plan_content_aggregates(plan)
     _validate_plan_cost_aggregates(plan)
     _validate_plan_operational_state(plan)
+# endregion [02]

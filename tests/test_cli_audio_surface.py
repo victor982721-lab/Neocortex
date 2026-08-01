@@ -1,5 +1,11 @@
 """Compatibility contract for the flat Audio/video Whisper CLI surface."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_audio_surface.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -9,6 +15,9 @@ import pytest
 
 from _04_Nucleo_Operativo.cli_parser import build_parser, decimal_megabytes
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 AUDIO_GROUP_TITLE = "Audio/video Whisper transcription route"
@@ -378,3 +387,4 @@ def test_audio_validation_error_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+# endregion [02]

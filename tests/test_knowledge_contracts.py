@@ -1,5 +1,11 @@
 """Stable, immutable contracts for the read-only Knowledge Plane."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_contracts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
@@ -36,6 +42,9 @@ from _04_Nucleo_Operativo.knowledge_contracts import (
     RevisionState,
     SnapshotConsistency,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _context_plan(
@@ -774,3 +783,4 @@ def test_context_bundle_validates_and_serializes_typed_graph_references() -> Non
             contradiction_bundle,
             contradictions=(contradiction, contradiction),
         )
+# endregion [02]

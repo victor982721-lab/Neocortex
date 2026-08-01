@@ -1,5 +1,11 @@
 """Resumable, bounded-memory consumption of subsequent USN changes."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/consumer.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -15,6 +21,9 @@ from .models import (
 )
 from .parser import parse_journal_buffer
 from .windows import VolumeHandle, normalize_volume
+# endregion [01]
+
+# region [02] Implementación
 
 
 ALL_REASONS = 0xFFFFFFFF
@@ -225,3 +234,4 @@ def consume_changes(
     """Create a continuous reader beginning at an exact durable cursor."""
 
     return UsnJournalReader(volume, start, **kwargs)
+# endregion [02]

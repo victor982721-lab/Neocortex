@@ -1,5 +1,11 @@
 """Fast non-cryptographic fingerprints with mutation detection."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/hashing.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -9,6 +15,9 @@ from pathlib import Path
 from .errors import FileChangedError, MissingDependencyError
 from .models import FileSnapshot
 from .path_io import absolute_display_path, native_io_path
+# endregion [01]
+
+# region [02] Implementación
 
 try:
     import xxhash
@@ -151,3 +160,4 @@ def snapshot_path(path: str | Path) -> FileSnapshot:
         mtime_ns=stat.st_mtime_ns,
         birthtime_ns=birthtime_ns,
     )
+# endregion [02]

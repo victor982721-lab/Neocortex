@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_pdf_route_lifecycle.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from unittest.mock import Mock
@@ -14,6 +19,9 @@ from _04_Nucleo_Operativo.pdf_route_models import (
     DocumentResult,
     PdfRouteSummary,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_run_delegates_phases_in_durable_order() -> None:
@@ -150,3 +158,4 @@ def test_structural_restart_resets_attempt_but_retains_diagnostics_context() -> 
     assert state.warning_count == 2
     assert state.warning_samples == ("warning",)
     assert state.recovery_evidence is recovery
+# endregion [02]

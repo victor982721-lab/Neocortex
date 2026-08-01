@@ -1,5 +1,11 @@
 """Concurrent route view and review-evidence repository."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/framework_route_state.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -32,6 +38,9 @@ from .review import (
 from .review_evidence import _materialize_review_decision
 from .route_filters import CandidateSelection, framework_selection_predicate
 from .sqlite_paths import existing_sqlite_uri, readonly_sqlite_uri
+# endregion [01]
+
+# region [02] Implementación
 
 
 REVIEW_RECONCILIATION_BATCH_SIZE = 256
@@ -934,3 +943,4 @@ class FrameworkRouteState:
                 return decision_id
         finally:
             connection.close()
+# endregion [02]

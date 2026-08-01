@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_release_windows_ntfs.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ast
@@ -38,6 +43,9 @@ from tools.release_windows_receipts import (
     ReleaseTransitionError,
     TransitionEffectUncertainError,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows NTFS contract")
@@ -1623,3 +1631,4 @@ def test_real_ops_integrate_with_w1_promote_replay_and_rollback_stub(
     assert len(native.calls) == 2
     assert transition_launcher(rollback_request, ops=ops, native=native) == rolled_back
     assert len(native.calls) == 2
+# endregion [02]

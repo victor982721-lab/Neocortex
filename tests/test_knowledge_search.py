@@ -1,5 +1,11 @@
 """Evidence-key fusion and real owner reuse for Knowledge search."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -61,6 +67,9 @@ from _04_Nucleo_Operativo.semantic_models import (
     fingerprint_text,
 )
 from tests.semantic_test_backend import DeterministicTestBackend
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _snapshot(*owners: OwnerSnapshot) -> KnowledgeSnapshot:
@@ -1843,3 +1852,4 @@ def test_exact_execution_passes_the_planned_candidate_limit(
 
     assert result == ({}, [], 0, False, ())
     assert observed_limits == [step.candidate_limit]
+# endregion [02]

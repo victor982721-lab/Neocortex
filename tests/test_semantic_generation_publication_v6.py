@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_generation_publication_v6.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -41,6 +46,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     start_embedding_generation,
     upsert_semantic_item,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _model() -> EmbeddingModelSpec:
@@ -715,3 +723,4 @@ def test_v5_migration_abstains_from_unknown_objects_without_mutation(
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
             )
         ) == before_objects
+# endregion [02]

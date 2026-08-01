@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_worker_shutdown.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -10,6 +15,9 @@ from types import SimpleNamespace
 
 from _05_Interfaz.protocol import decode_message
 from _05_Interfaz.worker import _summary_payload
+# endregion [01]
+
+# region [02] Implementación
 
 
 class UiWorkerShutdownTests(unittest.TestCase):
@@ -109,3 +117,4 @@ class UiWorkerShutdownTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

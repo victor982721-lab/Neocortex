@@ -1,5 +1,11 @@
 """Tests-first extraction contracts for the Knowledge Search inventory channel."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_inventory_extraction_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import ast
@@ -38,6 +44,9 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     plan_knowledge_query,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+# endregion [01]
+
+# region [02] Implementación
 
 
 PUBLIC_MODULE = "_04_Nucleo_Operativo.knowledge_search"
@@ -2521,3 +2530,4 @@ def test_inventory_limit_rollback_failure_attempts_one_fallback_rollback(
     ]
     assert report.rows_scanned == 0
     assert report.reason == "owner_read_failed:OperationalError"
+# endregion [02]

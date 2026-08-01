@@ -1,9 +1,15 @@
 """Content retrieval and evidence materialization for Knowledge Search.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_search_content.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 Providers and facade seams are injected on every call. This module contains no
 dependency back to knowledge_search and captures no mutable facade defaults.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -31,6 +37,9 @@ from .semantic_lexical import (
 )
 from .semantic_models import ContentFingerprint, ResolvedSearchHit
 from .sqlite_cancellation import SQLiteCancellationBridge
+# endregion [01]
+
+# region [02] Implementación
 
 if TYPE_CHECKING:
     from .semantic_service_contracts import (
@@ -855,3 +864,4 @@ def exact_rankings(
 
 
 __all__: tuple[str, ...] = ()
+# endregion [02]

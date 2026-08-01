@@ -1,5 +1,11 @@
 """Exact stage-evidence commitments for Windows launcher transitions."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_windows_evidence.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +26,9 @@ from tools.release_windows_receipts import (
     stage_evidence_from_payload,
     stage_evidence_payload,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class StageEvidenceOperations(Protocol):
@@ -328,3 +337,4 @@ __all__ = [
     "stage_state",
     "write_stage_evidence",
 ]
+# endregion [02]

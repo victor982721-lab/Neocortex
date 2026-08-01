@@ -1,5 +1,11 @@
 """Compatibility and isolation contracts for extracted CLI families."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_family_boundaries.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -17,6 +23,9 @@ from _04_Nucleo_Operativo.cli_app import main
 from _04_Nucleo_Operativo.cli_operations import DIRECT_OPERATIONS
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 SEMANTIC_DIRECT_ARGUMENTS = (
@@ -269,3 +278,4 @@ def test_docx_office_validation_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+# endregion [02]

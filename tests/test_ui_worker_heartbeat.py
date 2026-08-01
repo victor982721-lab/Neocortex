@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_worker_heartbeat.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from _03_Progreso import ProgressEvent
@@ -6,6 +11,9 @@ from _05_Interfaz.worker import (
     _reset_active_progress,
     _track_progress,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_worker_heartbeat_tracks_only_unfinished_progress() -> None:
@@ -22,3 +30,4 @@ def test_worker_heartbeat_tracks_only_unfinished_progress() -> None:
         )
     )
     assert _active_progress_snapshot() == []
+# endregion [02]

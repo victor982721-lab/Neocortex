@@ -1,9 +1,15 @@
 """Stable facade for safe technical-document organization.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_organization.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 Planning only persists deterministic proposals. Filesystem mutation remains isolated
 behind the explicitly invoked apply functions.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from .document_organization_application import (
@@ -27,6 +33,9 @@ from .document_organization_models import (
     list_organization_plans,
 )
 from .document_organization_planning import plan_document_organization
+# endregion [01]
+
+# region [02] Implementación
 
 __all__ = (
     "DEFAULT_ORGANIZATION_DIRECTORY_NAME",
@@ -44,3 +53,4 @@ __all__ = (
     "list_organization_plans",
     "plan_document_organization",
 )
+# endregion [02]

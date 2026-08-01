@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_text_staging_session.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import itertools
@@ -39,6 +44,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     start_embedding_generation,
     upsert_semantic_item,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 CHUNKING = TextChunkingConfig(
@@ -634,3 +642,4 @@ def test_write_lock_is_released_after_every_bounded_commit(
     assert _stage(database, generation_id, records) == (1, 260, 260)
     assert successful_probe_writers == 3
     assert _counts(database) == (1, 260, 260)
+# endregion [02]

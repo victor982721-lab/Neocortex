@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_release_windows.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -30,6 +35,9 @@ from tools.release_windows import (
     recover_pending_transition,
     transition_launcher,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _OLD_DESCRIPTOR = b"owner=victor;dacl=launcher-v1"
@@ -2355,3 +2363,4 @@ def test_stage_evidence_mismatch_after_native_preserves_backup_and_surfaces_unce
     assert (sidecar.exists(), sidecar.read_bytes() if sidecar.exists() else None) == (
         expected_state
     )
+# endregion [02]

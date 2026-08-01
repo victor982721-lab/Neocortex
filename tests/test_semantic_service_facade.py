@@ -1,5 +1,11 @@
 """Compatibility contract for the stable semantic-service facade."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_service_facade.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -7,6 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from _04_Nucleo_Operativo import semantic_service as service
+# endregion [01]
+
+# region [02] Implementación
 
 
 EXPECTED_PUBLIC_API = {
@@ -209,3 +218,4 @@ def test_semantic_plan_facade_forwards_the_complete_read_only_request() -> None:
         max_scratch_bytes=131_072,
         cancellation_check=cancel,
     )
+# endregion [02]

@@ -1,5 +1,11 @@
 """Pure contracts and canonical receipts for Windows launcher transitions."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_windows_receipts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import base64
@@ -10,6 +16,9 @@ import string
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
+# endregion [01]
+
+# region [02] Implementación
 
 
 SCHEMA_VERSION = 1
@@ -889,3 +898,4 @@ __all__ = [
     "validate_result_evidence",
     "validate_stage_snapshot",
 ]
+# endregion [02]

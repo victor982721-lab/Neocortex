@@ -1,5 +1,11 @@
 """Adversarial coverage for the durable inventory/mutation boundary."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_durable_mutation_boundary.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import shutil
@@ -27,6 +33,9 @@ from _04_Nucleo_Operativo.self_analysis import (
 )
 from _04_Nucleo_Operativo.state import FrameworkRouteState, FrameworkState
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _normal_run(
@@ -544,3 +553,4 @@ def test_in_memory_main_database_is_never_a_durable_owner(tmp_path: Path) -> Non
             match="not a durable file",
         ):
             state.corpus_mutation_guard(run_id)
+# endregion [02]

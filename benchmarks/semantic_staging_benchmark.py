@@ -1,5 +1,11 @@
 """Compare legacy per-operation staging with the bounded persistent session."""
+# region [00] Contexto del módulo
+# Módulo: benchmarks/semantic_staging_benchmark.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -15,6 +21,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import xxhash
+# endregion [01]
+
+# region [02] Implementación
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -377,3 +386,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_state_facade.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,6 +18,9 @@ from _04_Nucleo_Operativo import (
 from _04_Nucleo_Operativo import semantic_item_repository as item_repository
 from _04_Nucleo_Operativo import semantic_schema, semantic_state
 from _04_Nucleo_Operativo import semantic_search_repository as search_repository
+# endregion [01]
+
+# region [02] Implementación
 
 
 _HISTORICAL_OPERATIONS = {
@@ -133,3 +141,4 @@ def test_evidence_publication_wrapper_forwards_facade_limits(
         "_max_entities": 9,
         "_max_rows": 27,
     }
+# endregion [02]

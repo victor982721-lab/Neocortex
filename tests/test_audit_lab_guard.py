@@ -1,5 +1,11 @@
 """Regression coverage for fail-closed audit process containment."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_audit_lab_guard.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,6 +19,9 @@ from tests.audit_lab_guard import (
     validate_audit_lab_environment,
     validate_pytest_artifact_paths,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _environment(root: Path, temp: Path, pycache: Path) -> dict[str, str]:
@@ -122,3 +131,4 @@ def test_audit_root_must_be_absolute_local(tmp_path: Path, raw: str) -> None:
     del tmp_path
     with pytest.raises(AuditLabContractError, match="absolute local path"):
         validate_audit_lab_environment(raw, environment={}, selected_temp_directory=raw)
+# endregion [02]

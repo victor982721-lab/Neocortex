@@ -1,5 +1,11 @@
 """Ordered document-kind specialists for explainable classification."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_kinds.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
@@ -14,6 +20,9 @@ from .document_taxonomy_references import (
     _reference_position,
 )
 from .document_taxonomy_vocabulary import _KIND_PATTERNS
+# endregion [01]
+
+# region [02] Implementación
 
 
 _HIGH_SPECIFICITY_KINDS = frozenset(
@@ -1573,3 +1582,4 @@ def _calibration_certificate_evidence(
     )
     score = 0.97 if heading_scope in {"path", "title"} else 0.88
     return ScoredLabel("certificado_calibracion", score, evidence)
+# endregion [02]

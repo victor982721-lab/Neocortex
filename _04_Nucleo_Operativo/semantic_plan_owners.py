@@ -1,4 +1,9 @@
 """Read-only durable-owner validation and snapshot projection.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_plan_owners.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 This internal module owns bounded SQLite retry, schema/data-version fences,
 shared physical text-owner snapshots, and read-only image/dedup attachment.
@@ -6,6 +11,7 @@ Projection callbacks are explicit so the planner facade retains dynamic test
 and integration seams without importing the facade back into this leaf.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -54,6 +60,9 @@ from .sqlite_schema_contract import (
     read_application_schema_version,
     validate_sqlite_schema_contract,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 # These retry bounds are part of the planner's deterministic lock policy.
@@ -894,3 +903,4 @@ def _plan_source_snapshots(
             )
         )
     return tuple(source_plans)
+# endregion [02]

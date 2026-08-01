@@ -1,5 +1,11 @@
 """Compatibility contract for the flat read-only Knowledge CLI surface."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_knowledge_surface.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -8,6 +14,9 @@ import pytest
 
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 KNOWLEDGE_GROUP_TITLE = "Read-only Knowledge Plane"
@@ -223,3 +232,4 @@ def test_knowledge_validation_error_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+# endregion [02]

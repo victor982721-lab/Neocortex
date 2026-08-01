@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_t_framework.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import io
@@ -46,6 +51,9 @@ from _03_Progreso import (
 from Orquestador import _has_strict_route_errors, _parser, _validate_arguments
 from tests.internal_paths_test_support import begin_signed_normal_run
 from tests.synthetic_usn import SyntheticUsnJournal
+# endregion [01]
+
+# region [02] Implementación
 
 
 class CommandLineTests(unittest.TestCase):
@@ -892,3 +900,4 @@ class OrchestratorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

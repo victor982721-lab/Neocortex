@@ -1,5 +1,11 @@
 """Canonical CLI integration for the foreground incremental watcher."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_cli_watcher.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -15,6 +21,9 @@ from _04_Nucleo_Operativo.watcher import (
     WatcherRunSummary,
     WatcherSummary,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _summary(
@@ -215,3 +224,4 @@ def test_watch_dispatch_returns_error_for_retained_watcher_failures(tmp_path) ->
         ),
     ):
         assert dispatch_direct(args) == 2
+# endregion [02]

@@ -1,5 +1,11 @@
 """Fail-closed CLI contract for protected source-tree analysis."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_self_analysis_cli.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -10,6 +16,9 @@ import pytest
 from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _validate(*arguments: str):
@@ -149,3 +158,4 @@ def test_self_analysis_rejects_non_directory_root(tmp_path: Path) -> None:
             "--state-directory",
             str(tmp_path / "state"),
         )
+# endregion [02]

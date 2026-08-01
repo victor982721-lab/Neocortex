@@ -1,5 +1,11 @@
 """Strict parsers for buffers returned by FSCTL_ENUM_USN_DATA."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/parser.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import struct
@@ -8,6 +14,9 @@ from datetime import UTC, datetime, timedelta
 
 from .errors import CorruptBufferError, UnsupportedRecordVersionError
 from .models import NtfsEntry
+# endregion [01]
+
+# region [02] Implementación
 
 
 _FILETIME_EPOCH = datetime(1601, 1, 1, tzinfo=UTC)
@@ -164,3 +173,4 @@ def _parse_v3(record: memoryview, minor: int) -> NtfsEntry:
         record_major_version=3,
         record_minor_version=minor,
     )
+# endregion [02]

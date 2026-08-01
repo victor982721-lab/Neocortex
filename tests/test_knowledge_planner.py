@@ -1,5 +1,11 @@
 """Deterministic query planning without an LLM dependency."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_planner.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import replace
@@ -14,6 +20,9 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     _knowledge_plan_identifier,
     plan_knowledge_query,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _semantic_steps(plan: KnowledgePlan) -> tuple[tuple[str, bool], ...]:
@@ -761,3 +770,4 @@ def test_plan_json_is_stable_for_unicode_filters() -> None:
         ).to_json()
         == expected_json
     )
+# endregion [02]

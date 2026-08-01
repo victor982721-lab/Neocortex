@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_ui_protocol.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import unittest
@@ -9,6 +14,9 @@ from _05_Interfaz.protocol import (
     encode_message,
     progress_payload,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class UiProtocolTests(unittest.TestCase):
@@ -49,3 +57,4 @@ class UiProtocolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

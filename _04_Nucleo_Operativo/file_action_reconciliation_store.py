@@ -1,9 +1,15 @@
 """Explicit durable recording for read-only file-action reconciliations.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/file_action_reconciliation_store.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 This repository stores observation evidence only.  It never performs, retries,
 or authorizes a filesystem mutation.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -14,6 +20,9 @@ from dataclasses import dataclass
 import xxhash
 
 from .file_action_recovery import FileActionReconciliation
+# endregion [01]
+
+# region [02] Implementación
 
 
 FILE_ACTION_RECONCILIATION_EVENT_SCHEMA_VERSION = 1
@@ -423,3 +432,4 @@ __all__ = [
     "RecordedFileActionReconciliation",
     "record_file_action_reconciliation",
 ]
+# endregion [02]

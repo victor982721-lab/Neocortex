@@ -1,5 +1,11 @@
 """End-to-end contracts for protected code-only orchestration."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_self_analysis_orchestrator.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -25,6 +31,9 @@ from _04_Nucleo_Operativo.self_analysis import (
     build_self_analysis_inventory_policy,
 )
 from tests.synthetic_usn import SyntheticUsnJournal
+# endregion [01]
+
+# region [02] Implementación
 
 
 _FIXTURE_CODE_SIGNATURE = "code-v2:fixture|code-analyzers-v1:fixture"
@@ -500,3 +509,4 @@ def test_failed_incremental_checkpoint_cannot_advance_past_durable_boundary(
     assert recovered.inventory_mode == "full"
     assert recovered.scan.scan_id != durable.scan.scan_id
     assert journal.raw_volume_open_attempts == 0
+# endregion [02]

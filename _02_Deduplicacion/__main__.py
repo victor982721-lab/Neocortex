@@ -1,5 +1,11 @@
 """Deprecated compatibility entry point delegated to integrated NeoCortex."""
+# region [00] Contexto del módulo
+# Módulo: _02_Deduplicacion/__main__.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import argparse
@@ -8,6 +14,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from _04_Nucleo_Operativo.app_paths import default_state_directory
+# endregion [01]
+
+# region [02] Implementación
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
@@ -58,3 +67,4 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+# endregion [02]

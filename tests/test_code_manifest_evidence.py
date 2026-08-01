@@ -1,5 +1,11 @@
 """Focused contract tests for bounded project-manifest evidence."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_manifest_evidence.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,6 +14,9 @@ import pytest
 
 from _04_Nucleo_Operativo.code_analyzer_common import manifest_evidence
 from _04_Nucleo_Operativo.code_contracts import DiagnosticSeverity
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_python_manifest_preserves_project_and_dependency_evidence(
@@ -122,3 +131,4 @@ def test_invalid_manifest_configuration_retains_versioned_diagnostic(
     assert diagnostic.tool_version == "stdlib"
     assert diagnostic.confirmed is True
     assert diagnostic.confidence == 1.0
+# endregion [02]

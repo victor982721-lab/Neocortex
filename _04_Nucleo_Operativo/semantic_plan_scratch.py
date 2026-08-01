@@ -1,5 +1,11 @@
 """Bounded private scratch storage for exact Semantic planning."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_plan_scratch.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import shutil
@@ -21,6 +27,9 @@ from .semantic_plan_errors import (
     cleanup_preserving_primary as _cleanup_preserving_primary,
 )
 from .sqlite_cancellation import SQLiteCancellationBridge
+# endregion [01]
+
+# region [02] Implementación
 
 
 CONTENT_BATCH_SIZE = 512
@@ -417,3 +426,4 @@ __all__ = [
     "CONTENT_BATCH_SIZE",
     "DEFAULT_MAX_SCRATCH_BYTES",
 ]
+# endregion [02]

@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_image_schema_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -7,6 +12,9 @@ import pytest
 
 from _04_Nucleo_Operativo.image_state import SCHEMA_VERSION, initialize_image_state
 from _04_Nucleo_Operativo.sqlite_schema_contract import SQLiteSchemaContractError
+# endregion [01]
+
+# region [02] Implementación
 
 
 _LEGACY_IMAGE_DDL = """CREATE TABLE images(
@@ -329,3 +337,4 @@ def test_failed_legacy_upgrade_rolls_back_schema_and_metadata(tmp_path: Path) ->
     assert columns == ("file_key",)
     assert rows == [("legacy-key",)]
     assert _schema_names(database, "index") == schema_before
+# endregion [02]

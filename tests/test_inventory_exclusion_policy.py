@@ -1,5 +1,11 @@
 """Shared full-scan and USN exclusion-policy regressions."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_inventory_exclusion_policy.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -21,6 +27,9 @@ from _04_Nucleo_Operativo import (
 from _04_Nucleo_Operativo import reconcile as reconcile_module
 from _04_Nucleo_Operativo.reconcile import reconcile_usn_window
 from _04_Nucleo_Operativo.state import FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _write(path: Path, payload: bytes = b"fixture") -> None:
@@ -668,3 +677,4 @@ def test_usn_rejects_a_policy_mismatch_before_consuming_changes(
             )
 
     assert consumed is False
+# endregion [02]

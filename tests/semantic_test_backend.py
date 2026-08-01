@@ -1,5 +1,11 @@
 """Deterministic embedding backend reserved for semantic test fixtures."""
+# region [00] Contexto del módulo
+# Módulo: tests/semantic_test_backend.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from typing import Sequence
@@ -12,6 +18,9 @@ from _04_Nucleo_Operativo.semantic_models import (
     EmbeddingRequest,
     normalize_vector,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 class DeterministicTestBackend:
@@ -65,3 +74,4 @@ class DeterministicTestBackend:
                 )
             )
         return tuple(results)
+# endregion [02]

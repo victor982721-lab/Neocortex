@@ -1,5 +1,11 @@
 """Risk-driven regressions found by the 2026-07-25 continuation audit."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_audit_20260725_lifecycle_regressions.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -31,6 +37,9 @@ from _04_Nucleo_Operativo.semantic_state import (
     semantic_database,
 )
 from tests.internal_paths_test_support import begin_signed_normal_run
+# endregion [01]
+
+# region [02] Implementación
 
 
 NOW_NS = 10_000_000_000
@@ -384,3 +393,4 @@ def test_framework_exposes_all_cross_store_inventory_holds(tmp_path: Path) -> No
         state._connection.commit()
 
         assert state.referenced_inventory_scan_ids() == (3, 7)
+# endregion [02]

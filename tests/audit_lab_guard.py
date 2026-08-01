@@ -1,5 +1,11 @@
 """Fail-closed validation for explicitly activated audit test laboratories."""
+# region [00] Contexto del módulo
+# Módulo: tests/audit_lab_guard.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -7,6 +13,9 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+# endregion [01]
+
+# region [02] Implementación
 
 
 AUDIT_LAB_ENVIRONMENT = "NEOCORTEX_AUDIT_LAB_ROOT"
@@ -159,3 +168,4 @@ __all__ = [
     "validate_audit_lab_environment",
     "validate_pytest_artifact_paths",
 ]
+# endregion [02]

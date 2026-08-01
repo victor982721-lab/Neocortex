@@ -1,5 +1,11 @@
 """Query normalization and deterministic intent inference for knowledge plans."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/knowledge_planner_intents.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -16,6 +22,9 @@ from .knowledge_planner_exact import (
     token_words,
 )
 from .knowledge_planner_steps import validated_date
+# endregion [01]
+
+# region [02] Implementación
 
 
 _ExactTerms = tuple[tuple[str, ...], bool, bool, bool, str, str]
@@ -386,3 +395,4 @@ __all__ = (
     "infer_query_plan_signals",
     "normalize_knowledge_query",
 )
+# endregion [02]

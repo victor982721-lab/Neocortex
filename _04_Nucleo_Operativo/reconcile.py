@@ -1,5 +1,11 @@
 """Reconcile a scoped inventory with a finite USN journal window."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/reconcile.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -27,6 +33,9 @@ from _02_Deduplicacion.inventory_scan import (
     resolve_inventory_exclusion_policy,
 )
 from _03_Progreso import ProgressCallback, ProgressEvent, emit_progress
+# endregion [01]
+
+# region [02] Implementación
 
 
 USN_REASON_FILE_DELETE = 0x00000200
@@ -383,3 +392,4 @@ def reconcile_usn_window(
         state.files_removed,
         state.requires_rescan,
     )
+# endregion [02]

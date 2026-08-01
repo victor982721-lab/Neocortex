@@ -1,5 +1,11 @@
 """Synthetic acceptance for self-analysis through both read-only search planes."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_self_analysis_e2e_knowledge.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,6 +30,9 @@ from _04_Nucleo_Operativo.models import FrameworkConfig, SelfAnalysisRunResult
 from _04_Nucleo_Operativo.orchestrator import FrameworkOrchestrator
 from neocortex import __version__
 from tests.synthetic_usn import SyntheticUsnJournal
+# endregion [01]
+
+# region [02] Implementación
 
 
 _SYMBOL = "verify_breaker_trip"
@@ -152,3 +161,4 @@ def test_builtin_self_analysis_is_searchable_with_cited_untrusted_context(
     assert '"end_line":3' in rendered
 
     assert _root_bytes(root) == original
+# endregion [02]

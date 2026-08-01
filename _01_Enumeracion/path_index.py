@@ -1,5 +1,11 @@
 """Optional bounded-memory, SQLite-backed parent/name index."""
+# region [00] Contexto del módulo
+# Módulo: _01_Enumeracion/path_index.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from collections import OrderedDict
@@ -13,6 +19,9 @@ from .path_index_schema import (
     configure_path_index_connection,
     initialize_path_index_schema,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 USN_REASON_FILE_DELETE = 0x00000200
@@ -213,3 +222,4 @@ class SqlitePathIndex:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+# endregion [02]

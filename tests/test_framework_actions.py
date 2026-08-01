@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_framework_actions.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -15,6 +20,9 @@ from _04_Nucleo_Operativo.actions import FrameworkActions
 from _04_Nucleo_Operativo.content_types import detect_content_type
 from _04_Nucleo_Operativo.state import FrameworkState
 from tests.internal_paths_test_support import begin_signed_normal_run
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _framework_database(base: Path) -> Path:
@@ -463,3 +471,4 @@ class ActionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

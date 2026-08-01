@@ -1,5 +1,11 @@
 """Compatibility contracts for incremental Semantic planner extraction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_planner_modularization_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -11,6 +17,9 @@ from pathlib import Path
 import pytest
 
 from _04_Nucleo_Operativo import semantic_planner, semantic_service
+# endregion [01]
+
+# region [02] Implementación
 
 
 EXPECTED_PLANNER_ALL = [
@@ -294,3 +303,4 @@ def test_owner_planner_cold_import_orders_keep_live_facade_bindings(
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "ok"
+# endregion [02]

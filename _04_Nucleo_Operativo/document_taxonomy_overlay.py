@@ -1,5 +1,11 @@
 """Bounded loading and validation for user-controlled taxonomy overlays."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/document_taxonomy_overlay.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import re
@@ -20,6 +26,9 @@ from .document_taxonomy_vocabulary import (
     BUILTIN_TAXONOMY_VERSION,
     builtin_taxonomy,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 MAX_TAXONOMY_BYTES = 1_048_576
 MAX_TAXONOMY_TABLES_PER_SECTION = 256
@@ -289,3 +298,4 @@ def _deduplicate_projects(values: Iterable[ProjectSpec]) -> tuple[ProjectSpec, .
             tuple(dict.fromkeys((*prior.aliases, *value.aliases))),
         )
     return tuple(merged.values())
+# endregion [02]

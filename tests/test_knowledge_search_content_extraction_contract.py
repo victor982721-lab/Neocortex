@@ -1,5 +1,11 @@
 """Compatibility and late-binding contracts for Knowledge Search CL4."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_content_extraction_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -45,6 +51,9 @@ from _04_Nucleo_Operativo.semantic_service import (
     SemanticRanking,
     SemanticSearchResult,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 PUBLIC_MODULE = "_04_Nucleo_Operativo.knowledge_search"
@@ -637,3 +646,4 @@ def test_materialization_wrapper_resolves_current_lower_helpers_and_constants(
         "start_ms",
         "end_ms",
     ]
+# endregion [02]

@@ -1,5 +1,11 @@
 """Hermetic internal-path policies for mutation-boundary tests."""
+# region [00] Contexto del módulo
+# Módulo: tests/internal_paths_test_support.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -14,6 +20,9 @@ from _04_Nucleo_Operativo.inventory_boundary import (
     build_normal_inventory_boundary,
 )
 from _04_Nucleo_Operativo.state import FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 def disjoint_internal_paths_policy(base: Path) -> InternalPathsPolicy:
@@ -78,3 +87,4 @@ def begin_signed_normal_run(
 
 
 __all__ = ["begin_signed_normal_run", "disjoint_internal_paths_policy"]
+# endregion [02]

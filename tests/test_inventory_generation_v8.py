@@ -1,10 +1,16 @@
 """Policy-bound dedup inventory schema v8 regression contracts.
+# region [00] Contexto del módulo
+# Módulo: tests/test_inventory_generation_v8.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 Every database and corpus in this module is a bounded ``tmp_path`` fixture.
 Legacy migrations preserve evidence but deliberately invalidate checkpoints
 whose producing exclusion policy cannot be proven.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -19,6 +25,9 @@ from _02_Deduplicacion import (
 )
 from _02_Deduplicacion import inventory_schema as inventory_schema_module
 from _02_Deduplicacion.errors import InventoryError
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _create_populated_v7(
@@ -194,3 +203,4 @@ def test_checkpoint_rejects_a_signature_that_differs_from_its_scan(
                 )
             )
         assert index.inventory_checkpoint(root) is None
+# endregion [02]

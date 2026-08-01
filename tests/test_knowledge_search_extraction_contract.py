@@ -1,5 +1,11 @@
 """Compatibility contracts for the Knowledge Search CL3 extraction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_extraction_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -31,6 +37,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     RankingExecution,
     fuse_evidence_rankings,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 PUBLIC_MODULE = "_04_Nucleo_Operativo.knowledge_search"
@@ -349,3 +358,4 @@ def test_fusion_dependencies_and_cancellation_remain_late_bound(
         )
     assert raised.value is expected
     assert checkpoints == 2
+# endregion [02]

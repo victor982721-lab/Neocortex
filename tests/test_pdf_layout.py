@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_pdf_layout.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import io
@@ -9,6 +14,9 @@ import fitz  # type: ignore[import-untyped]
 from PIL import Image, ImageDraw
 
 from _04_Nucleo_Operativo.pdf_layout import map_page_layout, signature_similarity
+# endregion [01]
+
+# region [02] Implementación
 
 
 class PdfLayoutTests(unittest.TestCase):
@@ -47,3 +55,4 @@ class PdfLayoutTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+# endregion [02]

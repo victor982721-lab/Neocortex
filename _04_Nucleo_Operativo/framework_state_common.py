@@ -1,5 +1,11 @@
 """Shared primitives for the framework state repositories."""
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/framework_state_common.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -23,6 +29,9 @@ from .internal_paths import (
 from .inventory_boundary import build_normal_inventory_boundary
 from .protected_content import canonical_protected_content_policy
 from .self_analysis import build_self_analysis_inventory_policy
+# endregion [01]
+
+# region [02] Implementación
 
 
 CACHE_PRUNE_BATCH_SIZE = 1000
@@ -605,3 +614,4 @@ def confirm_file_actions_applied(
                 evidence_json=receipt_json,
                 effect_receipt_json=receipt_json,
             )
+# endregion [02]

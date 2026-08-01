@@ -1,5 +1,11 @@
 """Regression tests for the framework SQLite schema contract."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_framework_schema_contract.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -8,6 +14,9 @@ import pytest
 
 from _04_Nucleo_Operativo.framework_schema import initialize_framework_schema
 from _04_Nucleo_Operativo.state import SCHEMA_VERSION, FrameworkState
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _objects(connection: sqlite3.Connection) -> set[tuple[str, str]]:
@@ -231,3 +240,4 @@ def test_keyboard_interrupt_during_state_construction_closes_connection(
         assert verification.execute(
             "SELECT name FROM sqlite_master WHERE name='metadata'"
         ).fetchone() is None
+# endregion [02]

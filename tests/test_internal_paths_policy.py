@@ -1,5 +1,11 @@
 """Behavioral contract for canonical NeoCortex-owned paths."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_internal_paths_policy.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -22,6 +28,9 @@ from _04_Nucleo_Operativo.internal_paths import (
     InternalPathsPolicy,
     effective_inventory_policy_signature,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,3 +388,4 @@ def test_effective_inventory_signature_binds_both_layers() -> None:
     assert protected == protected_repeated
     assert protected.startswith("effective-inventory-policy-v2:xxh3_128:")
     assert protected not in {first, protected_changed}
+# endregion [02]

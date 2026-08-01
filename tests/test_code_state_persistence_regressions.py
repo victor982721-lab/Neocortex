@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_code_state_persistence_regressions.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -30,6 +35,9 @@ from _04_Nucleo_Operativo.code_state import CodeState, SkippedCodeObservation
 from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes, fingerprint_text
 from _04_Nucleo_Operativo.sqlite_cancellation import SQLiteCancellationBridge
 from _04_Nucleo_Operativo.sqlite_paths import readonly_sqlite_uri
+# endregion [01]
+
+# region [02] Implementación
 
 
 PROCESSING_SIGNATURE = "code-state-regression-v1"
@@ -1587,3 +1595,4 @@ def test_set_oriented_resolver_update_plans_are_not_correlated(
             for plan in wrapped.plans
             for detail in plan
         )
+# endregion [02]

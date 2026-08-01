@@ -1,5 +1,11 @@
 """Phase-0 timing contracts and retry-safe Knowledge telemetry."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_telemetry.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 from dataclasses import replace
@@ -44,6 +50,9 @@ from tests.test_knowledge_context import _result as _context_result
 from tests.test_knowledge_service import _result as _service_result
 from tests.test_knowledge_service import _snapshot as _service_snapshot
 from tests.test_knowledge_service import _SnapshotSequence
+# endregion [01]
+
+# region [02] Implementación
 
 
 class _SequenceClock:
@@ -528,3 +537,4 @@ def test_context_timing_is_outside_the_pure_rendered_bundle(tmp_path: Path) -> N
     assert bundle.citation_ids == pure.citation_ids
     assert "telemetry" in bundle.to_dict()
     assert "knowledge_query_telemetry" not in bundle.rendered_context
+# endregion [02]

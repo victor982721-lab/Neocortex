@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_cache_sync_bounded.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
@@ -7,6 +12,9 @@ from _04_Nucleo_Operativo.document_cache_sync import (
     _PENDING_ACTION_SYNC_BATCH_SIZE,
     _sync_pending_file_actions,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_pending_file_action_sync_uses_bounded_batches() -> None:
@@ -84,3 +92,4 @@ def test_pending_file_action_sync_uses_bounded_batches() -> None:
     assert completed_row is not None
     assert tuple(completed_row) == (old_path, old_path)
     connection.close()
+# endregion [02]

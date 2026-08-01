@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_semantic_service_contracts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import inspect
@@ -27,6 +32,9 @@ from _04_Nucleo_Operativo.semantic_service_contracts import (
     SemanticStatus,
     SemanticWorkloadPlan,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 CONTRACT_CLASSES = (
@@ -761,3 +769,4 @@ def test_representative_valid_contract_graph_is_stable() -> None:
     assert plan.cost_complete is False
     assert plan.cost_calibrated is False
     assert plan.complete is False
+# endregion [02]

@@ -1,10 +1,16 @@
 """Pure Semantic plan configuration, projection and result assembly helpers.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/semantic_plan_results.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 This internal module owns immutable planning specifications and deterministic
 result construction. Durable owner validation and orchestration remain in the
 planner facade.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import itertools
@@ -47,6 +53,9 @@ from .semantic_sources import (
     iter_text_source_records,
     semantic_source_database,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 @dataclass(frozen=True, slots=True)
@@ -828,3 +837,4 @@ def assemble_semantic_plan(
         originals_verified=(False if configuration.scope in {"image", "all"} else None),
         execution_ready=None,
     )
+# endregion [02]

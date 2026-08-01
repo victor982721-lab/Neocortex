@@ -1,5 +1,11 @@
 """Fail-closed containment for tests that may invoke native file mutation."""
+# region [00] Contexto del módulo
+# Módulo: tests/mutation_containment.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -8,6 +14,9 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable, TypeVar
+# endregion [01]
+
+# region [02] Implementación
 
 
 _T = TypeVar("_T")
@@ -434,3 +443,4 @@ class ContainedMutationRoot:
 
 
 __all__ = ["ContainedMutationRoot", "MutationContainmentError", "MutationReceipt"]
+# endregion [02]

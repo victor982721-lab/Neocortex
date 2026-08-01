@@ -1,10 +1,16 @@
 """Identity-bound filesystem boundaries shared by inventory consumers.
+# region [00] Contexto del módulo
+# Módulo: _04_Nucleo_Operativo/inventory_boundary.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+
 
 This module is deliberately independent from orchestration and state
 repositories.  It captures the exact corpus, state, exclusion, and internal
 path policy that must agree before inventory reuse or filesystem mutation.
 """
 
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import os
@@ -32,6 +38,9 @@ from .protected_content import (
     ProtectedContentPolicy,
     canonical_protected_content_policy,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 _RESTRICTED_CODEX_DIRECTORY_NAMES = (
@@ -529,3 +538,4 @@ __all__ = [
     "state_sqlite_mutation_paths",
     "validate_authorized_state_path",
 ]
+# endregion [02]

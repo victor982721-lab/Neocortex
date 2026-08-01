@@ -1,3 +1,8 @@
+# region [00] Contexto del módulo
+# Módulo: tests/test_document_taxonomy_modularity.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
@@ -25,6 +30,9 @@ from _04_Nucleo_Operativo.document_taxonomy import (
     document_classifier_signature,
     semantic_label_inventory,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def _payload_fingerprint(value: Any) -> str:
@@ -146,3 +154,4 @@ def test_representative_classification_payload_is_byte_stable(
     classification = classify_document(signals)
 
     assert _payload_fingerprint(asdict(classification)) == expected_fingerprint
+# endregion [02]

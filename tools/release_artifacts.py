@@ -1,5 +1,11 @@
 """Fail-closed validation and reproducibility checks for release artifacts."""
+# region [00] Contexto del módulo
+# Módulo: tools/release_artifacts.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import base64
@@ -21,6 +27,9 @@ from pathlib import Path
 from typing import BinaryIO, Final, Literal
 
 from tools.release_archive_safety import ArchiveSafetyError, scan_archive
+# endregion [01]
+
+# region [02] Implementación
 
 
 SOURCE_DATE_EPOCH: Final = 1_785_369_600
@@ -796,3 +805,4 @@ __all__ = [
     "validate_sdist",
     "validate_wheel",
 ]
+# endregion [02]

@@ -1,5 +1,11 @@
 """Exact dataclass field and pickle metadata captured before CL3 extraction."""
+# region [00] Contexto del módulo
+# Módulo: tests/test_knowledge_search_extraction_fields.py
+# Propósito: documentación embebida y separación visual de regiones.
+# endregion [00]
 
+
+# region [01] Dependencias del módulo
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +17,9 @@ from _04_Nucleo_Operativo.knowledge_search import (
     KnowledgeSearchResult,
     RankingExecution,
 )
+# endregion [01]
+
+# region [02] Implementación
 
 
 def test_contract_field_topology_and_class_pickle_bytes_are_stable() -> None:
@@ -77,3 +86,4 @@ def test_contract_field_topology_and_class_pickle_bytes_are_stable() -> None:
     telemetry = KnowledgeSearchResult.__dataclass_fields__["telemetry"]
     assert telemetry.compare is False
     assert telemetry.repr is False
+# endregion [02]
