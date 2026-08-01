@@ -16,6 +16,7 @@ concurrency:
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
   PYTHONUTF8: "1"
   SOURCE_DATE_EPOCH: "1785369600"
 
@@ -26,10 +27,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up CPython 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
@@ -38,7 +39,7 @@ jobs:
       - name: Install validated development dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt setuptools
           python -m pip install -c constraints.txt ".[full,dev]"
           python -m pip check
 
@@ -69,10 +70,10 @@ jobs:
     timeout-minutes: 75
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up CPython 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
@@ -81,7 +82,7 @@ jobs:
       - name: Install validated test dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt setuptools
           python -m pip install -c constraints.txt ".[full,dev]"
           python -m pip check
 
@@ -118,7 +119,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
           path: coverage.xml
@@ -131,10 +132,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up CPython 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
           cache: pip
@@ -143,7 +144,7 @@ jobs:
       - name: Install build dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt setuptools build
           python -m pip install -c constraints.txt ".[dev]"
           python -m pip check
 
@@ -211,7 +212,7 @@ jobs:
           '@ | python -
 
       - name: Upload validated artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: neocortex-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}\neocortex-dist-final\*
