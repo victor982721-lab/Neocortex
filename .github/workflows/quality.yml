@@ -72,9 +72,14 @@ jobs:
             Write-Host 'No new Python files require a formatting check.'
             exit 0
           }
-          $Arguments = @('-m', 'ruff', 'format', '--check') + $Files
+          $Arguments = @('-m', 'ruff', 'format') + $Files
           & python @Arguments
           if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          & git diff --exit-code -- $Files
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error 'New Python files are not formatted; commit the diff above.'
             exit $LASTEXITCODE
           }
 
