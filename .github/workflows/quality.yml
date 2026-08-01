@@ -178,12 +178,39 @@ jobs:
       - name: Build two independent artifact sets
         shell: pwsh
         run: |
+          $Archive = Join-Path $env:RUNNER_TEMP 'neocortex-source.zip'
+          $SourceA = Join-Path $env:RUNNER_TEMP 'neocortex-source-a'
+          $SourceB = Join-Path $env:RUNNER_TEMP 'neocortex-source-b'
           $First = Join-Path $env:RUNNER_TEMP 'neocortex-dist-a'
           $Second = Join-Path $env:RUNNER_TEMP 'neocortex-dist-b'
+          git archive --format=zip -o $Archive HEAD
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          Expand-Archive -LiteralPath $Archive -DestinationPath $SourceA
+          Expand-Archive -LiteralPath $Archive -DestinationPath $SourceB
           New-Item -ItemType Directory -Force -Path $First | Out-Null
           New-Item -ItemType Directory -Force -Path $Second | Out-Null
-          python -m build --no-isolation --outdir $First .
-          python -m build --no-isolation --outdir $Second .
+          Push-Location -LiteralPath $SourceA
+          try {
+            python -m build --no-isolation --outdir $First .
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+          finally {
+            Pop-Location
+          }
+          Push-Location -LiteralPath $SourceB
+          try {
+            python -m build --no-isolation --outdir $Second .
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+          finally {
+            Pop-Location
+          }
 
       - name: Validate and publish canonical artifacts
         shell: pwsh
