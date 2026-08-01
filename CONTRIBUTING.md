@@ -26,13 +26,20 @@ heredar automáticamente los resultados de un commit anterior.
 El workflow `Windows quality gates` ejecuta sobre Windows y CPython 3.13:
 
 - instalación con `constraints.txt` y `pip check`;
-- Ruff lint y formato;
+- Ruff lint sobre todo el árbol y formato obligatorio para archivos Python
+  nuevos;
 - mypy sobre las fuentes canónicas;
 - suite completa de pytest con cobertura de ramas y umbral combinado de 83 %;
 - laboratorio NTFS aislado fuera del repositorio y del estado operativo;
 - dos builds independientes de wheel y sdist;
 - validación de artefactos, igualdad de payload lógico, wheel byte-idéntico y
   publicación canónica del sdist.
+
+El árbol heredado todavía contiene archivos que Ruff reformatearía. La barrera
+no convierte esa deuda preexistente en cambios masivos dentro de un pull request
+ajeno: impide agregar archivos Python nuevos sin formato, mientras el lint sigue
+siendo global. La normalización integral debe ejecutarse como una campaña
+separada, revisable y con su propia barrera completa.
 
 Una barrera roja no debe omitirse ni convertirse en warning para cerrar una
 entrega. Corrija la causa o documente el bloqueo sin presentar el cambio como
