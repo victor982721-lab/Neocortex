@@ -355,8 +355,10 @@ Cada elemento conserva una identidad durable independiente de la ruta mutable,
 la revisión exacta de su fuente, firma de procesamiento y huellas XXH3 no
 criptográficas con longitud y guardas de colisión. El texto se divide en
 ventanas naturales acotadas, con solapamiento y configuración propia por
-modelo. Antes de inferir, el backend cuenta los tokens con el tokenizador real
-y rechaza cualquier entrada que el modelo fuera a truncar silenciosamente.
+modelo. El guard `exact-token-guard-v2` ajusta cada ventana con el tokenizador
+real antes de persistir jobs; el backend vuelve a contar y rechaza cualquier
+entrada que todavía implicara truncamiento silencioso. Límite y revisión del
+tokenizador forman parte de la identidad durable del perfil.
 Los vectores normalizados L2 se almacenan en `float16` junto con modelo,
 versión, rol, dimensiones, procedencia y firma completa.
 
@@ -378,15 +380,19 @@ worker renueva en una transacción sus leases mientras una inferencia síncrona
 sigue activa y detiene ese heartbeat al terminar, y una
 huella XXH3 idéntica bajo la misma firma de modelo permite reutilizar inferencia
 ya confirmada. Cada nueva ejecución vuelve a enumerar las cachés seleccionadas
-para reconciliar su estado, pero no recalcula embeddings sin cambios.
+para reconciliar su estado, pero no recalcula embeddings sin cambios. Un replay
+exacto no crea jobs ni consume `max_items` o `max_new_jobs`; la reexploración y
+la reconciliación de la fuente siguen siendo O(n), pero el replay sin cambios
+reutiliza directamente el head publicado y no vuelve a clonarlo. Una generación
+con altas, bajas o cambios todavía materializa su base en O(n).
 
-El staging textual conserva una sesión SQLite por fuente y confirma como máximo
-128 items o chunks por transacción; un documento mayor se divide en lotes del
-mismo límite. Error, cancelación o cualquier `BaseException` revierte el lote
-activo, mientras el prefijo ya confirmado queda idempotente y reanudable en la
-generación `building`. Sólo al terminar toda la fuente se desactivan miembros no
-observados, y ese staging parcial nunca mueve el head publicado. El cambio no
-añade schema, API, opciones CLI ni campos JSON.
+El staging textual confirma como máximo 128 items o chunks por transacción.
+Error, cancelación o deadline revierten el lote activo; el prefijo confirmado
+queda idempotente y reanudable en la generación `building`. Sólo una enumeración
+`bounded-v1` completa permite desactivar miembros no observados y publicar. Al
+cambiar el perfil de chunking, el nuevo head sustituye ese perfil únicamente en
+las fuentes seleccionadas y conserva las demás; las revisiones históricas siguen
+reconstruibles fuera del head.
 
 Antes de cada claim, el worker agota payloads reutilizables por coincidencia
 exacta de modelo y huella reforzada. Un payload creado al completar el batch N
@@ -409,13 +415,22 @@ una reasignación se rechaza. Espacio y modalidad se validan contra el modelo
 persistido, no contra la afirmación del hit. SQL externo sobre tablas legacy no recibe esta garantía. No hay
 todavía poda global para builds fallidos, parciales o abandonados.
 
-La búsqueda mantiene rankings independientes para Jina o MiniLM, CLIP y los
-índices FTS5 de PDF/DOCX/Office/audio. La fusión usa reciprocal rank fusion
-(RRF): combina posiciones y conserva la contribución de cada ranking, sin
-tratar sus puntuaciones crudas como si estuvieran calibradas entre sí. El
-backend vectorial actual es una búsqueda exacta con un límite explícito de
-vectores; informa cuando el recorrido queda incompleto. No existe todavía un
-índice ANN.
+La búsqueda mantiene rankings independientes para contenido textual Jina o
+MiniLM, título textual, CLIP y los índices FTS5 de PDF/DOCX/Office/audio. El
+título se deriva sólo del basename, sin directorios ni extensión final, y se
+publica como sección durable `semantic_metadata_title` bajo la política
+`semantic-basename-title-v1`. Es una señal mutable, advisory y separada del
+cuerpo: no se usa para clasificación ni como evidencia materializada. Un head
+legado sin títulos declara `title_channel_not_indexed`, sin ocultar el ranking
+corporal disponible.
+
+La fusión usa reciprocal rank fusion (RRF): combina posiciones y conserva la
+contribución de cada ranking, sin tratar sus puntuaciones crudas como si
+estuvieran calibradas entre sí. En texto, el cuerpo aporta peso `1.0` y el
+título `0.5`; ambos reutilizan una sola vectorización de la consulta y el hit
+fusionado prefiere el snippet corporal. El backend vectorial actual es una
+búsqueda exacta con un límite explícito de vectores; informa cuando el recorrido
+queda incompleto. No existe todavía un índice ANN.
 
 La clasificación compara embeddings activos con prototipos versionados de la
 ontología industrial compartida y materializa evidencia trazable por elemento,
@@ -426,15 +441,18 @@ borrados, movimientos ni renombres. Las decisiones humanas de revisión quedan
 registradas como evidencia append-only, pero aún no calibran automáticamente
 estas puntuaciones.
 
-La dependencia de inferencia es opcional y se instala con el extra
-`.[semantic]`. Ningún comando de indexación, búsqueda semántica o clasificación
-descarga pesos: los modelos solo pueden adquirirse mediante la preparación
-explícita. MiniLM se prepara únicamente cuando se solicita:
+La dependencia de inferencia se empaqueta en el extra `semantic`, pero el
+runtime personal canónico se instala con `full`. Los extras individuales son
+una herramienta de desarrollo, no perfiles que Victor deba administrar.
+Ningún comando de indexación, búsqueda semántica o clasificación descarga
+pesos: los modelos sólo pueden adquirirse mediante preparación explícita.
+
+Este entorno editable sirve únicamente para desarrollo:
 
 ```powershell
 $Venv = Join-Path $PWD '.venv'
 py -3 -m venv $Venv
-& "$Venv\Scripts\python.exe" -m pip install -c constraints.txt -e ".[semantic]"
+& "$Venv\Scripts\python.exe" -m pip install -c constraints.txt -e ".[full,dev]"
 & "$Venv\Scripts\Neocortex.exe" --semantic-status
 & "$Venv\Scripts\Neocortex.exe" --semantic-prepare-models
 & "$Venv\Scripts\Neocortex.exe" --semantic-prepare-models --semantic-include-compact
@@ -442,16 +460,18 @@ py -3 -m venv $Venv
 
 `--semantic-status` es de solo lectura y no crea ni migra una base ausente. La
 preparación carga Jina y ambos encoders CLIP; el último ejemplo incluye además
-MiniLM. La indexación es una operación explícita y offline sobre estado durable:
+MiniLM.
 
-```powershell
-Neocortex --semantic-index text
-Neocortex --semantic-index text --semantic-source pdf --semantic-source docx
-Neocortex --semantic-index text --semantic-text-profile compact
-Neocortex --semantic-index image
-Neocortex --semantic-index image --semantic-no-ocr
-Neocortex --semantic-index all
-```
+`--semantic-index` usa límites seguros predeterminados:
+
+- `--semantic-max-items 50`;
+- `--semantic-max-new-jobs 1500`;
+- `--semantic-time-budget-seconds 900`.
+
+El presupuesto es único para texto, imagen y OCR en una ejecución `all`. Un
+límite agotado deja la generación sin publicar, informa la causa y devuelve
+código `2`. Empiece con un estado aislado de 20–50 elementos; un plan o staging
+correcto sin embeddings publicados y consultables no es una entrega Semantic.
 
 Sin `--semantic-source`, la ruta de texto selecciona solo las bases durables que
 ya existen. La opción se repite para acotar las fuentes y acepta `pdf`, `docx`,
@@ -472,24 +492,24 @@ Neocortex --semantic-search "transformador mantenimiento" --semantic-search-mode
 Neocortex --semantic-search "puesta en servicio" --semantic-search-mode text --semantic-text-profile compact
 ```
 
-La materialización y consulta de evidencia también son explícitas. El
+La materialización y consulta de evidencia también son explícitas. La
+clasificación se ejecuta sólo después del piloto acotado y sobre una generación
+publicada; no use `--semantic-classify all` como smoke. El
 `ITEM_ID` exacto se obtiene de `SEMANTIC_HIT item=...`; el límite evita una
 salida no acotada y el comando informa si la lista fue truncada:
 
 ```powershell
-Neocortex --semantic-classify all
-Neocortex --semantic-classify text --semantic-text-profile compact
 Neocortex --semantic-evidence "item:pdf:IDENTIDAD" --semantic-evidence-limit 100
 ```
 
 Actualmente estos comandos no se disparan al ejecutar las rutas normales y no
-hay watcher semántico automático. Por tanto, después de incorporar o cambiar
-contenido se debe volver a ejecutar la indexación y, si se desea evidencia de
-ontología actualizada, la clasificación correspondiente.
+hay watcher semántico automático. Después de incorporar o cambiar contenido se
+debe volver a ejecutar `--semantic-index` con sus límites explícitos y, si se
+desea evidencia de ontología actualizada, la clasificación correspondiente.
 
 ## Knowledge Plane de solo lectura
 
-La versión `0.7.0` añade una fachada coherente de consulta sobre los propietarios
+La versión `0.7.2` conserva una fachada coherente de consulta sobre los propietarios
 durables ya existentes: inventario, FTS de PDF/DOCX/Office/audio, catálogo
 técnico, índice estructural de código y, cuando está publicado, evidencia
 semántica. Knowledge no descubre ni reprocesa el corpus, no crea o migra bases y
@@ -657,23 +677,27 @@ barra propia con documentos clasificados, reutilizados desde caché, enviados a
 revisión, errores y pendientes. Los filtros de catálogo son consultas de solo
 lectura.
 
-El flujo integral clasifica, planifica y aplica la organización con una sola
-autorización:
+El flujo normal de organización es no destructivo y revisable:
 
 ```powershell
-Neocortex --all --apply
-```
-
-Después de terminar todas las rutas y actualizar el catálogo, este comando
-consume todos los movimientos soportados en lotes acotados; los candidatos de
-Papelera, incluidos directorios vacíos, se abstienen. Las operaciones directas permanecen para
-inspección, planificación sin movimientos y reanudación manual:
-
-```powershell
+Neocortex --catalog-preview 20
 Neocortex --organization-plan
-Neocortex --organization-preview 100 --organization-preview-status planned
-Neocortex --organization-apply --organization-max-actions 100
+Neocortex --organization-preview 20 --organization-preview-status planned
 ```
+
+Revise evidencia, clasificaciones y destinos. Sólo una autorización explícita
+posterior permite aplicar un lote pequeño:
+
+```powershell
+Neocortex --organization-apply --organization-max-actions 20
+```
+
+`Neocortex --all --apply` no se usa como smoke ni como primer piloto. Una vez
+validado el entorno es la interfaz cotidiana simplificada prevista: procesa las
+rutas integradas y aplica únicamente movimientos que superen las protecciones
+del framework. Después de aplicar, verifique el resultado; las capacidades aún
+no integradas deben añadirse a este flujo, no trasladarse a una secuencia manual
+para Victor.
 
 Sin `--organization-root`, ambas operaciones usan
 `<raíz_analizada>\Consulta_Tecnica_Organizada`: `--root` explícito tiene

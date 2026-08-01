@@ -467,6 +467,8 @@ def context_bundle_payload(
         payload["warnings"] = list(contract.warnings)
     if contract.telemetry is not None:
         payload["telemetry"] = contract.telemetry.to_dict()
+    if contract.blocking_owners:
+        payload["blocking_owners"] = list(contract.blocking_owners)
     return payload
 
 

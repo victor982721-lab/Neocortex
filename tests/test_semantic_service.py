@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence, cast
 
@@ -12,6 +13,7 @@ from _04_Nucleo_Operativo import semantic_preparation
 from _04_Nucleo_Operativo import semantic_search_service as search_implementation
 from _04_Nucleo_Operativo import semantic_state as state
 from _04_Nucleo_Operativo.semantic_chunking import TextChunkingConfig
+from _04_Nucleo_Operativo.semantic_chunking import iter_text_chunks
 from _04_Nucleo_Operativo.semantic_config import (
     compact_multilingual_text_model,
     fastembed_cache_contract,
@@ -39,7 +41,12 @@ from _04_Nucleo_Operativo.semantic_models import (
     fingerprint_text,
 )
 from _04_Nucleo_Operativo.semantic_ontology import CONCEPTS, ONTOLOGY_VERSION
-from _04_Nucleo_Operativo.semantic_sources import ImageSourceRecord, TextSourceRecord
+from _04_Nucleo_Operativo.semantic_sources import (
+    SEMANTIC_TITLE_POLICY,
+    SEMANTIC_TITLE_SECTION_KIND,
+    ImageSourceRecord,
+    TextSourceRecord,
+)
 from _04_Nucleo_Operativo.semantic_state import (
     has_active_embeddings,
     list_semantic_evidence,
@@ -83,6 +90,23 @@ class _FixtureBackend:
                 )
             )
         return tuple(output)
+
+    def text_token_counts(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[int, ...], int]:
+        return tuple(len(text.split()) + 2 for text in texts), 512
+
+    def text_tokenizer_contract(self) -> tuple[str, int]:
+        return "semantic-service-fixture-tokenizer-v1", 512
+
+
+def _fixture_chunking(model: EmbeddingModelSpec) -> TextChunkingConfig:
+    return replace(
+        service.text_chunking_for_model(model),
+        model_token_limit=512,
+        tokenizer_signature="semantic-service-fixture-tokenizer-v1",
+    )
 
 
 class _ConstantBackend(_FixtureBackend):
@@ -170,6 +194,44 @@ def _text_records(count: int) -> tuple[TextSourceRecord, ...]:
     return tuple(records)
 
 
+def _image_record(
+    root: Path,
+    identity: str,
+    *,
+    with_ocr: bool = True,
+) -> ImageSourceRecord:
+    image_path = root / f"{identity}.png"
+    payload = f"fixture-image-payload:{identity}".encode()
+    image_path.write_bytes(payload)
+    fingerprint = fingerprint_bytes(payload)
+    item = SemanticItem(
+        item_id=f"item:image:{identity}",
+        source_kind="image",
+        source_identity=identity,
+        identity_version="fixture-image-v1",
+        fingerprint=fingerprint,
+        path=str(image_path),
+        provenance={"fixture": True},
+        source_revision={
+            "size": len(payload),
+            "mtime_ns": image_path.stat().st_mtime_ns,
+            "birthtime_ns": image_path.stat().st_ctime_ns,
+            "raw_content_xxh3_128": fingerprint.xxh3_128,
+        },
+    )
+    ocr_section = (
+        TextSection(
+            "image_ocr",
+            "ocr",
+            f"Transformador industrial {identity} en mantenimiento.",
+            {"fixture": True},
+        )
+        if with_ocr
+        else None
+    )
+    return ImageSourceRecord(item, ocr_section)
+
+
 def _declare_source_state(state_directory: Path, source_kind: str) -> None:
     service.semantic_source_database(state_directory, source_kind).touch()
 
@@ -191,6 +253,32 @@ def test_missing_source_state_cannot_deactivate_or_create_semantic_state(
     assert not (tmp_path / service.SEMANTIC_DATABASE_NAME).exists()
 
 
+def test_text_index_requires_signed_exact_tokenizer_before_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CounterlessBackend(_FixtureBackend):
+        text_token_counts = None
+        text_tokenizer_contract = None
+
+    _declare_source_state(tmp_path, "pdf")
+    monkeypatch.setattr(
+        service,
+        "_backend",
+        lambda model, **_kwargs: CounterlessBackend(model),
+    )
+    monkeypatch.setattr(
+        service,
+        "iter_text_source_records",
+        lambda _state, _source: iter((_text_record(),)),
+    )
+
+    with pytest.raises(RuntimeError, match="no exact tokenizer counter"):
+        service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
+
+    assert not (tmp_path / service.SEMANTIC_DATABASE_NAME).exists()
+
+
 def test_text_index_reuses_cached_vector_on_second_generation(
     tmp_path: Path,
     monkeypatch,
@@ -207,12 +295,382 @@ def test_text_index_reuses_cached_vector_on_second_generation(
     second = service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
 
     assert first.items_staged == 1
-    assert first.chunks_staged == 1
-    assert first.generations[0].embedded == 1
+    assert first.chunks_staged == 2
+    assert first.generations[0].embedded == 2
     assert first.generations[0].summary.status == "ready"
     assert second.generations[0].embedded == 0
-    assert second.generations[0].reused == 1
+    assert second.generations[0].reused == 0
+    assert second.generations[0].queued == 0
+    assert second.new_jobs_staged == 0
     assert second.errors == 0
+
+
+def test_exact_published_replay_is_free_across_item_and_job_budgets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_backend(monkeypatch)
+    _declare_source_state(tmp_path, "pdf")
+    records = _text_records(35)
+    monkeypatch.setattr(
+        service,
+        "iter_text_source_records",
+        lambda _state, source: iter(records) if source == "pdf" else iter(()),
+    )
+    baseline = service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
+    database = tmp_path / service.SEMANTIC_DATABASE_NAME
+    model_signature = service.multilingual_text_model().model_signature
+    baseline_generation_id = baseline.generations[0].summary.generation_id
+    with semantic_database(database, readonly=True) as connection:
+        baseline_counts = tuple(
+            int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            for table in (
+                "embedding_generations",
+                "embedding_generation_members",
+                "embedding_jobs",
+            )
+        )
+
+    replay = service.index_text_embeddings(
+        tmp_path,
+        source_kinds=("pdf",),
+        work_budget=service.SemanticWorkBudget(max_items=1, max_new_jobs=1),
+    )
+
+    assert baseline.complete
+    assert replay.complete
+    assert not replay.truncated
+    assert replay.new_jobs_staged == 0
+    assert replay.generations[0].queued == 0
+    assert replay.generations[0].summary.status == "ready"
+    assert replay.generations[0].summary.generation_id == baseline_generation_id
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            int(
+                connection.execute(
+                    "SELECT generation_id FROM published_embedding_heads "
+                    "WHERE model_signature=?",
+                    (model_signature,),
+                ).fetchone()[0]
+            )
+            == baseline_generation_id
+        )
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM semantic_items WHERE source_kind='pdf' AND active=1"
+                ).fetchone()[0]
+            )
+            == 35
+        )
+        assert (
+            tuple(
+                int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in (
+                    "embedding_generations",
+                    "embedding_generation_members",
+                    "embedding_jobs",
+                )
+            )
+            == baseline_counts
+        )
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM embedding_generation_members "
+                    "WHERE generation_id=?",
+                    (baseline_generation_id,),
+                ).fetchone()[0]
+            )
+            == 70
+        )
+
+
+def test_title_policy_upgrade_embeds_only_title_and_preserves_body_revisions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = service.multilingual_text_model()
+    backend = _FixtureBackend(model)
+    database = tmp_path / service.SEMANTIC_DATABASE_NAME
+    record = _text_record()
+    _declare_source_state(tmp_path, "pdf")
+    service._initialize_models(database, (model,))
+    state.upsert_semantic_item(
+        database,
+        record.item,
+        refresh_token="legacy-item",
+    )
+    body_chunks = tuple(
+        iter_text_chunks(
+            record.item.item_id,
+            (record.section,),
+            _fixture_chunking(model),
+            token_counter=backend.text_token_counts,
+        )
+    )
+    assert len(body_chunks) == 1
+    state.stage_text_chunks(
+        database,
+        body_chunks,
+        refresh_token="legacy-body",
+    )
+    state.finalize_text_chunk_refresh(
+        database,
+        item_id=record.item.item_id,
+        chunking_signature=_fixture_chunking(model).signature,
+        refresh_token="legacy-body",
+    )
+    legacy_generation = state.start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="legacy-without-title-policy-v1",
+    )
+    state.enqueue_text_chunk_jobs(
+        database,
+        legacy_generation,
+        (body_chunks[0].chunk_id,),
+    )
+    legacy_work = service._worker.run_generation(
+        database,
+        legacy_generation,
+        backend,
+        queued=1,
+    )
+    assert legacy_work.embedded == 1
+    assert legacy_work.summary.status == "ready"
+
+    def published_body_identity() -> tuple[int, int, int]:
+        with semantic_database(database, readonly=True) as connection:
+            row = connection.execute(
+                """SELECT e.payload_id,e.item_revision_id,e.chunk_revision_id
+                    FROM published_embedding_heads h
+                    JOIN embedding_generation_members e
+                      ON e.generation_id=h.generation_id
+                     AND e.model_signature=h.model_signature
+                    JOIN semantic_chunk_revisions c
+                      ON c.chunk_revision_id=e.chunk_revision_id
+                    WHERE h.model_signature=? AND c.section_kind='pdf_page'""",
+                (model.model_signature,),
+            ).fetchone()
+        assert row is not None
+        return tuple(int(value) for value in row)
+
+    body_before = published_body_identity()
+    monkeypatch.setattr(
+        service,
+        "_backend",
+        lambda requested_model, **_kwargs: _FixtureBackend(requested_model),
+    )
+    legacy_search = service.search_semantic_index(
+        tmp_path,
+        "transformador",
+        include_text=True,
+        include_images=False,
+        include_lexical=False,
+    )
+    assert tuple(ranking.name for ranking in legacy_search.rankings) == (
+        "semantic_text",
+    )
+    assert legacy_search.rankings[0].available is True
+    assert legacy_search.complete
+
+    legacy_discovery = service.search_semantic_index(
+        tmp_path,
+        "transformador",
+        include_text=True,
+        include_title=True,
+        include_images=False,
+        include_lexical=False,
+    )
+    assert tuple(ranking.name for ranking in legacy_discovery.rankings) == (
+        "semantic_text",
+    )
+    assert legacy_discovery.complete
+    monkeypatch.setattr(
+        service,
+        "iter_text_source_records",
+        lambda _state, _source: iter((record,)),
+    )
+
+    upgraded = service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
+
+    assert upgraded.complete
+    assert upgraded.new_jobs_staged == 1
+    assert upgraded.generations[0].embedded == 1
+    assert upgraded.generations[0].reused == 0
+    assert body_before == published_body_identity()
+    with semantic_database(database, readonly=True) as connection:
+        counts = {
+            str(row[0]): int(row[1])
+            for row in connection.execute(
+                """SELECT c.section_kind,COUNT(*)
+                    FROM published_embedding_heads h
+                    JOIN embedding_generation_members e
+                      ON e.generation_id=h.generation_id
+                     AND e.model_signature=h.model_signature
+                    JOIN semantic_chunk_revisions c
+                      ON c.chunk_revision_id=e.chunk_revision_id
+                    WHERE h.model_signature=? GROUP BY c.section_kind""",
+                (model.model_signature,),
+            )
+        }
+    assert counts == {"pdf_page": 1, "semantic_metadata_title": 1}
+
+    replay = service.index_text_embeddings(
+        tmp_path,
+        source_kinds=("pdf",),
+        work_budget=service.SemanticWorkBudget(max_items=1, max_new_jobs=1),
+    )
+    assert replay.complete
+    assert replay.new_jobs_staged == 0
+    assert replay.generations[0].queued == 0
+
+
+def test_title_policy_bump_prunes_old_title_and_retains_unselected_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = service.multilingual_text_model()
+    backend = _FixtureBackend(model)
+    chunking = _fixture_chunking(model)
+    database = tmp_path / service.SEMANTIC_DATABASE_NAME
+    pdf_record = _text_record()
+    docx_item = SemanticItem(
+        item_id="item:docx:unselected",
+        source_kind="docx",
+        source_identity="unselected",
+        identity_version="fixture-source-v1",
+        fingerprint=fingerprint_text("unselected-docx-source"),
+        path="C:/fixtures/unselected.docx",
+        provenance={"fixture": True},
+    )
+    docx_section = TextSection(
+        "docx_body",
+        "document",
+        "contenido no seleccionado",
+        {"fixture": True},
+    )
+    old_title = TextSection(
+        SEMANTIC_TITLE_SECTION_KIND,
+        "semantic-basename-title-v0",
+        "transformador",
+        {
+            "policy_signature": "semantic-basename-title-v0",
+            "advisory_only": True,
+        },
+    )
+    pdf_chunks = tuple(
+        iter_text_chunks(
+            pdf_record.item.item_id,
+            (pdf_record.section, old_title),
+            chunking,
+            token_counter=backend.text_token_counts,
+        )
+    )
+    docx_chunks = tuple(
+        iter_text_chunks(
+            docx_item.item_id,
+            (docx_section,),
+            chunking,
+            token_counter=backend.text_token_counts,
+        )
+    )
+    assert len(pdf_chunks) == 2
+    assert len(docx_chunks) == 1
+    service._initialize_models(database, (model,))
+    for item, chunks, refresh in (
+        (pdf_record.item, pdf_chunks, "legacy-pdf"),
+        (docx_item, docx_chunks, "legacy-docx"),
+    ):
+        state.upsert_semantic_item(database, item, refresh_token=refresh)
+        state.stage_text_chunks(database, chunks, refresh_token=refresh)
+        state.finalize_text_chunk_refresh(
+            database,
+            item_id=item.item_id,
+            chunking_signature=chunking.signature,
+            refresh_token=refresh,
+        )
+    legacy_generation = state.start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="legacy-title-policy-v0",
+    )
+    state.enqueue_text_chunk_jobs(
+        database,
+        legacy_generation,
+        (chunk.chunk_id for chunk in (*pdf_chunks, *docx_chunks)),
+    )
+    legacy_work = service._worker.run_generation(
+        database,
+        legacy_generation,
+        backend,
+        queued=3,
+    )
+    assert legacy_work.embedded == 3
+    assert legacy_work.summary.status == "ready"
+
+    def published_rows() -> dict[tuple[str, str, str], tuple[int, int, int]]:
+        with semantic_database(database, readonly=True) as connection:
+            rows = connection.execute(
+                """SELECT i.source_kind,c.section_kind,c.section_id,
+                    e.payload_id,e.item_revision_id,e.chunk_revision_id
+                    FROM published_embedding_heads h
+                    JOIN embedding_generation_members e
+                      ON e.generation_id=h.generation_id
+                     AND e.model_signature=h.model_signature
+                    JOIN semantic_item_revisions i
+                      ON i.item_revision_id=e.item_revision_id
+                    JOIN semantic_chunk_revisions c
+                      ON c.chunk_revision_id=e.chunk_revision_id
+                    WHERE h.model_signature=?
+                    ORDER BY i.source_kind,c.section_kind,c.section_id""",
+                (model.model_signature,),
+            ).fetchall()
+        return {
+            (str(row[0]), str(row[1]), str(row[2])): (
+                int(row[3]),
+                int(row[4]),
+                int(row[5]),
+            )
+            for row in rows
+        }
+
+    before = published_rows()
+    _declare_source_state(tmp_path, "pdf")
+    monkeypatch.setattr(
+        service,
+        "_backend",
+        lambda requested_model, **_kwargs: _FixtureBackend(requested_model),
+    )
+    monkeypatch.setattr(
+        service,
+        "iter_text_source_records",
+        lambda _state, _source: iter((pdf_record,)),
+    )
+
+    upgraded = service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
+
+    assert upgraded.complete
+    assert upgraded.new_jobs_staged == 1
+    assert upgraded.generations[0].embedded == 0
+    assert upgraded.generations[0].reused == 1
+    after = published_rows()
+    assert set(after) == {
+        ("docx", "docx_body", "document"),
+        ("pdf", "pdf_page", "1"),
+        ("pdf", SEMANTIC_TITLE_SECTION_KIND, SEMANTIC_TITLE_POLICY),
+    }
+    assert (
+        after[("docx", "docx_body", "document")]
+        == before[("docx", "docx_body", "document")]
+    )
+    assert after[("pdf", "pdf_page", "1")] == before[("pdf", "pdf_page", "1")]
+    assert (
+        "pdf",
+        SEMANTIC_TITLE_SECTION_KIND,
+        "semantic-basename-title-v0",
+    ) not in after
 
 
 def test_image_and_ocr_use_separate_embedding_generations(
@@ -308,10 +766,10 @@ def test_image_and_ocr_use_separate_embedding_generations(
             WHERE item_id=? AND active=1""",
             (item.item_id,),
         ).fetchall()
-    assert {str(row[0]) for row in active_signatures} == {
-        service.text_chunking_for_model(service.multilingual_text_model()).signature,
-        service.text_chunking_for_model(compact_model).signature,
-    }
+        assert {str(row[0]) for row in active_signatures} == {
+            _fixture_chunking(service.multilingual_text_model()).signature,
+            _fixture_chunking(compact_model).signature,
+        }
     assert has_active_embeddings(
         database,
         service.multilingual_text_model().model_signature,
@@ -388,6 +846,173 @@ def test_image_and_ocr_use_separate_embedding_generations(
     )
     state.finalize_embedding_generation(database, compact_cleanup)
     assert not has_active_embeddings(database, compact_model.model_signature)
+
+
+def test_image_and_ocr_share_new_job_budget_and_resume_same_generations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_backend(monkeypatch)
+    _declare_source_state(tmp_path, "image")
+    record = _image_record(tmp_path, "shared-job-budget")
+    monkeypatch.setattr(
+        service,
+        "iter_image_source_records",
+        lambda _state: iter((record,)),
+    )
+
+    paused = service.index_image_embeddings(
+        tmp_path,
+        embed_ocr_text=True,
+        work_budget=service.SemanticWorkBudget(max_items=1, max_new_jobs=1),
+    )
+
+    assert paused.truncated
+    assert paused.truncation_reason == "max_new_jobs"
+    assert paused.new_jobs_staged == 1
+    assert len(paused.generations) == 2
+    assert all(result.summary.status == "building" for result in paused.generations)
+    assert all(
+        result.summary.cursor["enumeration_complete"] is False
+        for result in paused.generations
+    )
+    database = tmp_path / service.SEMANTIC_DATABASE_NAME
+    with semantic_database(database, readonly=True) as connection:
+        counts = {
+            int(row[0]): int(row[1])
+            for row in connection.execute(
+                "SELECT generation_id,COUNT(*) FROM embedding_jobs "
+                "GROUP BY generation_id"
+            )
+        }
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
+            == 0
+        )
+    assert counts == {paused.generations[0].summary.generation_id: 1}
+
+    resumed = service.index_image_embeddings(
+        tmp_path,
+        embed_ocr_text=True,
+        work_budget=service.SemanticWorkBudget(max_items=1, max_new_jobs=1),
+    )
+
+    assert resumed.complete
+    assert resumed.new_jobs_staged == 1
+    assert tuple(
+        result.summary.generation_id for result in resumed.generations
+    ) == tuple(result.summary.generation_id for result in paused.generations)
+    assert all(result.summary.status == "ready" for result in resumed.generations)
+    with semantic_database(database, readonly=True) as connection:
+        counts = {
+            int(row[0]): int(row[1])
+            for row in connection.execute(
+                "SELECT generation_id,COUNT(*) FROM embedding_jobs "
+                "GROUP BY generation_id"
+            )
+        }
+    assert counts == {result.summary.generation_id: 1 for result in resumed.generations}
+
+
+def test_image_deadline_at_end_of_enumeration_preserves_unvisited_items(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_backend(monkeypatch)
+    _declare_source_state(tmp_path, "image")
+    records = (
+        _image_record(tmp_path, "deadline-visible"),
+        _image_record(tmp_path, "deadline-unvisited"),
+    )
+    monkeypatch.setattr(
+        service,
+        "iter_image_source_records",
+        lambda _state: iter(records),
+    )
+    baseline = service.index_image_embeddings(tmp_path, embed_ocr_text=False)
+    assert baseline.complete
+    database = tmp_path / service.SEMANTIC_DATABASE_NAME
+    model_signature = service.clip_image_model().model_signature
+    with semantic_database(database, readonly=True) as connection:
+        baseline_head = int(
+            connection.execute(
+                "SELECT generation_id FROM published_embedding_heads "
+                "WHERE model_signature=?",
+                (model_signature,),
+            ).fetchone()[0]
+        )
+
+    now = [0.0]
+    original_stage = service._image_index.stage_image_batch
+
+    def stage_then_expire(*args, **kwargs):
+        staged = original_stage(*args, **kwargs)
+        now[0] = 20.0
+        return staged
+
+    monkeypatch.setattr(
+        service._image_index,
+        "stage_image_batch",
+        stage_then_expire,
+    )
+    budget = service.SemanticWorkBudget(deadline=10.0, _clock=lambda: now[0])
+    paused = service._image_index.index_image_embeddings(
+        tmp_path,
+        model_cache_override=None,
+        local_files_only=True,
+        threads=None,
+        embed_ocr_text=False,
+        ocr_model=None,
+        chunking=None,
+        backend_factory=lambda model, **_kwargs: _FixtureBackend(model),
+        source_record_iterator=lambda _state: iter((records[0],)),
+        generation_runner=service._run_generation,
+        work_budget=budget,
+    )
+
+    assert paused.truncated
+    assert paused.truncation_reason == "time_budget"
+    assert paused.generations[0].summary.status == "building"
+    assert paused.generations[0].summary.cursor["enumeration_complete"] is False
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            int(
+                connection.execute(
+                    "SELECT generation_id FROM published_embedding_heads "
+                    "WHERE model_signature=?",
+                    (model_signature,),
+                ).fetchone()[0]
+            )
+            == baseline_head
+        )
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM semantic_items "
+                    "WHERE source_kind='image' AND active=1"
+                ).fetchone()[0]
+            )
+            == 2
+        )
+
+    monkeypatch.setattr(
+        service._image_index,
+        "stage_image_batch",
+        original_stage,
+    )
+    resumed = service.index_image_embeddings(tmp_path, embed_ocr_text=False)
+    assert resumed.complete
+    assert resumed.generations[0].summary.generation_id == baseline_head
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM embedding_generations WHERE generation_id=?",
+                (paused.generations[0].summary.generation_id,),
+            ).fetchone()
+            is None
+        )
 
 
 def test_changed_ocr_revision_keeps_other_head_until_its_model_republishes(
@@ -467,7 +1092,7 @@ def test_changed_ocr_revision_keeps_other_head_until_its_model_republishes(
             (item.item_id,),
         ).fetchall()
     assert {str(row[0]) for row in active_signatures} == {
-        service.text_chunking_for_model(quality_model).signature
+        _fixture_chunking(quality_model).signature
     }
     assert len(revisions) == 1
     assert str(revisions[0][0]) == service.IMAGE_OCR_TEXT_CHANNEL
@@ -570,8 +1195,8 @@ def test_visual_fingerprint_change_preserves_same_revision_ocr_profiles(
             (current_record[0].item.item_id,),
         ).fetchall()
     assert {str(row[0]) for row in active_chunks} == {
-        service.text_chunking_for_model(quality_model).signature,
-        service.text_chunking_for_model(compact_model).signature,
+        _fixture_chunking(quality_model).signature,
+        _fixture_chunking(compact_model).signature,
     }
     assert has_active_embeddings(database, quality_model.model_signature)
     assert has_active_embeddings(database, compact_model.model_signature)
@@ -634,6 +1259,7 @@ def test_search_reports_unindexed_space_without_losing_available_results(
         tmp_path,
         "mantenimiento del transformador",
         include_text=True,
+        include_title=True,
         include_images=True,
         include_lexical=False,
     )
@@ -641,12 +1267,77 @@ def test_search_reports_unindexed_space_without_losing_available_results(
     assert result.rankings[0].name == "semantic_text"
     assert result.rankings[0].available is True
     assert result.rankings[0].hits
-    assert result.rankings[1].name == "semantic_image"
-    assert result.rankings[1].available is False
-    assert result.rankings[1].complete is False
-    assert result.rankings[1].unavailable_reason == "clip_models_not_indexed"
+    assert result.rankings[1].name == "semantic_title"
+    assert result.rankings[1].available is True
+    assert result.rankings[1].hits
+    assert result.rankings[2].name == "semantic_image"
+    assert result.rankings[2].available is False
+    assert result.rankings[2].complete is False
+    assert result.rankings[2].unavailable_reason == "clip_models_not_indexed"
     assert result.complete is False
     assert result.fused[0].source_kind == "pdf"
+
+
+def test_text_search_reuses_one_query_vector_and_fuses_durable_title_at_half_weight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = service.multilingual_text_model()
+    backend = _ConstantBackend(model)
+    monkeypatch.setattr(service, "_backend", lambda *_args, **_kwargs: backend)
+    _declare_source_state(tmp_path, "pdf")
+    monkeypatch.setattr(
+        service,
+        "iter_text_source_records",
+        lambda _state, _source: iter((_text_record(),)),
+    )
+    service.index_text_embeddings(tmp_path, source_kinds=("pdf",))
+    backend.requests.clear()
+
+    result = service.search_semantic_index(
+        tmp_path,
+        "transformador",
+        include_text=True,
+        include_title=True,
+        include_images=False,
+        include_lexical=False,
+    )
+
+    assert tuple(ranking.name for ranking in result.rankings) == (
+        "semantic_text",
+        "semantic_title",
+    )
+    body, title = result.rankings
+    assert body.fusion_weight == 1.0
+    assert title.fusion_weight == 0.5
+    assert title.provenance["expected_policy_signature"] == (
+        "semantic-basename-title-v1"
+    )
+    assert title.provenance["observed_policy_signatures"] == [
+        "semantic-basename-title-v1"
+    ]
+    assert title.scanned == 1
+    assert title.resolved[0].section_kind == "semantic_metadata_title"
+    assert [(request.role, request.text) for request in backend.requests] == [
+        (EmbeddingRole.QUERY, "transformador")
+    ]
+    evidence = {value.ranking: value for value in result.fused[0].fused.evidence}
+    assert evidence["semantic_title"].contribution == pytest.approx(
+        evidence["semantic_text"].contribution / 2.0
+    )
+
+    evidence_result = service.search_semantic_index(
+        tmp_path,
+        "transformador",
+        include_text=True,
+        include_title=True,
+        include_images=False,
+        include_lexical=False,
+        evidence_mode=True,
+    )
+    assert tuple(ranking.name for ranking in evidence_result.rankings) == (
+        "semantic_text",
+    )
 
 
 def test_empty_requested_semantic_and_lexical_rankings_are_incomplete(

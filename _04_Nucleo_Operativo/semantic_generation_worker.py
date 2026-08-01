@@ -24,6 +24,11 @@ from .semantic_service_contracts import (
     WORKER_LEASE_SECONDS,
     GenerationWorkResult,
 )
+from .semantic_work_budget import (
+    SemanticIndexDeadlineExceeded,
+    SemanticWorkBudget,
+    unlimited_semantic_work_budget,
+)
 from .semantic_state import (
     StaleEmbeddingJobError,
     claim_embedding_jobs,
@@ -34,6 +39,7 @@ from .semantic_state import (
     finalize_embedding_generation,
     generation_summary,
     heartbeat_embedding_jobs,
+    release_embedding_job_lease_for_deadline,
     reuse_cached_jobs,
 )
 
@@ -52,6 +58,8 @@ class GenerationRunner(Protocol):
         backend: EmbeddingBackend,
         *,
         queued: int,
+        work_budget: SemanticWorkBudget,
+        publish_if_complete: bool,
     ) -> GenerationWorkResult: ...
 
 
@@ -89,6 +97,8 @@ def embed_requests_isolated(
                 for request, output in zip(batch, outputs, strict=True)
             ):
                 raise RuntimeError("embedding backend changed request order")
+        except SemanticIndexDeadlineExceeded:
+            raise
         except Exception as exc:
             payload_local = isinstance(
                 exc,
@@ -277,20 +287,59 @@ def _release_interrupted_leases(
         )
 
 
+def _release_timed_out_leases(
+    database: Path,
+    leases: Sequence[EmbeddingJobLease],
+    *,
+    worker_id: str,
+    interruption: BaseException,
+) -> None:
+    """Release timed-out inference leases without charging a model attempt."""
+
+    cleanup_errors: list[BaseException] = []
+    for lease in leases:
+        try:
+            release_embedding_job_lease_for_deadline(
+                database,
+                lease.job_id,
+                worker_id=worker_id,
+            )
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+    if cleanup_errors:
+        interruption.add_note(
+            "semantic timeout lease cleanup encountered "
+            f"{len(cleanup_errors)} error(s); first={safe_error(cleanup_errors[0])}"
+        )
+
+
 def run_generation(
     database: Path,
     generation_id: int,
     backend: EmbeddingBackend,
     *,
     queued: int,
+    work_budget: SemanticWorkBudget | None = None,
+    publish_if_complete: bool = True,
     heartbeat_jobs: Callable[..., int] = heartbeat_embedding_jobs,
 ) -> GenerationWorkResult:
+    budget = work_budget or unlimited_semantic_work_budget()
     reused = 0
     embedded = failed = 0
     worker_id = f"semantic-worker:{os.getpid()}:{generation_id}"
     while True:
+        summary = generation_summary(database, generation_id)
+        if budget.deadline_expired():
+            break
+        if not summary.unfinished:
+            break
         while count := reuse_cached_jobs(database, generation_id):
             reused += count
+            if budget.deadline_expired():
+                break
+        summary = generation_summary(database, generation_id)
+        if not summary.unfinished or budget.deadline_expired():
+            break
         leases = claim_embedding_jobs(
             database,
             generation_id,
@@ -322,6 +371,15 @@ def run_generation(
                 successes,
                 worker_id=worker_id,
             )
+        except SemanticIndexDeadlineExceeded as exc:
+            _release_timed_out_leases(
+                database,
+                leases,
+                worker_id=worker_id,
+                interruption=exc,
+            )
+            budget.mark_truncated("time_budget")
+            break
         except BaseException as exc:
             _release_interrupted_leases(
                 database,
@@ -334,7 +392,13 @@ def run_generation(
         failed += completion_failures
 
     summary = generation_summary(database, generation_id)
-    if not summary.unfinished:
+    deadline_expired = budget.deadline_expired()
+    if (
+        not summary.unfinished
+        and publish_if_complete
+        and not budget.truncated
+        and not deadline_expired
+    ):
         summary = finalize_embedding_generation(
             database,
             generation_id,

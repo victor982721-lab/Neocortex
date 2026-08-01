@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -29,6 +28,7 @@ from _04_Nucleo_Operativo.knowledge_contracts import (
 from _04_Nucleo_Operativo.knowledge_planner import (
     KnowledgePlan,
     KnowledgeQuery,
+    RetrievalMode,
     plan_knowledge_query,
 )
 from _04_Nucleo_Operativo.knowledge_search import (
@@ -97,6 +97,11 @@ def _ranking(
     available: bool,
     complete: bool,
 ) -> RankingExecution:
+    owner = None
+    if channel == "semantic":
+        owner = "semantic"
+    elif channel == "lexical":
+        owner = name.removeprefix("fts_")
     return RankingExecution(
         name=name,
         channel=channel,
@@ -105,6 +110,7 @@ def _ranking(
         complete=complete,
         returned=0,
         reason=None if complete else "fixture_modality_unavailable",
+        owner=owner,
     )
 
 
@@ -276,6 +282,8 @@ def test_each_required_semantic_modality_controls_completeness_and_warning(
         f"ranking_partial:{missing_name}:fixture_modality_unavailable",
         f"ranking_unavailable:{missing_name}",
     )
+    assert result.blocking_owners == ("semantic",)
+    assert result.to_dict()["blocking_owners"] == ["semantic"]
     assert result.plan.plan_id == plan.plan_id
     assert result.to_json() == result.to_json()
 
@@ -320,6 +328,7 @@ def test_multiple_missing_semantic_modalities_have_deterministic_warning_order(
         "ranking_unavailable:semantic_image",
         "ranking_unavailable:semantic_text",
     )
+    assert result.blocking_owners == ("semantic",)
     assert not result.complete
 
 
@@ -455,6 +464,77 @@ def test_semantic_execution_uses_only_planned_steps_and_exact_global_budget(
         assert not missing_report.complete
         assert missing_report.reason == "semantic_vector_budget_unavailable"
         assert result.warnings == ("ranking_unavailable:semantic_image",)
+
+
+def test_optional_title_absence_is_reported_without_blocking_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_complete_lexical(monkeypatch)
+    _install_complete_catalog(monkeypatch)
+
+    def semantic_without_titles(
+        _state_directory: Path,
+        query_text: str,
+        **kwargs: object,
+    ) -> SemanticSearchResult:
+        assert kwargs["include_text"] is True
+        assert kwargs["include_title"] is True
+        assert kwargs["include_images"] is False
+        return SemanticSearchResult(
+            query=query_text,
+            rankings=(
+                SemanticRanking(
+                    name="semantic_text",
+                    hits=(),
+                    resolved=(),
+                    scanned=0,
+                    complete=True,
+                ),
+                SemanticRanking(
+                    name="semantic_title",
+                    hits=(),
+                    resolved=(),
+                    scanned=0,
+                    complete=False,
+                    available=False,
+                    unavailable_reason="title_channel_not_indexed",
+                    fusion_weight=0.5,
+                ),
+            ),
+            lexical_rankings=(),
+            fused=(),
+        )
+
+    monkeypatch.setattr(
+        knowledge_search.semantic_service,
+        "search_semantic_index",
+        semantic_without_titles,
+    )
+    plan = plan_knowledge_query(
+        KnowledgeQuery(
+            "proteccion interruptor",
+            retrieval_mode=RetrievalMode.DISCOVERY,
+            source_kinds=("pdf",),
+        )
+    )
+
+    result = execute_knowledge_search(
+        KnowledgeStatePaths.from_directory(tmp_path / "state"),
+        plan,
+        _snapshot(semantic=OwnerAvailability.AVAILABLE),
+    )
+
+    title_report = next(
+        report for report in result.rankings if report.name == "semantic_title"
+    )
+    assert title_report.channel == "semantic_discovery"
+    assert title_report.reason == "title_channel_not_indexed"
+    assert not title_report.available
+    assert result.complete
+    assert result.warnings == (
+        "ranking_partial:semantic_title:title_channel_not_indexed",
+    )
 
 
 @pytest.mark.parametrize("cutoff_reason", ("top_k", "candidate_limit_reached"))
@@ -902,4 +982,6 @@ def test_image_ocr_filter_accepts_only_ocr_evidence_from_image_resources() -> No
     )
 
     assert filtered == {"semantic_image": (ocr,)}
+
+
 # endregion [02]

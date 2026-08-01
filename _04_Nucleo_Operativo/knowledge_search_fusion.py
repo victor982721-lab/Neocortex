@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ from .knowledge_contracts import (
     ResourceDisposition,
     RevisionState,
 )
-from .knowledge_search_contracts import KnowledgeCandidate
+from .knowledge_search_contracts import KnowledgeCandidate, ResourceDiscoverySignal
 # endregion [01]
 
 # region [02] Implementación
@@ -180,6 +179,57 @@ def _collect_aggregates(
                 rrf_k=rrf_k,
             )
     return aggregates
+
+
+def _apply_discovery_signals(
+    aggregates: dict[_EvidenceKey, _EvidenceAggregate],
+    discovery_signals: Sequence[ResourceDiscoverySignal],
+    *,
+    cancellation_check: Callable[[], None] | None,
+    rrf_k: float,
+) -> None:
+    """Boost one already-grounded evidence aggregate per resource revision."""
+
+    by_resource_revision: dict[tuple[str, str], list[_EvidenceKey]] = {}
+    for key, aggregate in aggregates.items():
+        candidate = aggregate.candidate
+        by_resource_revision.setdefault(
+            (candidate.resource.resource_id, candidate.revision.revision_id),
+            [],
+        ).append(key)
+    seen: set[tuple[str, str, str]] = set()
+    ordered = sorted(
+        discovery_signals,
+        key=lambda value: (
+            value.signal.source,
+            value.signal.source_rank,
+            value.resource.resource_id,
+            value.revision.revision_id,
+        ),
+    )
+    for position, discovery in enumerate(ordered, 1):
+        _periodic_checkpoint(cancellation_check, position)
+        resource_id, revision_id = discovery.resource_revision_key
+        identity = (discovery.signal.source, resource_id, revision_id)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        eligible = by_resource_revision.get((resource_id, revision_id), ())
+        if not eligible:
+            continue
+        best_key = min(
+            eligible,
+            key=lambda key: (
+                -math.fsum(sorted(aggregates[key].contributions)),
+                key,
+            ),
+        )
+        aggregate = aggregates[best_key]
+        contribution = discovery.fusion_weight / (rrf_k + discovery.signal.source_rank)
+        aggregate.contributions.append(contribution)
+        aggregate.signals.append(replace(discovery.signal, contribution=contribution))
+        aggregate.reasons.add(discovery.reason)
+        aggregate.warnings.update(discovery.warnings)
 
 
 def overlaps_or_too_close(
@@ -363,6 +413,7 @@ def _apply_diversity(
 def fuse_evidence_rankings(
     rankings: Mapping[str, Sequence[KnowledgeCandidate]],
     *,
+    discovery_signals: Sequence[ResourceDiscoverySignal] = (),
     limit: int,
     max_per_resource: int,
     min_section_distance: int,
@@ -381,6 +432,12 @@ def fuse_evidence_rankings(
     aggregates = _collect_aggregates(
         rankings,
         include_history=include_history,
+        cancellation_check=cancellation_check,
+        rrf_k=rrf_k,
+    )
+    _apply_discovery_signals(
+        aggregates,
+        discovery_signals,
         cancellation_check=cancellation_check,
         rrf_k=rrf_k,
     )

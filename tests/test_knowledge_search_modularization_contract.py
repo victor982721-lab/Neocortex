@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -72,7 +71,8 @@ PUBLIC_SIGNATURES = {
         "complete: 'bool', truncated: 'bool', omitted_candidates: 'int', "
         "rows_scanned: 'int', vectors_scanned: 'int', "
         "elapsed_milliseconds: 'int', warnings: 'tuple[str, ...]' = (), "
-        "telemetry: 'KnowledgeQueryTelemetry | None' = None) -> None"
+        "telemetry: 'KnowledgeQueryTelemetry | None' = None, "
+        "blocking_owners: 'tuple[str, ...]' = ()) -> None"
     ),
     "RankingExecution": (
         "(name: 'str', channel: 'str', executed: 'bool', available: 'bool', "
@@ -90,6 +90,7 @@ PUBLIC_SIGNATURES = {
     ),
     "fuse_evidence_rankings": (
         "(rankings: 'Mapping[str, Sequence[KnowledgeCandidate]]', *, "
+        "discovery_signals: 'Sequence[ResourceDiscoverySignal]' = (), "
         "limit: 'int', max_per_resource: 'int', min_section_distance: 'int', "
         "include_history: 'bool' = False, "
         "cancellation_check: 'Callable[[], None] | None' = None) "
@@ -759,4 +760,6 @@ def test_code_metadata_cleanup_preserves_primary_error_when_close_also_fails(
 
     assert events == ["execute", "close"]
     assert raised.value is primary
+
+
 # endregion [02]

@@ -181,7 +181,7 @@ def _plan() -> SemanticPlan:
         "chunking-v1",
         "1" * 32,
         "2" * 32,
-        "semantic-readonly-plan-v3:xxh3-128:bf07d55c2bbea631b94feace627e7317",
+        "semantic-readonly-plan-v4:xxh3-128:6b600875ca8cf824c90437aaafb42e07",
         1,
         1,
         1,
@@ -362,12 +362,12 @@ def test_representative_payload_keysets_and_byte_golden_are_stable() -> None:
     assert payload["selected_sources"] == ["pdf"]
     assert workload_payloads[0]["supported_roles"] == ["query", "passage"]
     assert plan.plan_signature.encode("utf-8") == (
-        b"semantic-readonly-plan-v3:xxh3-128:bf07d55c2bbea631b94feace627e7317"
+        b"semantic-readonly-plan-v4:xxh3-128:6b600875ca8cf824c90437aaafb42e07"
     )
     encoded = canonical_json(payload).encode("utf-8")
     assert len(encoded) == 2683
     assert hashlib.sha256(encoded).hexdigest() == (
-        "58a742cbdacb167d90f186dd211eddda7acbf1b369bda3f92927887e1497c468"
+        "7f9bd971da15b3fb7ce2f1f1128721102195b43b8c7155e0eca5020f4b24110a"
     )
     assert semantic_service.semantic_plan_payload(plan) == payload
 
@@ -401,7 +401,7 @@ def test_signature_preimage_is_private_separate_and_byte_stable() -> None:
     encoded = canonical_json(preimage).encode("utf-8")
     assert len(encoded) == 1117
     assert hashlib.sha256(encoded).hexdigest() == (
-        "dbea4dc926d78611787e795334b275284401150ac72b5d26062a75f87c4b0374"
+        "f20597ff2eae7661d778adfbb5333dc3da0bdc0f60896831f7fee639ef8383a3"
     )
     derived_signature = (
         f"{semantic_planner.PLAN_ALGORITHM_VERSION}:xxh3-128:"
@@ -443,4 +443,6 @@ def test_extracted_payload_builder_matches_wrapper_when_present() -> None:
         "(plan: 'SemanticPlan') -> 'dict[str, object]'"
     )
     assert builder(_plan()) == semantic_planner.semantic_plan_payload(_plan())
+
+
 # endregion [02]

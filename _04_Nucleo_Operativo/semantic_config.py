@@ -149,9 +149,9 @@ def production_models() -> tuple[EmbeddingModelSpec, ...]:
 def text_chunking_for_model(model: EmbeddingModelSpec) -> TextChunkingConfig:
     """Choose a conservative pre-tokenizer window for a pinned text encoder.
 
-    The FastEmbed boundary still performs an exact tokenizer check and refuses
-    truncation.  These bounds keep normal Spanish/English material below that
-    boundary while retaining overlap for retrieval continuity.
+    The production staging route also fits every candidate with the exact
+    tokenizer and the FastEmbed boundary independently refuses truncation.
+    These bounds retain natural context and overlap before that exact guard.
     """
 
     if model.model_signature == COMPACT_TEXT_MODEL_SIGNATURE:
@@ -161,7 +161,7 @@ def text_chunking_for_model(model: EmbeddingModelSpec) -> TextChunkingConfig:
             overlap_chars=64,
             overlap_terms=12,
             min_natural_break_chars=64,
-            algorithm_version="natural-window-minilm-128-token-guard-v1",
+            algorithm_version="natural-window-minilm-128-exact-token-guard-v2",
         )
     if model.model_signature == TEXT_MODEL_SIGNATURE:
         return TextChunkingConfig(
@@ -170,7 +170,7 @@ def text_chunking_for_model(model: EmbeddingModelSpec) -> TextChunkingConfig:
             overlap_chars=192,
             overlap_terms=40,
             min_natural_break_chars=128,
-            algorithm_version="natural-window-jina-512-token-guard-v1",
+            algorithm_version="natural-window-jina-512-exact-token-guard-v2",
         )
     return TextChunkingConfig(
         max_chars=1_024,
@@ -178,7 +178,7 @@ def text_chunking_for_model(model: EmbeddingModelSpec) -> TextChunkingConfig:
         overlap_chars=128,
         overlap_terms=24,
         min_natural_break_chars=96,
-        algorithm_version="natural-window-unknown-model-token-guard-v1",
+        algorithm_version="natural-window-unknown-model-exact-token-guard-v2",
     )
 
 

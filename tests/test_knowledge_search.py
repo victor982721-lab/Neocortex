@@ -4,13 +4,12 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
 import sqlite3
 import zlib
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -50,6 +49,9 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     RetrievalMode,
     plan_knowledge_query,
 )
+from _04_Nucleo_Operativo.knowledge_search_contracts import (
+    ResourceDiscoverySignal,
+)
 from _04_Nucleo_Operativo.knowledge_search import (
     KnowledgeCandidate,
     _candidate_from_resolved,
@@ -60,8 +62,11 @@ from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
 from _04_Nucleo_Operativo.semantic_chunking import TextChunkingConfig
 from _04_Nucleo_Operativo.semantic_config import multilingual_text_model
 from _04_Nucleo_Operativo.semantic_models import (
+    BackendEmbedding,
     EmbeddingModality,
     EmbeddingModelSpec,
+    EmbeddingRequest,
+    EmbeddingRole,
     ResolvedSearchHit,
     SearchHit,
     fingerprint_text,
@@ -262,6 +267,109 @@ def test_evidence_fusion_keeps_multiple_sections_and_merges_exact_evidence() -> 
     # Overlapping evidence is merged into the selected hit, not silently
     # discarded, so it must not be reported as an omitted candidate.
     assert omitted == 0
+
+
+def test_title_discovery_signal_boosts_only_best_grounded_evidence() -> None:
+    best = _candidate(
+        evidence_id="page-1",
+        section_id="1",
+        start_char=0,
+        end_char=80,
+        ranking="semantic_text",
+        source_rank=1,
+    )
+    other = _candidate(
+        evidence_id="page-2",
+        section_id="2",
+        start_char=0,
+        end_char=80,
+        ranking="semantic_text",
+        source_rank=2,
+    )
+    title = ResourceDiscoverySignal(
+        resource=best.resource,
+        revision=best.revision,
+        signal=RankingSignal(
+            "semantic_title",
+            "cosine_similarity",
+            0.9,
+            1,
+            model_signature="title-model",
+            generation=7,
+            query_model_signature="title-model",
+        ),
+        reason="resource basename matched the query",
+        fusion_weight=0.5,
+    )
+
+    hits, omitted = fuse_evidence_rankings(
+        {"semantic_text": (best, other)},
+        discovery_signals=(title,),
+        limit=2,
+        max_per_resource=2,
+        min_section_distance=0,
+    )
+
+    title_signals = tuple(
+        (hit, signal)
+        for hit in hits
+        for signal in hit.signals
+        if signal.source == "semantic_title"
+    )
+    assert len(hits) == 2
+    assert omitted == 0
+    assert len(title_signals) == 1
+    boosted_hit, title_signal = title_signals[0]
+    assert boosted_hit.evidence.evidence_id == "page-1"
+    body_signal = next(
+        signal for signal in boosted_hit.signals if signal.source == "semantic_text"
+    )
+    assert title_signal.contribution == pytest.approx(
+        body_signal.contribution * title.fusion_weight
+    )
+    assert boosted_hit.fused_score == pytest.approx(
+        sum(signal.contribution or 0.0 for signal in boosted_hit.signals)
+    )
+
+
+def test_ungrounded_title_discovery_signal_never_creates_a_hit() -> None:
+    grounded = _candidate(
+        evidence_id="grounded-page",
+        section_id="1",
+        start_char=0,
+        end_char=80,
+        ranking="semantic_text",
+        source_rank=1,
+    )
+    unmatched_revision = replace(
+        grounded.revision,
+        revision_id="revision:title-without-evidence",
+    )
+    title = ResourceDiscoverySignal(
+        resource=grounded.resource,
+        revision=unmatched_revision,
+        signal=RankingSignal(
+            "semantic_title",
+            "cosine_similarity",
+            0.95,
+            1,
+        ),
+        reason="resource basename matched the query",
+        fusion_weight=0.5,
+    )
+
+    hits, omitted = fuse_evidence_rankings(
+        {"semantic_text": (grounded,)},
+        discovery_signals=(title,),
+        limit=2,
+        max_per_resource=2,
+        min_section_distance=0,
+    )
+
+    assert len(hits) == 1
+    assert omitted == 0
+    assert hits[0].revision == grounded.revision
+    assert {signal.source for signal in hits[0].signals} == {"semantic_text"}
 
 
 def test_overlap_cluster_is_reranked_after_merged_signals() -> None:
@@ -633,6 +741,23 @@ def _deterministic_semantic_backend(
     return DeterministicTestBackend(replace(model, provider="test-deterministic"))
 
 
+class _RecordingDeterministicBackend(DeterministicTestBackend):
+    def __init__(
+        self,
+        model: EmbeddingModelSpec,
+        requests: list[EmbeddingRequest],
+    ) -> None:
+        super().__init__(replace(model, provider="test-deterministic"))
+        self._requests = requests
+
+    def embed(
+        self,
+        requests: Sequence[EmbeddingRequest],
+    ) -> Sequence[BackendEmbedding]:
+        self._requests.extend(requests)
+        return super().embed(requests)
+
+
 def _create_published_semantic_pdf_state(
     state: Path,
 ) -> tuple[EmbeddingModelSpec, int]:
@@ -691,11 +816,11 @@ def _create_published_semantic_pdf_state(
         ),
     )
     assert indexed.items_staged == 1
-    assert indexed.chunks_staged == 2
+    assert indexed.chunks_staged == 3
     assert len(indexed.generations) == 1
     summary = indexed.generations[0].summary
     assert summary.status == "ready"
-    assert summary.done == 2
+    assert summary.done == 3
     assert summary.errors == 0
     return model, summary.generation_id
 
@@ -970,6 +1095,133 @@ def test_real_lexical_and_semantic_sqlite_share_physical_resource_identity(
     assert semantic_report.vectors_scanned == 2
 
 
+def test_knowledge_discovery_uses_title_only_as_grounded_resource_signal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "state"
+    _create_lexical_states(state)
+    monkeypatch.setattr(
+        semantic_service,
+        "_backend",
+        _deterministic_semantic_backend,
+    )
+    model, generation_id = _create_published_semantic_pdf_state(state)
+    snapshot = _snapshot(
+        OwnerSnapshot("pdf", OwnerAvailability.AVAILABLE, 11, 11),
+        OwnerSnapshot("docx", OwnerAvailability.ABSENT, 5),
+        OwnerSnapshot("office", OwnerAvailability.ABSENT, 1),
+        OwnerSnapshot("audio", OwnerAvailability.ABSENT, 1),
+        OwnerSnapshot(
+            "semantic",
+            OwnerAvailability.AVAILABLE,
+            6,
+            6,
+            publications=(
+                PublicationHead(
+                    f"model:{model.model_signature}",
+                    f"semantic:{generation_id}",
+                    generation_id,
+                    model_signature=model.model_signature,
+                ),
+            ),
+        ),
+        OwnerSnapshot("code", OwnerAvailability.ABSENT, 2),
+        OwnerSnapshot("catalog", OwnerAvailability.ABSENT, 6),
+        OwnerSnapshot("inventory", OwnerAvailability.ABSENT, 7),
+    )
+    plan = plan_knowledge_query(
+        KnowledgeQuery(
+            "proteccion",
+            retrieval_mode=RetrievalMode.DISCOVERY,
+            source_kinds=("pdf",),
+            limit=10,
+            max_per_resource=10,
+            min_section_distance=0,
+            max_vectors=10,
+        )
+    )
+
+    result = execute_knowledge_search(
+        KnowledgeStatePaths.from_directory(state),
+        plan,
+        snapshot,
+    )
+
+    title_report = next(
+        ranking for ranking in result.rankings if ranking.name == "semantic_title"
+    )
+    title_signals = tuple(
+        (hit, signal)
+        for hit in result.hits
+        for signal in hit.signals
+        if signal.source == "semantic_title"
+    )
+    assert title_report.channel == "semantic_discovery"
+    assert title_report.returned == 1
+    assert title_signals
+    assert len(title_signals) == 1
+    boosted_hit, title_signal = title_signals[0]
+    assert title_signal.contribution == pytest.approx(0.5 / 61.0)
+    assert boosted_hit.evidence.section_kind != "semantic_metadata_title"
+    assert boosted_hit.evidence.snippet != "proteccion"
+    assert result.vectors_scanned <= plan.max_vectors
+    assert '"section_kind":"semantic_metadata_title"' not in result.to_json()
+
+
+def test_semantic_text_and_title_share_vector_budget_and_query_embedding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tmp_path / "state"
+    _create_lexical_states(state)
+    monkeypatch.setattr(
+        semantic_service,
+        "_backend",
+        _deterministic_semantic_backend,
+    )
+    model, _generation_id = _create_published_semantic_pdf_state(state)
+
+    requests: list[EmbeddingRequest] = []
+
+    def recording_backend(
+        selected_model: EmbeddingModelSpec,
+        *,
+        cache_dir: Path,
+        local_files_only: bool,
+        threads: int | None,
+    ) -> DeterministicTestBackend:
+        del cache_dir, local_files_only, threads
+        return _RecordingDeterministicBackend(selected_model, requests)
+
+    monkeypatch.setattr(semantic_service, "_backend", recording_backend)
+    result = semantic_service.search_semantic_index(
+        state,
+        "protección interruptor",
+        semantic_database=state / "semantic.sqlite3",
+        text_model=model,
+        limit=10,
+        candidate_limit=10,
+        max_vectors=2,
+        include_text=True,
+        include_title=True,
+        include_images=False,
+        include_lexical=False,
+        local_files_only=True,
+    )
+
+    rankings = {ranking.name: ranking for ranking in result.rankings}
+    assert set(rankings) == {"semantic_text", "semantic_title"}
+    assert rankings["semantic_text"].scanned > 0
+    assert sum(ranking.scanned for ranking in rankings.values()) == 2
+    query_requests = tuple(
+        request for request in requests if request.role is EmbeddingRole.QUERY
+    )
+    assert len(requests) == 1
+    assert len(query_requests) == 1
+    assert query_requests[0].text == "protección interruptor"
+
+
 def test_missing_semantic_cache_preserves_lexical_and_creates_no_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1174,6 +1426,51 @@ def test_unverified_inventory_plan_is_exposed_but_never_filters_evidence(
     assert duplicate_report.rows_scanned == 2
     assert duplicate_report.reason == "inventory_exact_verification_unavailable"
     assert not result.complete
+
+
+def test_incompatible_inventory_snapshot_never_reads_duplicate_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = _candidate(
+        evidence_id="inventory-v7-gate",
+        section_id="1",
+        start_char=0,
+        end_char=10,
+        ranking="fts_pdf",
+        source_rank=1,
+    )
+    rankings = {"fts_pdf": (candidate,)}
+    snapshot = _snapshot(
+        OwnerSnapshot(
+            "inventory",
+            OwnerAvailability.INCOMPATIBLE,
+            8,
+            7,
+            error_code="schema_too_old",
+        ),
+    )
+
+    def forbidden_open(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("incompatible inventory state must not be opened")
+
+    monkeypatch.setattr(
+        knowledge_search_module,
+        "_open_direct_readonly_sqlite",
+        forbidden_open,
+    )
+
+    updated, report = knowledge_search_module._apply_inventory_dispositions(
+        KnowledgeStatePaths.from_directory(tmp_path / "state"),
+        snapshot,
+        rankings,
+    )
+
+    assert updated == rankings
+    assert not report.executed
+    assert not report.available
+    assert report.complete
+    assert report.reason == "inventory_owner_unavailable"
 
 
 def test_catalog_head_constrains_all_rankings_and_aligns_physical_resource(
@@ -1852,4 +2149,6 @@ def test_exact_execution_passes_the_planned_candidate_limit(
 
     assert result == ({}, [], 0, False, ())
     assert observed_limits == [step.candidate_limit]
+
+
 # endregion [02]

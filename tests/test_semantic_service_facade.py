@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -73,19 +72,22 @@ EXPECTED_SIGNATURES = {
         "('pdf', 'docx', 'xlsx', 'pptx', 'odt', 'audio', 'code'), model: "
         "'EmbeddingModelSpec | None' = None, model_cache: 'Path | None' = None, "
         "local_files_only: 'bool' = True, threads: 'int | None' = None, "
-        "chunking: 'TextChunkingConfig | None' = None) -> 'SemanticIndexResult'"
+        "chunking: 'TextChunkingConfig | None' = None, work_budget: "
+        "'SemanticWorkBudget | None' = None) -> 'SemanticIndexResult'"
     ),
     "index_image_embeddings": (
         "(state_directory: 'Path', *, model_cache: 'Path | None' = None, "
         "local_files_only: 'bool' = True, threads: 'int | None' = None, "
         "embed_ocr_text: 'bool' = True, ocr_model: "
         "'EmbeddingModelSpec | None' = None, chunking: "
-        "'TextChunkingConfig | None' = None) -> 'SemanticIndexResult'"
+        "'TextChunkingConfig | None' = None, work_budget: "
+        "'SemanticWorkBudget | None' = None) -> 'SemanticIndexResult'"
     ),
     "search_semantic_index": (
         "(state_directory: 'Path', query: 'str', *, limit: 'int' = 20, "
         "candidate_limit: 'int | None' = None, max_vectors: 'int' = 500000, "
-        "include_text: 'bool' = True, include_images: 'bool' = True, "
+        "include_text: 'bool' = True, include_title: 'bool' = False, "
+        "include_images: 'bool' = True, "
         "include_lexical: 'bool' = True, lexical_paths: "
         "'LexicalStatePaths | None' = None, semantic_database: "
         "'Path | None' = None, text_model: 'EmbeddingModelSpec | None' = None, "
@@ -163,6 +165,7 @@ def test_semantic_search_facade_forwards_exact_database_and_candidate_limit() ->
         candidate_limit=27,
         max_vectors=1_234,
         include_text=True,
+        include_title=False,
         include_images=False,
         include_lexical=False,
         lexical_paths=None,
@@ -218,4 +221,6 @@ def test_semantic_plan_facade_forwards_the_complete_read_only_request() -> None:
         max_scratch_bytes=131_072,
         cancellation_check=cancel,
     )
+
+
 # endregion [02]

@@ -5,6 +5,7 @@
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -34,7 +35,13 @@ from _04_Nucleo_Operativo.semantic_state import (
     semantic_database,
     stage_text_chunks,
     start_embedding_generation,
+    update_embedding_generation_cursor,
     upsert_semantic_item,
+)
+from _04_Nucleo_Operativo.semantic_schema import SemanticStateError
+from _04_Nucleo_Operativo.semantic_work_budget import (
+    SemanticIndexDeadlineExceeded,
+    SemanticWorkBudget,
 )
 # endregion [01]
 
@@ -203,6 +210,60 @@ def test_new_payload_satisfies_duplicate_pending_after_prior_batch(
     assert head is not None and int(head[0]) == generation_id
 
 
+def test_bounded_generation_requires_durable_complete_enumeration_to_publish(
+    tmp_path: Path,
+) -> None:
+    database, generation_id, model = _duplicate_generation(tmp_path)
+    with semantic_database(database) as connection:
+        connection.execute(
+            "UPDATE embedding_generations SET processing_signature=? "
+            "WHERE generation_id=?",
+            ("fixed-point|enumeration=bounded-v1", generation_id),
+        )
+    update_embedding_generation_cursor(
+        database,
+        generation_id,
+        {
+            "protocol": "bounded-v1",
+            "enumeration_complete": False,
+        },
+    )
+    backend = _RecordingBackend(model, max_batch_size=1)
+
+    with pytest.raises(
+        SemanticStateError,
+        match="source enumeration is not complete",
+    ):
+        run_generation(database, generation_id, backend, queued=2)
+
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT status FROM embedding_generations WHERE generation_id=?",
+                (generation_id,),
+            ).fetchone()[0]
+            == "building"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
+            == 0
+        )
+
+    update_embedding_generation_cursor(
+        database,
+        generation_id,
+        {
+            "protocol": "bounded-v1",
+            "enumeration_complete": True,
+        },
+    )
+    published = run_generation(database, generation_id, backend, queued=0)
+
+    assert published.summary.status == "ready"
+
+
 def test_systemic_embedding_error_leaves_no_job_leased(tmp_path: Path) -> None:
     database, generation_id, model = _duplicate_generation(tmp_path)
     backend = _RecordingBackend(
@@ -229,9 +290,9 @@ def test_systemic_embedding_error_leaves_no_job_leased(tmp_path: Path) -> None:
             ).fetchone()[0]
         )
         heads = int(
-            connection.execute("SELECT COUNT(*) FROM published_embedding_heads").fetchone()[
-                0
-            ]
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
         )
     assert statuses == ("error", "error")
     assert leased == 0
@@ -267,13 +328,106 @@ def test_keyboard_interrupt_releases_exact_leases_without_publication(
             ).fetchone()[0]
         )
         heads = int(
-            connection.execute("SELECT COUNT(*) FROM published_embedding_heads").fetchone()[
-                0
-            ]
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
         )
     assert jobs == (("pending", None, None), ("pending", None, None))
     assert generation_status == "building"
     assert heads == 0
+
+
+def test_deadline_releases_last_attempt_leases_without_spending_attempt(
+    tmp_path: Path,
+) -> None:
+    database, generation_id, model = _duplicate_generation(tmp_path)
+    with semantic_database(database) as connection:
+        connection.execute(
+            "UPDATE embedding_jobs SET attempts=max_attempts-1 WHERE generation_id=?",
+            (generation_id,),
+        )
+    backend = _RecordingBackend(
+        model,
+        max_batch_size=2,
+        failure=SemanticIndexDeadlineExceeded("inference deadline"),
+    )
+    budget = SemanticWorkBudget(deadline=time.monotonic() + 60.0)
+
+    work = run_generation(
+        database,
+        generation_id,
+        backend,
+        queued=2,
+        work_budget=budget,
+    )
+
+    assert work.summary.status == "building"
+    assert budget.truncation_reason == "time_budget"
+    with semantic_database(database, readonly=True) as connection:
+        jobs = tuple(
+            tuple(row)
+            for row in connection.execute(
+                "SELECT status,attempts,max_attempts,lease_owner,lease_until_ns "
+                "FROM embedding_jobs ORDER BY job_id"
+            )
+        )
+        heads = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
+        )
+    assert jobs == (
+        ("pending", 2, 3, None, None),
+        ("pending", 2, 3, None, None),
+    )
+    assert heads == 0
+
+
+def test_deadline_crossed_by_last_embedding_batch_does_not_publish(
+    tmp_path: Path,
+) -> None:
+    database, generation_id, model = _duplicate_generation(tmp_path)
+    now = [0.0]
+
+    class _DeadlineCrossingBackend(_RecordingBackend):
+        def embed(
+            self,
+            requests: Sequence[EmbeddingRequest],
+        ) -> Sequence[BackendEmbedding]:
+            embeddings = super().embed(requests)
+            now[0] = 20.0
+            return embeddings
+
+    budget = SemanticWorkBudget(deadline=10.0, _clock=lambda: now[0])
+    backend = _DeadlineCrossingBackend(model, max_batch_size=2)
+
+    paused = run_generation(
+        database,
+        generation_id,
+        backend,
+        queued=2,
+        work_budget=budget,
+    )
+
+    assert paused.summary.status == "building"
+    assert paused.summary.done == 2
+    assert paused.summary.unfinished == 0
+    assert budget.truncation_reason == "time_budget"
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
+            == 0
+        )
+
+    resumed = run_generation(
+        database,
+        generation_id,
+        _RecordingBackend(model, max_batch_size=2),
+        queued=0,
+    )
+    assert resumed.summary.status == "ready"
 
 
 @pytest.mark.parametrize(
@@ -315,11 +469,13 @@ def test_request_construction_failure_releases_exact_leases_without_publication(
             ).fetchone()[0]
         )
         heads = int(
-            connection.execute("SELECT COUNT(*) FROM published_embedding_heads").fetchone()[
-                0
-            ]
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
         )
     assert jobs == (("pending", 1, None, None), ("pending", 1, None, None))
     assert generation_status == "building"
     assert heads == 0
+
+
 # endregion [02]

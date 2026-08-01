@@ -14,6 +14,7 @@ from . import semantic_preparation as _preparation
 from . import semantic_search_service as _search
 from . import semantic_status_service as _status
 from . import semantic_text_index as _text_index
+from .semantic_backend_supervisor import DeadlineEmbeddingBackend
 from .semantic_backends import (
     EmbeddingBackend as EmbeddingBackend,
     FastEmbedBackend as FastEmbedBackend,
@@ -109,6 +110,7 @@ from .semantic_sources import (
     iter_text_source_records as iter_text_source_records,
     semantic_source_database as semantic_source_database,
 )
+from .semantic_work_budget import SemanticWorkBudget
 from .semantic_state import (
     StaleEmbeddingJobError as StaleEmbeddingJobError,
     claim_embedding_jobs as claim_embedding_jobs,
@@ -198,6 +200,34 @@ def _backend(
         local_files_only=local_files_only,
         threads=threads,
     )
+
+
+def _index_backend_factory(work_budget: SemanticWorkBudget):
+    def create(
+        model: EmbeddingModelSpec,
+        *,
+        cache_dir: Path,
+        local_files_only: bool,
+        threads: int | None,
+    ) -> EmbeddingBackend:
+        if work_budget.deadline is None:
+            return _backend(
+                model,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                threads=threads,
+            )
+        backend = DeadlineEmbeddingBackend(
+            model,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            threads=threads,
+            work_budget=work_budget,
+        )
+        work_budget.register_resource_closer(backend.close)
+        return backend
+
+    return create
 
 
 def _text_probe(backend: EmbeddingBackend) -> None:
@@ -297,12 +327,16 @@ def _run_generation(
     backend: EmbeddingBackend,
     *,
     queued: int,
+    work_budget: SemanticWorkBudget,
+    publish_if_complete: bool,
 ) -> GenerationWorkResult:
     return _worker.run_generation(
         database,
         generation_id,
         backend,
         queued=queued,
+        work_budget=work_budget,
+        publish_if_complete=publish_if_complete,
         heartbeat_jobs=heartbeat_embedding_jobs,
     )
 
@@ -327,7 +361,7 @@ def plan_semantic_index(
     max_scratch_bytes: int = _planner.DEFAULT_MAX_SCRATCH_BYTES,
     cancellation_check: Callable[[], None] | None = None,
 ) -> SemanticPlan:
-    """Project exact Semantic work without creating or mutating owner state."""
+    """Project bounded Semantic work without creating or mutating owner state."""
 
     return _planner.plan_semantic_index(
         state_directory,
@@ -370,21 +404,27 @@ def index_text_embeddings(
     local_files_only: bool = True,
     threads: int | None = None,
     chunking: TextChunkingConfig | None = None,
+    work_budget: SemanticWorkBudget | None = None,
 ) -> SemanticIndexResult:
     """Incrementally embed extracted text; source files are never rescanned."""
 
-    return _text_index.index_text_embeddings(
-        state_directory,
-        source_kinds=source_kinds,
-        model=model,
-        model_cache_override=model_cache,
-        local_files_only=local_files_only,
-        threads=threads,
-        chunking=chunking,
-        backend_factory=_backend,
-        source_record_iterator=iter_text_source_records,
-        generation_runner=_run_generation,
-    )
+    budget = work_budget or SemanticWorkBudget()
+    try:
+        return _text_index.index_text_embeddings(
+            state_directory,
+            source_kinds=source_kinds,
+            model=model,
+            model_cache_override=model_cache,
+            local_files_only=local_files_only,
+            threads=threads,
+            chunking=chunking,
+            backend_factory=_index_backend_factory(budget),
+            source_record_iterator=iter_text_source_records,
+            generation_runner=_run_generation,
+            work_budget=budget,
+        )
+    finally:
+        budget.close_registered_resources()
 
 
 def _stage_image_batch(
@@ -417,21 +457,27 @@ def index_image_embeddings(
     embed_ocr_text: bool = True,
     ocr_model: EmbeddingModelSpec | None = None,
     chunking: TextChunkingConfig | None = None,
+    work_budget: SemanticWorkBudget | None = None,
 ) -> SemanticIndexResult:
     """Index visual CLIP vectors and retained OCR in separate compatible spaces."""
 
-    return _image_index.index_image_embeddings(
-        state_directory,
-        model_cache_override=model_cache,
-        local_files_only=local_files_only,
-        threads=threads,
-        embed_ocr_text=embed_ocr_text,
-        ocr_model=ocr_model,
-        chunking=chunking,
-        backend_factory=_backend,
-        source_record_iterator=iter_image_source_records,
-        generation_runner=_run_generation,
-    )
+    budget = work_budget or SemanticWorkBudget()
+    try:
+        return _image_index.index_image_embeddings(
+            state_directory,
+            model_cache_override=model_cache,
+            local_files_only=local_files_only,
+            threads=threads,
+            embed_ocr_text=embed_ocr_text,
+            ocr_model=ocr_model,
+            chunking=chunking,
+            backend_factory=_index_backend_factory(budget),
+            source_record_iterator=iter_image_source_records,
+            generation_runner=_run_generation,
+            work_budget=budget,
+        )
+    finally:
+        budget.close_registered_resources()
 
 
 # endregion [03]
@@ -569,6 +615,7 @@ def search_semantic_index(
     candidate_limit: int | None = None,
     max_vectors: int = DEFAULT_SEARCH_MAX_VECTORS,
     include_text: bool = True,
+    include_title: bool = False,
     include_images: bool = True,
     include_lexical: bool = True,
     lexical_paths: LexicalStatePaths | None = None,
@@ -589,6 +636,7 @@ def search_semantic_index(
         candidate_limit=candidate_limit,
         max_vectors=max_vectors,
         include_text=include_text,
+        include_title=include_title,
         include_images=include_images,
         include_lexical=include_lexical,
         lexical_paths=lexical_paths,

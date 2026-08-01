@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -89,7 +88,7 @@ EXPECTED_SIGNATURES = {
         "'Callable[[], None] | None' = None, clock_ns: "
         "'Callable[[], int] | None' = None) -> "
         "'tuple[dict[str, tuple[KnowledgeCandidate, ...]], "
-        "list[RankingExecution]]'"
+        "tuple[ResourceDiscoverySignal, ...], list[RankingExecution]]'"
     ),
     "_exact_rankings": (
         "(paths: 'KnowledgeStatePaths', plan: 'KnowledgePlan', "
@@ -345,6 +344,7 @@ def test_semantic_wrapper_resolves_provider_materializer_clock_and_cancellation(
             "limit": step.candidate_limit,
             "max_vectors": plan.max_vectors,
             "include_text": True,
+            "include_title": False,
             "include_images": False,
             "include_lexical": False,
             "local_files_only": True,
@@ -403,9 +403,14 @@ def test_semantic_wrapper_resolves_provider_materializer_clock_and_cancellation(
         semantic_search,
     )
 
-    rankings, reports = knowledge_search._semantic_rankings(paths, plan, snapshot)
+    rankings, discovery_signals, reports = knowledge_search._semantic_rankings(
+        paths,
+        plan,
+        snapshot,
+    )
 
     assert rankings == {"semantic_text": (candidate,)}
+    assert discovery_signals == ()
     assert reports[0].elapsed_ns == 77
     assert reports[0].vectors_scanned == 4
     assert clock_calls == 1
@@ -646,4 +651,6 @@ def test_materialization_wrapper_resolves_current_lower_helpers_and_constants(
         "start_ms",
         "end_ms",
     ]
+
+
 # endregion [02]

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -53,9 +52,7 @@ def _canonical_directory(raw: str, *, label: str) -> Path:
     while current != current.parent:
         attributes = int(getattr(os.lstat(current), "st_file_attributes", 0))
         if attributes & _REPARSE_POINT:
-            raise AuditLabContractError(
-                f"{label} traverses a reparse point: {current}"
-            )
+            raise AuditLabContractError(f"{label} traverses a reparse point: {current}")
         current = current.parent
     return canonical
 
@@ -148,15 +145,23 @@ def validate_pytest_artifact_paths(
     base_temp: str | Path | None,
     cache_directory: str | Path | None,
 ) -> None:
-    """Reject pytest basetemp/cache paths outside the activated audit root."""
+    """Require pytest basetemp/cache paths below the activated audit root."""
 
-    for label, raw in (("pytest basetemp", base_temp), ("pytest cache", cache_directory)):
+    for label, raw in (
+        ("pytest basetemp", base_temp),
+        ("pytest cache", cache_directory),
+    ):
         if raw is None or not str(raw).strip():
             raise AuditLabContractError(f"{label} must be explicit during an audit")
         path = Path(raw)
         if not path.is_absolute():
             raise AuditLabContractError(f"{label} must be absolute: {path}")
-        _require_within(path.resolve(strict=False), root, label=label)
+        resolved = path.resolve(strict=False)
+        _require_within(resolved, root, label=label)
+        if resolved == root:
+            raise AuditLabContractError(
+                f"{label} must be a strict descendant of audit root: {resolved}"
+            )
 
 
 __all__ = [

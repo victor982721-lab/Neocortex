@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -22,6 +21,8 @@ from _04_Nucleo_Operativo.knowledge_contracts import (
     KnowledgeCompleteness,
     KnowledgeHit,
     KnowledgeSnapshot,
+    OwnerAvailability,
+    OwnerSnapshot,
     PhysicalIdentityRef,
     RankingSignal,
     ResourceDisposition,
@@ -220,6 +221,32 @@ def test_context_is_deterministic_and_preserves_exact_citation_targets() -> None
     assert first.completeness is KnowledgeCompleteness.COMPLETE
 
 
+def test_context_copies_blocking_owners_from_search_result() -> None:
+    snapshot = KnowledgeSnapshot.create(
+        source_version="0.7.2",
+        captured_at_utc="2026-08-01T00:00:00Z",
+        captured_monotonic_ns=11,
+        owners=(
+            OwnerSnapshot(
+                "semantic",
+                OwnerAvailability.AVAILABLE,
+                6,
+                6,
+            ),
+        ),
+    )
+    result = replace(
+        _result(complete=False),
+        snapshot=snapshot,
+        blocking_owners=("semantic",),
+    )
+
+    bundle = build_context_bundle(result, character_limit=2_000)
+
+    assert bundle.blocking_owners == ("semantic",)
+    assert bundle.to_dict()["blocking_owners"] == ["semantic"]
+
+
 @pytest.mark.parametrize(
     ("carrier", "source_kind", "owner"),
     (
@@ -304,9 +331,7 @@ def test_character_and_hit_budgets_make_truncation_and_omission_visible() -> Non
         or "[omitted: character budget]" in bundle.rendered_context
     )
     if "…[truncated]" in bundle.rendered_context:
-        assert bundle.budget.truncated_evidence_ids == (
-            first_hit.evidence.evidence_id,
-        )
+        assert bundle.budget.truncated_evidence_ids == (first_hit.evidence.evidence_id,)
 
 
 def test_complete_no_hit_and_incomplete_no_hit_are_not_conflated() -> None:
@@ -364,8 +389,7 @@ def test_structured_conflicting_claims_are_cited_without_text_inference() -> Non
     assert contradiction.values == ("closed", "open")
     assert contradiction.citation_ids == ("K1", "K2")
     assert contradiction.summary == (
-        'Structured claim "breaker_state" has conflicting values: '
-        '"closed", "open".'
+        'Structured claim "breaker_state" has conflicting values: "closed", "open".'
     )
     assert bundle.to_dict()["contradictions"] == [contradiction.to_dict()]
     assert "CONTRADICTIONS" in bundle.rendered_context
@@ -406,12 +430,14 @@ def test_builder_derives_only_demonstrable_entities_and_planned_relation() -> No
     assert relation.provenance == ("inventory:planned_duplicate_plan",)
     assert relation.confidence is None
     assert relation.evidence_ids == (planned.evidence.evidence_id,)
-    assert relation.source_entity_id == by_kind_and_label[
-        ("resource", "resource:planned")
-    ].entity_id
-    assert relation.target_entity_id == by_kind_and_label[
-        ("resource_reference", "resource:keeper")
-    ].entity_id
+    assert (
+        relation.source_entity_id
+        == by_kind_and_label[("resource", "resource:planned")].entity_id
+    )
+    assert (
+        relation.target_entity_id
+        == by_kind_and_label[("resource_reference", "resource:keeper")].entity_id
+    )
     assert by_kind_and_label[
         ("resource_reference", "resource:keeper")
     ].resource_ids == ("resource:keeper",)
@@ -429,8 +455,7 @@ def test_builder_derives_only_demonstrable_entities_and_planned_relation() -> No
         entity.to_json() in bundle.rendered_context for entity in bundle.entities
     )
     assert all(
-        relation.to_json() in bundle.rendered_context
-        for relation in bundle.relations
+        relation.to_json() in bundle.rendered_context for relation in bundle.relations
     )
 
 
@@ -545,9 +570,7 @@ def test_graph_bounds_are_complete_and_reject_a_hit_atomically() -> None:
     assert too_small.graph_budget.omitted_total == 0
     assert too_small.budget.omitted_candidates == 1
     assert too_small.completeness is KnowledgeCompleteness.PARTIAL
-    assert "Context omitted 1 retrieved hit" in " ".join(
-        too_small.missing_information
-    )
+    assert "Context omitted 1 retrieved hit" in " ".join(too_small.missing_information)
 
 
 def test_more_than_32_structured_contradictions_are_not_silently_cut() -> None:
@@ -599,4 +622,6 @@ def test_result_remains_the_only_information_source() -> None:
     second = build_context_bundle(changed_timing, character_limit=4_000)
 
     assert first == second
+
+
 # endregion [02]

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -74,4 +73,15 @@ class DeterministicTestBackend:
                 )
             )
         return tuple(results)
+
+    def text_token_counts(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[int, ...], int]:
+        return tuple(len(text.split()) + 2 for text in texts), 512
+
+    def text_tokenizer_contract(self) -> tuple[str, int]:
+        return "deterministic-test-tokenizer-v1", 512
+
+
 # endregion [02]

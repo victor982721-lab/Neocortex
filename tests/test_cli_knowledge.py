@@ -4,11 +4,11 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +20,7 @@ from _04_Nucleo_Operativo.cli_app import main
 from _04_Nucleo_Operativo.cli_operations import selected_direct_operations
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+from _04_Nucleo_Operativo.knowledge_context import build_context_bundle
 from _04_Nucleo_Operativo.knowledge_contracts import (
     KnowledgeSnapshot,
     OwnerAvailability,
@@ -39,9 +40,7 @@ def _snapshot(
     consistency: SnapshotConsistency = SnapshotConsistency.STABLE,
 ) -> KnowledgeSnapshot:
     snapshot_changed = consistency is SnapshotConsistency.SNAPSHOT_CHANGED
-    effective_state = (
-        OwnerAvailability.AVAILABLE if snapshot_changed else state
-    )
+    effective_state = OwnerAvailability.AVAILABLE if snapshot_changed else state
     return KnowledgeSnapshot.create(
         source_version="0.7.0",
         captured_at_utc="2026-07-26T03:00:00Z",
@@ -65,6 +64,7 @@ def _empty_result(
     snapshot: KnowledgeSnapshot,
     *,
     complete: bool,
+    blocking_owners: tuple[str, ...] = (),
 ) -> KnowledgeSearchResult:
     plan = plan_knowledge_query(KnowledgeQuery("relay protection"))
     return KnowledgeSearchResult(
@@ -78,6 +78,57 @@ def _empty_result(
         0,
         0,
         1,
+        blocking_owners=blocking_owners,
+    )
+
+
+def test_knowledge_json_escapes_unencodable_corpus_text_on_windows_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StrictCp1252Console:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+
+        def write(self, value: str) -> int:
+            value.encode(self.encoding)
+            self.parts.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+        def getvalue(self) -> str:
+            return "".join(self.parts)
+
+    result = replace(
+        _empty_result(_snapshot(), complete=True),
+        plan=plan_knowledge_query(KnowledgeQuery("relay \uf0b7 protection")),
+    )
+
+    class Service:
+        def search(self, *_args: object, **_kwargs: object) -> KnowledgeSearchResult:
+            return result
+
+    monkeypatch.setattr(cli_knowledge, "_service", lambda _args: Service())
+    monkeypatch.setattr(
+        cli_knowledge,
+        "_with_cancellation",
+        lambda operation: operation(lambda: None),
+    )
+    console = StrictCp1252Console()
+    monkeypatch.setattr(sys, "stdout", console)
+    args = build_parser().parse_args(
+        ("--knowledge-search", "relay", "--knowledge-json")
+    )
+
+    code = cli_knowledge.run_knowledge_search(args)
+
+    assert code == int(cli_knowledge.KnowledgeExitCode.NO_RESULTS)
+    assert "\\uf0b7" in console.getvalue()
+    assert json.loads(console.getvalue())["plan"]["normalized_query"] == (
+        "relay \uf0b7 protection"
     )
 
 
@@ -91,15 +142,15 @@ def test_parser_selects_three_lazy_flat_operations_with_bounded_defaults() -> No
     assert status.knowledge_context_characters == 12_000
     assert status.knowledge_mode == "evidence"
     assert "--knowledge-context-characters N" in parser.format_help()
-    assert tuple(
-        item.destination for item in selected_direct_operations(status)
-    ) == ("knowledge_status",)
-    assert tuple(
-        item.destination for item in selected_direct_operations(search)
-    ) == ("knowledge_search",)
-    assert tuple(
-        item.destination for item in selected_direct_operations(context)
-    ) == ("knowledge_context",)
+    assert tuple(item.destination for item in selected_direct_operations(status)) == (
+        "knowledge_status",
+    )
+    assert tuple(item.destination for item in selected_direct_operations(search)) == (
+        "knowledge_search",
+    )
+    assert tuple(item.destination for item in selected_direct_operations(context)) == (
+        "knowledge_context",
+    )
 
 
 @pytest.mark.parametrize(
@@ -419,14 +470,74 @@ def test_search_exit_code_precedence_is_stable() -> None:
         stable,
         snapshot=_snapshot(consistency=SnapshotConsistency.SNAPSHOT_CHANGED),
     )
-    future = replace(stable, snapshot=_snapshot(OwnerAvailability.FUTURE))
-    corrupt = replace(stable, snapshot=_snapshot(OwnerAvailability.CORRUPT))
+    future = replace(
+        stable,
+        snapshot=_snapshot(OwnerAvailability.FUTURE),
+        blocking_owners=("pdf",),
+    )
+    corrupt = replace(
+        stable,
+        snapshot=_snapshot(OwnerAvailability.CORRUPT),
+        blocking_owners=("pdf",),
+    )
 
     assert cli_knowledge.knowledge_search_exit_code(stable) == 3
     assert cli_knowledge.knowledge_search_exit_code(partial) == 4
     assert cli_knowledge.knowledge_search_exit_code(changed) == 5
     assert cli_knowledge.knowledge_search_exit_code(future) == 6
     assert cli_knowledge.knowledge_search_exit_code(corrupt) == 7
+
+
+def test_exact_read_compatible_legacy_owner_is_not_schema_incompatible() -> None:
+    snapshot = KnowledgeSnapshot.create(
+        source_version="0.7.2",
+        captured_at_utc="2026-08-01T00:00:00Z",
+        captured_monotonic_ns=1,
+        owners=(
+            OwnerSnapshot(
+                "framework",
+                OwnerAvailability.AVAILABLE,
+                20,
+                19,
+                warning="legacy_schema_read_compatible:19->20",
+            ),
+        ),
+    )
+    result = _empty_result(snapshot, complete=True)
+
+    assert cli_knowledge.knowledge_search_exit_code(result) == 3
+
+
+def test_optional_incompatible_owner_does_not_override_query_outcome() -> None:
+    snapshot = _snapshot(OwnerAvailability.INCOMPATIBLE)
+    partial = _empty_result(snapshot, complete=False)
+    no_evidence = _empty_result(snapshot, complete=True)
+    required = _empty_result(
+        snapshot,
+        complete=False,
+        blocking_owners=("pdf",),
+    )
+
+    assert cli_knowledge.knowledge_search_exit_code(partial) == 4
+    assert cli_knowledge.knowledge_search_exit_code(no_evidence) == 3
+    assert cli_knowledge.knowledge_search_exit_code(required) == 6
+
+    optional_context = build_context_bundle(partial, character_limit=2_000)
+    required_context = build_context_bundle(
+        required,
+        character_limit=2_000,
+    )
+    corrupt_context = build_context_bundle(
+        _empty_result(
+            _snapshot(OwnerAvailability.CORRUPT),
+            complete=False,
+            blocking_owners=("pdf",),
+        ),
+        character_limit=2_000,
+    )
+    assert cli_knowledge.knowledge_context_exit_code(optional_context) == 4
+    assert cli_knowledge.knowledge_context_exit_code(required_context) == 6
+    assert cli_knowledge.knowledge_context_exit_code(corrupt_context) == 7
 
 
 def test_handler_does_not_swallow_keyboard_interrupt(
@@ -440,4 +551,6 @@ def test_handler_does_not_swallow_keyboard_interrupt(
     monkeypatch.setattr(cli_knowledge, "_with_cancellation", interrupt)
     with pytest.raises(KeyboardInterrupt):
         cli_knowledge.run_knowledge_status(args)
+
+
 # endregion [02]

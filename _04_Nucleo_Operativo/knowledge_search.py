@@ -46,6 +46,7 @@ from .knowledge_search_contracts import (
     KnowledgeCandidate,
     KnowledgeSearchResult,
     RankingExecution,
+    ResourceDiscoverySignal,
 )
 from .knowledge_search_code import (
     bounded_code_relation_value as _code_bounded_relation_value_impl,
@@ -61,6 +62,7 @@ from .knowledge_search_content import (
     int_provenance as _content_int_provenance,
     lexical_rankings as _content_lexical_rankings,
     resolved_physical_identity as _content_resolved_physical_identity,
+    resource_discovery_signal_from_resolved as _content_resource_discovery_signal_from_resolved,
     revision_identity as _content_revision_identity,
     semantic_rankings as _content_semantic_rankings,
 )
@@ -203,6 +205,7 @@ def _overlaps_or_too_close(
 def fuse_evidence_rankings(
     rankings: Mapping[str, Sequence[KnowledgeCandidate]],
     *,
+    discovery_signals: Sequence[ResourceDiscoverySignal] = (),
     limit: int,
     max_per_resource: int,
     min_section_distance: int,
@@ -213,6 +216,7 @@ def fuse_evidence_rankings(
 
     return _fuse_evidence_rankings(
         rankings,
+        discovery_signals=discovery_signals,
         limit=limit,
         max_per_resource=max_per_resource,
         min_section_distance=min_section_distance,
@@ -345,6 +349,32 @@ def _candidate_from_resolved(
     )
 
 
+def _resource_discovery_signal_from_resolved(
+    resolved: ResolvedSearchHit,
+    *,
+    ranking_name: str,
+    source_rank: int,
+    producer: str,
+    fusion_weight: float,
+) -> ResourceDiscoverySignal:
+    return _content_resource_discovery_signal_from_resolved(
+        resolved,
+        ranking_name=ranking_name,
+        source_rank=source_rank,
+        producer=producer,
+        fusion_weight=fusion_weight,
+        resolved_physical_identity_fn=_resolved_physical_identity,
+        int_provenance_fn=_int_provenance,
+        revision_identity_fn=_revision_identity,
+        lexical_owner_formats=_LEXICAL_OWNER_FORMATS,
+        resource_ref_type=ResourceRef,
+        physical_identity_ref_type=PhysicalIdentityRef,
+        revision_ref_type=RevisionRef,
+        ranking_signal_type=RankingSignal,
+        discovery_signal_type=ResourceDiscoverySignal,
+    )
+
+
 def _lexical_rankings(
     paths: KnowledgeStatePaths,
     plan: KnowledgePlan,
@@ -377,7 +407,11 @@ def _semantic_rankings(
     snapshot: KnowledgeSnapshot,
     cancellation_check: Callable[[], None] | None = None,
     clock_ns: Callable[[], int] | None = None,
-) -> tuple[dict[str, tuple[KnowledgeCandidate, ...]], list[RankingExecution]]:
+) -> tuple[
+    dict[str, tuple[KnowledgeCandidate, ...]],
+    tuple[ResourceDiscoverySignal, ...],
+    list[RankingExecution],
+]:
     return _content_semantic_rankings(
         paths,
         plan,
@@ -388,6 +422,7 @@ def _semantic_rankings(
         owner_available=_owner_available,
         duration_ns=_duration_ns,
         materialize_candidate=_candidate_from_resolved,
+        materialize_discovery_signal=_resource_discovery_signal_from_resolved,
         default_clock=time.perf_counter_ns,
         semantic_search=semantic_service.search_semantic_index,
         cancellation_bridge_type=SQLiteCancellationBridge,
@@ -821,6 +856,7 @@ def execute_knowledge_search(
     clock = clock_contract.now_ns
     started_ns = clock()
     rankings: dict[str, tuple[KnowledgeCandidate, ...]] = {}
+    discovery_signals: tuple[ResourceDiscoverySignal, ...] = ()
     reports: list[RankingExecution] = []
     phase_timings: list[KnowledgePhaseTiming] = []
 
@@ -881,7 +917,7 @@ def execute_knowledge_search(
     if _planned(plan, "semantic"):
         semantic_cancellation = SQLiteCancellationBridge(cancellation_check)
         try:
-            semantic, semantic_reports = _semantic_rankings(
+            semantic_result = _semantic_rankings(
                 paths,
                 plan,
                 snapshot,
@@ -892,16 +928,22 @@ def execute_knowledge_search(
                 ),
                 clock_ns=clock,
             )
+            if len(semantic_result) == 2:  # compatibility for injected v2 seams
+                semantic, semantic_reports = semantic_result
+            else:
+                semantic, discovery_signals, semantic_reports = semantic_result
         except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
             _reraise_captured_cancellation(semantic_cancellation, exc)
             semantic = {}
-            failed_names = tuple(
-                step.ranking_name for step in _planned_steps(plan, "semantic")
+            discovery_signals = ()
+            failed_steps = (
+                *_planned_steps(plan, "semantic"),
+                *_planned_steps(plan, "semantic_discovery"),
             )
             semantic_reports = [
                 RankingExecution(
-                    name,
-                    "semantic",
+                    step.ranking_name,
+                    step.channel,
                     True,
                     False,
                     False,
@@ -909,7 +951,7 @@ def execute_knowledge_search(
                     reason=f"owner_read_failed:{type(exc).__name__}",
                     owner="semantic",
                 )
-                for name in failed_names
+                for step in failed_steps
             ]
         rankings.update(semantic)
         reports.extend(semantic_reports)
@@ -1059,14 +1101,25 @@ def execute_knowledge_search(
     record_report_timings((duplicate_report,))
     check_cancelled()
     fusion_started_ns = clock()
-    hits, omitted = fuse_evidence_rankings(
-        rankings,
-        limit=plan.limit,
-        max_per_resource=plan.max_per_resource,
-        min_section_distance=plan.min_section_distance,
-        include_history=plan.include_history,
-        cancellation_check=cancellation_check,
-    )
+    if discovery_signals:
+        hits, omitted = fuse_evidence_rankings(
+            rankings,
+            discovery_signals=discovery_signals,
+            limit=plan.limit,
+            max_per_resource=plan.max_per_resource,
+            min_section_distance=plan.min_section_distance,
+            include_history=plan.include_history,
+            cancellation_check=cancellation_check,
+        )
+    else:
+        hits, omitted = fuse_evidence_rankings(
+            rankings,
+            limit=plan.limit,
+            max_per_resource=plan.max_per_resource,
+            min_section_distance=plan.min_section_distance,
+            include_history=plan.include_history,
+            cancellation_check=cancellation_check,
+        )
     phase_timings.append(
         KnowledgePhaseTiming(
             KnowledgeTimingPhase.FUSION,
@@ -1115,6 +1168,18 @@ def execute_knowledge_search(
                     incomplete_required.add(report.name)
         else:
             unavailable_required.add("exact")
+    blocking_ranking_names = (unavailable_required | incomplete_required).intersection(
+        required_lexical | required_semantic | required_direct
+    )
+    blocking_owners = tuple(
+        sorted(
+            {
+                report.owner
+                for report in reports
+                if report.name in blocking_ranking_names and report.owner is not None
+            }
+        )
+    )
     upstream_cutoffs = tuple(
         report
         for report in reports
@@ -1179,6 +1244,7 @@ def execute_knowledge_search(
             tuple(phase_timings),
             clock_signature=clock_contract.signature,
         ),
+        blocking_owners=blocking_owners,
     )
 
 

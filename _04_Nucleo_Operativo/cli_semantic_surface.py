@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 from .cli_operations import DirectOperationFamily, selected_direct_operations
@@ -57,6 +58,33 @@ def register_semantic_arguments(parser: argparse.ArgumentParser) -> None:
         "--semantic-index",
         choices=("text", "image", "all"),
         help="incrementally index existing durable text caches, images, or both",
+    )
+    semantic.add_argument(
+        "--semantic-max-items",
+        type=int,
+        default=50,
+        metavar="N",
+        help=(
+            "maximum complete new or changed source items admitted by one "
+            "semantic index run; exact replay is free"
+        ),
+    )
+    semantic.add_argument(
+        "--semantic-max-new-jobs",
+        type=int,
+        default=1_500,
+        metavar="N",
+        help=(
+            "maximum durable embedding jobs newly created or reactivated by one "
+            "semantic index run; exact replay is free"
+        ),
+    )
+    semantic.add_argument(
+        "--semantic-time-budget-seconds",
+        type=float,
+        default=900.0,
+        metavar="SECONDS",
+        help="shared monotonic time budget for one semantic index run",
     )
     semantic.add_argument(
         "--semantic-search",
@@ -155,6 +183,17 @@ def _validate_semantic_values(args: argparse.Namespace) -> None:
         raise SystemExit("--semantic-max-vectors must be between 1 and 10000000")
     if args.semantic_threads is not None and args.semantic_threads < 1:
         raise SystemExit("--semantic-threads must be positive")
+    if not 1 <= args.semantic_max_items <= 10_000_000:
+        raise SystemExit("--semantic-max-items must be between 1 and 10000000")
+    if not 1 <= args.semantic_max_new_jobs <= 100_000_000:
+        raise SystemExit("--semantic-max-new-jobs must be between 1 and 100000000")
+    if (
+        not math.isfinite(args.semantic_time_budget_seconds)
+        or not 0.001 <= args.semantic_time_budget_seconds <= 86_400.0
+    ):
+        raise SystemExit(
+            "--semantic-time-budget-seconds must be finite and between 0.001 and 86400"
+        )
     if (
         not 64 * 1024
         <= args.semantic_plan_max_scratch_bytes
@@ -189,6 +228,9 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         "semantic_include_compact",
         "semantic_plan_json",
         "semantic_plan_max_scratch_bytes",
+        "semantic_max_items",
+        "semantic_max_new_jobs",
+        "semantic_time_budget_seconds",
     }
     if not semantic_actions and optional_names.intersection(explicit):
         raise SystemExit("semantic options require one semantic direct action")
@@ -225,6 +267,13 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         raise SystemExit("semantic search options require --semantic-search")
     if "semantic_evidence_limit" in explicit and args.semantic_evidence is None:
         raise SystemExit("--semantic-evidence-limit requires --semantic-evidence")
+    index_only = {
+        "semantic_max_items",
+        "semantic_max_new_jobs",
+        "semantic_time_budget_seconds",
+    }
+    if index_only.intersection(explicit) and args.semantic_index is None:
+        raise SystemExit("semantic index budget options require --semantic-index")
     model_actions = bool(
         args.semantic_prepare_models
         or args.semantic_index is not None

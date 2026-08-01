@@ -179,7 +179,9 @@ def _complete_generation(
 # region [02] Search integrity and compatibility boundaries
 
 
-def test_search_rejects_incompatible_or_unavailable_model_spaces(tmp_path: Path) -> None:
+def test_search_rejects_incompatible_or_unavailable_model_spaces(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "semantic.sqlite3"
     model = _model()
     _initialize(database, model)
@@ -320,6 +322,19 @@ def test_deleted_source_stales_lease_and_cannot_replace_published_head(
         processing_signature="successor",
         started_ns=200,
     )
+    upsert_semantic_item(
+        database,
+        SemanticItem(
+            "document",
+            "pdf",
+            "identity:document",
+            "failure-fixture-v2",
+            fingerprint_text("published relay record"),
+            path="C:/fixtures/moved-document.pdf",
+        ),
+        refresh_token="items-moved",
+        updated_ns=200,
+    )
     enqueue_text_chunk_jobs(database, successor, (chunk.chunk_id,), now_ns=201)
     lease = claim_embedding_jobs(
         database,
@@ -330,12 +345,15 @@ def test_deleted_source_stales_lease_and_cannot_replace_published_head(
         now_ns=202,
     )[0]
 
-    assert finalize_semantic_item_refresh(
-        database,
-        source_kind="pdf",
-        refresh_token="source-deleted",
-        updated_ns=203,
-    ) == 1
+    assert (
+        finalize_semantic_item_refresh(
+            database,
+            source_kind="pdf",
+            refresh_token="source-deleted",
+            updated_ns=203,
+        )
+        == 1
+    )
     with pytest.raises(StaleEmbeddingJobError, match="source changed"):
         complete_embedding_job(
             database,
@@ -374,14 +392,17 @@ def test_generation_resume_and_post_publication_mutations_are_guarded(
         cursor={"after": 10},
         started_ns=100,
     )
-    assert start_embedding_generation(
-        database,
-        model_signature=model.model_signature,
-        processing_signature="resumable",
-        provenance={"run": 1},
-        cursor={"after": 99},
-        started_ns=101,
-    ) == generation_id
+    assert (
+        start_embedding_generation(
+            database,
+            model_signature=model.model_signature,
+            processing_signature="resumable",
+            provenance={"run": 1},
+            cursor={"after": 99},
+            started_ns=101,
+        )
+        == generation_id
+    )
     with pytest.raises(ValueError, match="provenance does not match"):
         start_embedding_generation(
             database,
@@ -398,7 +419,9 @@ def test_generation_resume_and_post_publication_mutations_are_guarded(
         enqueue_text_chunk_jobs(database, generation_id, ("missing-chunk",))
 
 
-def test_wrong_modality_and_lease_owner_cannot_advance_generation(tmp_path: Path) -> None:
+def test_wrong_modality_and_lease_owner_cannot_advance_generation(
+    tmp_path: Path,
+) -> None:
     database = tmp_path / "semantic.sqlite3"
     model = _model()
     _initialize(database, model)

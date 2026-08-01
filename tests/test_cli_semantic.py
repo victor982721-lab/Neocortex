@@ -3,6 +3,7 @@ from __future__ import annotations
 # region [01] Imports and result fixtures
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -41,6 +42,7 @@ from _04_Nucleo_Operativo.semantic_service import (
     SemanticSourcePlan,
     SemanticWorkloadPlan,
 )
+from _04_Nucleo_Operativo.semantic_work_budget import SemanticIndexDeadlineExceeded
 from tests.internal_paths_test_support import disjoint_internal_paths_policy
 
 
@@ -63,18 +65,25 @@ def _safe_state_write_policies(
     )
 
 
-def _generation(*, pending: int = 0, errors: int = 0) -> GenerationWorkResult:
+def _generation(
+    *,
+    pending: int = 0,
+    errors: int = 0,
+    stale: int = 0,
+) -> GenerationWorkResult:
     return GenerationWorkResult(
         GenerationSummary(
             generation_id=7,
             model_signature="model-signature",
             processing_signature="pipeline-signature",
-            status="complete" if not pending and not errors else "partial",
+            status=(
+                "ready" if not pending and not errors and not stale else "ready_partial"
+            ),
             pending=pending,
             leased=0,
             done=3,
             errors=errors,
-            stale=0,
+            stale=stale,
             cursor={"completed_source": "pdf"},
         ),
         queued=3,
@@ -89,13 +98,18 @@ def _index_result(
     sources: tuple[str, ...],
     *,
     pending: int = 0,
+    stale: int = 0,
+    truncated: bool = False,
+    truncation_reason: str | None = None,
 ) -> SemanticIndexResult:
     return SemanticIndexResult(
         semantic_database=state_directory / "semantic.sqlite3",
         sources=sources,
         items_staged=4,
         chunks_staged=6,
-        generations=(_generation(pending=pending),),
+        generations=(_generation(pending=pending, stale=stale),),
+        truncated=truncated,
+        truncation_reason=truncation_reason,
     )
 
 
@@ -199,6 +213,9 @@ def test_semantic_cli_defaults_are_offline_bounded_and_quality_first() -> None:
     assert args.semantic_evidence_limit == 100
     assert args.semantic_max_vectors == 500_000
     assert args.semantic_plan_max_scratch_bytes == 512 * 1024 * 1024
+    assert args.semantic_max_items == 50
+    assert args.semantic_max_new_jobs == 1_500
+    assert args.semantic_time_budget_seconds == 900.0
     assert args.semantic_source is None
 
 
@@ -277,6 +294,22 @@ def test_semantic_cli_defaults_are_offline_bounded_and_quality_first() -> None:
         (
             ["--semantic-plan", "text", "--semantic-plan-max-scratch-bytes", "1"],
             "--semantic-plan-max-scratch-bytes must be between",
+        ),
+        (
+            ["--semantic-index", "text", "--semantic-max-items", "0"],
+            "--semantic-max-items must be between",
+        ),
+        (
+            ["--semantic-index", "text", "--semantic-max-new-jobs", "0"],
+            "--semantic-max-new-jobs must be between",
+        ),
+        (
+            ["--semantic-index", "text", "--semantic-time-budget-seconds", "nan"],
+            "--semantic-time-budget-seconds must be finite",
+        ),
+        (
+            ["--semantic-status", "--semantic-max-items", "10"],
+            "semantic index budget options require --semantic-index",
         ),
     ),
 )
@@ -571,6 +604,10 @@ def test_semantic_index_all_runs_text_then_image_offline_with_selected_profile(
     assert image_kwargs["local_files_only"] is True
     assert image_kwargs["embed_ocr_text"] is False
     assert image_kwargs["ocr_model"].model_id == COMPACT_TEXT_MODEL_ID
+    assert text_kwargs["work_budget"] is image_kwargs["work_budget"]
+    assert text_kwargs["work_budget"].max_items == 50
+    assert text_kwargs["work_budget"].max_new_jobs == 1_500
+    assert text_kwargs["work_budget"].deadline is not None
     output = capsys.readouterr().out
     assert "SEMANTIC_INDEX scope=text" in output
     assert "SEMANTIC_INDEX scope=image" in output
@@ -595,6 +632,50 @@ def test_semantic_index_reports_partial_generation_as_nonzero(
     assert "incomplete=1" in capsys.readouterr().out
 
 
+def test_semantic_index_reports_stale_only_generation_as_nonzero(
+    tmp_path,
+    capsys,
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-index", "text"]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=_index_result(tmp_path, ("pdf",), stale=1),
+    ):
+        assert dispatch_direct(args) == 2
+    output = capsys.readouterr().out
+    assert "status=ready_partial" in output
+    assert "stale=1" in output
+    assert "complete=0" in output
+
+
+def test_semantic_index_reports_budget_truncation_as_nonzero(
+    tmp_path,
+    capsys,
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-index", "text"]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=_index_result(
+            tmp_path,
+            ("pdf",),
+            truncated=True,
+            truncation_reason="max_items",
+        ),
+    ):
+        assert dispatch_direct(args) == 2
+    output = capsys.readouterr().out
+    assert "truncated=1" in output
+    assert "truncation_reason=max_items" in output
+
+
 def test_semantic_index_without_available_text_cache_fails_explicitly(
     tmp_path,
     capsys,
@@ -616,13 +697,36 @@ def test_semantic_index_without_available_text_cache_fails_explicitly(
     )
 
 
+def test_semantic_index_deadline_failure_returns_two(
+    tmp_path,
+    capsys,
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-index", "text"]
+    )
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        side_effect=SemanticIndexDeadlineExceeded("model startup deadline"),
+    ):
+        assert dispatch_direct(args) == 2
+    assert "model startup deadline" in capsys.readouterr().out
+
+
 # endregion [03]
 
 
 # region [04] Search, classification and advisory evidence
 
 
-def _search_result(*, complete: bool = True) -> SemanticSearchResult:
+def _search_result(
+    *,
+    complete: bool = True,
+    source_identity: str = "page:1",
+    path: str = r"C:\corpus\transformador.pdf",
+    snippet: str = "transformador de potencia",
+) -> SemanticSearchResult:
     semantic_ranking = SemanticRanking(
         name="semantic_text",
         hits=(),
@@ -654,10 +758,10 @@ def _search_result(*, complete: bool = True) -> SemanticSearchResult:
                 ),
             ),
         ),
-        path=r"C:\corpus\transformador.pdf",
+        path=path,
         source_kind="pdf",
-        source_identity="page:1",
-        snippet="transformador de potencia",
+        source_identity=source_identity,
+        snippet=snippet,
     )
     return SemanticSearchResult(
         "transformador",
@@ -720,6 +824,49 @@ def test_semantic_search_incomplete_exact_scan_returns_two(tmp_path, capsys) -> 
     assert "complete=0" in output
     assert "reason=max_vectors_reached" in output
     assert "next_cursor=25" in output
+
+
+def test_semantic_search_escapes_unencodable_corpus_text_on_cp1252(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class StrictCp1252Console:
+        encoding = "cp1252"
+
+        def __init__(self) -> None:
+            self.parts: list[str] = []
+
+        def write(self, value: str) -> int:
+            value.encode(self.encoding)
+            self.parts.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+        def getvalue(self) -> str:
+            return "".join(self.parts)
+
+    args = build_parser().parse_args(
+        ["--state-directory", str(tmp_path), "--semantic-search", "breaker"]
+    )
+    validate_arguments(args)
+    console = StrictCp1252Console()
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.search_semantic_index",
+        return_value=_search_result(
+            source_identity="page:\ufeff1",
+            path="C:/corpus/ficha\uf0b7.pdf",
+            snippet="protección \uf0b7 diferencial",
+        ),
+    ):
+        monkeypatch.setattr(sys, "stdout", console)
+        assert dispatch_direct(args) == 0
+
+    output = console.getvalue()
+    assert "SEMANTIC_HIT rank=1" in output
+    assert "\\ufeff" in output
+    assert output.count("\\uf0b7") == 2
 
 
 def test_offline_semantic_failure_names_explicit_model_preparation(

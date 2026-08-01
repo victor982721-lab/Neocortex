@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
-from typing import cast
+from typing import Sequence, cast
 
 import pytest
 
@@ -251,6 +251,73 @@ def test_chunker_raises_instead_of_silently_truncating_item() -> None:
             "large",
             (TextSection("body", "1", "uno dos tres cuatro cinco " * 10),),
             config,
+        )
+
+
+def test_chunker_fits_subword_heavy_windows_with_exact_token_counter() -> None:
+    config = TextChunkingConfig(
+        max_chars=1_600,
+        max_terms=280,
+        overlap_chars=192,
+        overlap_terms=40,
+        min_natural_break_chars=128,
+        algorithm_version="token-fit-regression-v1",
+        model_token_limit=512,
+        tokenizer_signature="fixture-tokenizer-v1",
+    )
+    source = "ANSI/49T protección-diferencial IEC-61850/GOOSE " * 400
+
+    def subword_heavy_counts(texts: Sequence[str]) -> tuple[tuple[int, ...], int]:
+        return tuple(2 + 2 * len(text.split()) for text in texts), 512
+
+    chunks = chunk_text_sections(
+        "pdf:subword-heavy",
+        (TextSection("pdf_page", "16", source),),
+        config,
+        token_counter=subword_heavy_counts,
+    )
+    repeated = chunk_text_sections(
+        "pdf:subword-heavy",
+        (TextSection("pdf_page", "16", source),),
+        config,
+        token_counter=subword_heavy_counts,
+    )
+    legacy = chunk_text_sections(
+        "pdf:subword-heavy",
+        (TextSection("pdf_page", "16", source),),
+        replace(config, algorithm_version="token-fit-regression-v0"),
+        token_counter=subword_heavy_counts,
+    )
+
+    assert len(chunks) > 2
+    assert chunks == repeated
+    assert [chunk.chunk_id for chunk in chunks] != [chunk.chunk_id for chunk in legacy]
+    assert all(subword_heavy_counts((chunk.text,))[0][0] <= 512 for chunk in chunks)
+    assert chunks[0].start_char == 0
+    assert chunks[-1].end_char == len(source)
+    assert all(
+        current.start_char <= previous.end_char
+        for previous, current in zip(chunks, chunks[1:])
+    )
+
+
+def test_chunker_rejects_payload_that_cannot_fit_one_source_character() -> None:
+    config = TextChunkingConfig(
+        max_chars=64,
+        max_terms=8,
+        overlap_chars=0,
+        overlap_terms=0,
+        min_natural_break_chars=16,
+        model_token_limit=512,
+        tokenizer_signature="fixture-tokenizer-v1",
+    )
+
+    with pytest.raises(ChunkLimitExceeded, match="one source character"):
+        chunk_text_sections(
+            "impossible",
+            (TextSection("body", "1", "X"),),
+            config,
+            token_counter=lambda texts: (tuple(513 for _ in texts), 512),
         )
 
 

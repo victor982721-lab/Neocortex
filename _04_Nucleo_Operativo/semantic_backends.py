@@ -13,6 +13,7 @@ from typing import Any, Iterable, Iterator, Mapping, Protocol, Sequence
 
 import xxhash
 
+from .semantic_config import fastembed_cache_contract
 from .semantic_models import (
     BackendEmbedding,
     EmbeddingModality,
@@ -290,6 +291,7 @@ class FastEmbedBackend:
                 f"{actual_dimensions}"
             )
         self._model_spec = model
+        self._cache_dir = Path(cache_dir)
         self._batch_size = selected_batch
         self._parallel = parallel
         self._tokenizer_lock = threading.RLock()
@@ -327,7 +329,7 @@ class FastEmbedBackend:
             raise ValueError("FastEmbed text requests require text payloads")
         selected_texts = [str(text) for text in texts]
         with self._tokenizer_lock:
-            token_counts, token_limit = self._untruncated_token_counts(selected_texts)
+            token_counts, token_limit = self.text_token_counts(selected_texts)
             oversized = [
                 (request.request_id, token_count)
                 for (_, request), token_count in zip(indexed, token_counts, strict=True)
@@ -375,6 +377,48 @@ class FastEmbedBackend:
         if len(output) != len(indexed):
             raise RuntimeError("FastEmbed returned fewer text vectors than requested")
         return output
+
+    def text_token_counts(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[int, ...], int]:
+        """Return exact untruncated counts from the pinned production tokenizer."""
+
+        if self.model.modality is not EmbeddingModality.TEXT:
+            raise ValueError("token counts require a text embedding model")
+        if not texts:
+            raise ValueError("token counts require at least one text")
+        if any(not isinstance(text, str) for text in texts):
+            raise ValueError("token count payloads must be strings")
+        return self._untruncated_token_counts(texts)
+
+    def text_tokenizer_contract(self) -> tuple[str, int]:
+        """Bind exact token sizing to the cached model snapshot revision."""
+
+        _, token_limit = self.text_token_counts(("Neocortex exact tokenizer contract",))
+        contract = fastembed_cache_contract(self.model.model_signature)
+        reference = (
+            self._cache_dir
+            / ("models--" + contract.repository_id.replace("/", "--"))
+            / "refs"
+            / "main"
+        )
+        try:
+            revision = reference.read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError(
+                "FastEmbed tokenizer cache revision is unavailable"
+            ) from exc
+        if not 40 <= len(revision) <= 64 or any(
+            character not in "0123456789abcdef" for character in revision
+        ):
+            raise RuntimeError("FastEmbed tokenizer cache revision is invalid")
+        identity = (
+            f"exact-token-fit-v1\0{self.model.model_signature}\0"
+            f"{contract.repository_id}\0{revision}\0{token_limit}"
+        )
+        digest = xxhash.xxh3_128_hexdigest(identity.encode("utf-8"))
+        return f"exact-token-fit-v1:xxh3-128:{digest}", token_limit
 
     def _untruncated_token_counts(
         self,

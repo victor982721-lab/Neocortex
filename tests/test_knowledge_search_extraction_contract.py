@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -260,6 +259,14 @@ def test_public_contract_validation_messages_and_precedence_are_stable() -> None
             lambda: replace(result, telemetry=object()),
             "KnowledgeSearchResult telemetry must describe search",
         ),
+        (
+            lambda: replace(result, blocking_owners=["pdf"]),
+            "search blocking owners must be a tuple",
+        ),
+        (
+            lambda: replace(result, blocking_owners=("pdf", "pdf")),
+            "search blocking owners must be unique and ordered",
+        ),
     )
 
     for factory, message in cases:
@@ -358,4 +365,6 @@ def test_fusion_dependencies_and_cancellation_remain_late_bound(
         )
     assert raised.value is expected
     assert checkpoints == 2
+
+
 # endregion [02]

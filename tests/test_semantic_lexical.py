@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from _04_Nucleo_Operativo import semantic_lexical
 from _04_Nucleo_Operativo.semantic_lexical import (
     MAX_QUERY_CHARS,
     MAX_QUERY_TERM_CHARS,
@@ -261,6 +262,82 @@ def test_searches_all_fts_sources_as_separate_resolved_rankings(
         assert resolved.hit.provenance["backend"] == "sqlite_fts5"
         assert resolved.hit.provenance["rank_position"] == 1
         assert isinstance(resolved.hit.provenance["raw_bm25"], float)
+
+
+def test_docx_materializes_ranking_before_generating_snippets(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "docx-large.sqlite3"
+    with sqlite3.connect(state) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE documents(
+                file_key TEXT PRIMARY KEY,
+                path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime_ns INTEGER NOT NULL,
+                birthtime_ns INTEGER NOT NULL,
+                processing_signature TEXT NOT NULL,
+                last_seen_run_id INTEGER NOT NULL
+            );
+            CREATE VIRTUAL TABLE document_fts USING fts5(
+                file_key UNINDEXED,
+                path UNINDEXED,
+                title,
+                author,
+                body,
+                tokenize='unicode61 remove_diacritics 2'
+            );
+            """
+        )
+        for index in range(24):
+            file_key = f"docx-{index:02d}"
+            path = f"C:/docs/protection-{index:02d}.docx"
+            body = f"protection differential transformer fixture {index} " + (
+                f"technical filler {index} " * 2_000
+            )
+            connection.execute(
+                "INSERT INTO documents VALUES(?,?,?,?,?,?,?,?)",
+                (file_key, path, "complete", len(body), index, index, "docx-v5", 1),
+            )
+            connection.execute(
+                "INSERT INTO document_fts VALUES(?,?,?,?,?)",
+                (file_key, path, "Protection study", "Victor", body),
+            )
+
+        query = compile_natural_fts_query("protection differential transformer")
+        plan_rows = connection.execute(
+            "EXPLAIN QUERY PLAN " + semantic_lexical._SPECS["docx"].sql,
+            (query, 7),
+        ).fetchall()
+        legacy_rows = connection.execute(
+            """SELECT f.rowid AS fts_rowid,f.path,
+            snippet(document_fts,4,'[',']',' ... ',24) AS snippet,
+            bm25(document_fts) AS raw_bm25
+            FROM document_fts AS f JOIN documents AS d ON d.file_key=f.file_key
+            WHERE document_fts MATCH ? AND d.status IN ('complete','partial')
+            ORDER BY raw_bm25,f.path COLLATE NOCASE LIMIT ?""",
+            (query, 7),
+        ).fetchall()
+
+    result = search_lexical_source(
+        "docx",
+        state,
+        "protection differential transformer",
+        limit=7,
+    )
+
+    assert any("MATERIALIZE ranked" in str(row[3]) for row in plan_rows)
+    assert tuple(
+        (
+            hit.hit.ref_id,
+            hit.path,
+            hit.snippet,
+            hit.hit.provenance["raw_bm25"],
+        )
+        for hit in result.hits
+    ) == tuple(legacy_rows)
 
 
 @pytest.mark.parametrize("source_kind", ["pdf", "docx"])

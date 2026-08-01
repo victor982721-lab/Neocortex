@@ -106,6 +106,9 @@ EXPECTED_FIELDS = {
         "items_staged",
         "chunks_staged",
         "generations",
+        "new_jobs_staged",
+        "truncated",
+        "truncation_reason",
     ),
     "SemanticCostCalibration": (
         "calibration_signature",
@@ -216,6 +219,8 @@ EXPECTED_FIELDS = {
         "cutoff_reason",
         "next_cursor",
         "cutoff_score",
+        "fusion_weight",
+        "provenance",
     ),
     "FusedResolvedHit": ("fused", "path", "source_kind", "source_identity", "snippet"),
     "SemanticSearchResult": ("query", "rankings", "lexical_rankings", "fused"),
@@ -253,7 +258,9 @@ EXPECTED_SIGNATURES = {
     "SemanticIndexResult": (
         "(semantic_database: 'Path', sources: 'tuple[str, ...]', "
         "items_staged: 'int', chunks_staged: 'int', "
-        "generations: 'tuple[GenerationWorkResult, ...]') -> None"
+        "generations: 'tuple[GenerationWorkResult, ...]', "
+        "new_jobs_staged: 'int' = 0, truncated: 'bool' = False, "
+        "truncation_reason: 'str | None' = None) -> None"
     ),
     "SemanticCostCalibration": (
         "(calibration_signature: 'str', execution_signature: 'str', "
@@ -322,7 +329,8 @@ EXPECTED_SIGNATURES = {
         "complete: 'bool', available: 'bool' = True, "
         "unavailable_reason: 'str | None' = None, "
         "cutoff_reason: 'str | None' = None, next_cursor: 'int | None' = None, "
-        "cutoff_score: 'float | None' = None) -> None"
+        "cutoff_score: 'float | None' = None, fusion_weight: 'float' = 1.0, "
+        "provenance: 'Mapping[str, object]' = <factory>) -> None"
     ),
     "FusedResolvedHit": (
         "(fused: 'FusedHit', path: 'str | None', source_kind: 'str', "
@@ -553,6 +561,14 @@ def test_contract_signatures_fields_defaults_and_dataclass_shape_are_stable() ->
         "not_cross_database_atomic"
     )
     assert plan_fields["sqlite_read_snapshot_may_touch_shm"].default is True
+    index_fields = {item.name: item for item in fields(SemanticIndexResult)}
+    assert index_fields["new_jobs_staged"].default == 0
+    assert index_fields["truncated"].default is False
+    assert index_fields["truncation_reason"].default is None
+    ranking_fields = {item.name: item for item in fields(SemanticRanking)}
+    assert ranking_fields["fusion_weight"].default == 1.0
+    assert ranking_fields["provenance"].default is MISSING
+    assert ranking_fields["provenance"].default_factory is dict
     status_fields = {item.name: item for item in fields(SemanticStatus)}
     assert status_fields["counts"].default is MISSING
     assert status_fields["counts"].default_factory is dict
@@ -769,4 +785,6 @@ def test_representative_valid_contract_graph_is_stable() -> None:
     assert plan.cost_complete is False
     assert plan.cost_calibrated is False
     assert plan.complete is False
+
+
 # endregion [02]

@@ -32,7 +32,10 @@ from . import semantic_schema as semantic_schema_module
 from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
 from .docx_schema import DOCX_SCHEMA_VERSION, validate_docx_schema
 from .framework_schema import SCHEMA_VERSION as FRAMEWORK_SCHEMA_VERSION
-from .framework_schema import _validate_schema as validate_framework_schema
+from .framework_schema import (
+    _validate_schema as validate_framework_schema,
+    validate_framework_schema_v19,
+)
 from .knowledge_contracts import (
     ActiveModel,
     KnowledgeSnapshot,
@@ -74,6 +77,7 @@ class _CancellationController:
 
     def raised_here(self, exc: BaseException) -> bool:
         return self.raised_exception is exc
+
 
 # This reader deliberately pins the image owner version it understands.  Import
 # image_state only when that database exists so status over absent state does
@@ -224,6 +228,19 @@ class _OwnerSpec:
     expected_schema: int
     validate: _Validator
     read_kind: str
+    legacy_read_validators: tuple[tuple[int, _Validator], ...] = ()
+
+    def validator_for(self, observed_schema: int) -> _Validator | None:
+        if observed_schema == self.expected_schema:
+            return self.validate
+        return next(
+            (
+                validator
+                for version, validator in self.legacy_read_validators
+                if version == observed_schema
+            ),
+            None,
+        )
 
 
 def _validate_catalog(connection: sqlite3.Connection) -> None:
@@ -264,8 +281,19 @@ def _validate_semantic(connection: sqlite3.Connection) -> None:
 
 
 _OWNER_SPECS = (
-    _OwnerSpec("inventory", INVENTORY_SCHEMA_VERSION, validate_inventory_schema, "inventory"),
-    _OwnerSpec("framework", FRAMEWORK_SCHEMA_VERSION, validate_framework_schema, "framework"),
+    _OwnerSpec(
+        "inventory",
+        INVENTORY_SCHEMA_VERSION,
+        validate_inventory_schema,
+        "inventory",
+    ),
+    _OwnerSpec(
+        "framework",
+        FRAMEWORK_SCHEMA_VERSION,
+        validate_framework_schema,
+        "framework",
+        ((19, validate_framework_schema_v19),),
+    ),
     _OwnerSpec(
         "catalog",
         document_catalog_schema.CATALOG_SCHEMA_VERSION,
@@ -274,7 +302,9 @@ _OWNER_SPECS = (
     ),
     _OwnerSpec("pdf", PDF_SCHEMA_VERSION, validate_pdf_schema, "documents"),
     _OwnerSpec("docx", DOCX_SCHEMA_VERSION, validate_docx_schema, "documents"),
-    _OwnerSpec("office", office_state.OFFICE_SCHEMA_VERSION, _validate_office, "documents"),
+    _OwnerSpec(
+        "office", office_state.OFFICE_SCHEMA_VERSION, _validate_office, "documents"
+    ),
     _OwnerSpec("audio", audio_state.AUDIO_SCHEMA_VERSION, _validate_audio, "documents"),
     _OwnerSpec("image", _EXPECTED_IMAGE_SCHEMA_VERSION, _validate_image, "images"),
     _OwnerSpec("semantic", SEMANTIC_SCHEMA_VERSION, _validate_semantic, "semantic"),
@@ -676,7 +706,8 @@ def _capture_available_owner(
                         ),
                         (),
                     )
-                if observed_version < spec.expected_schema:
+                validator = spec.validator_for(observed_version)
+                if validator is None:
                     connection.execute("ROLLBACK")
                     return (
                         OwnerSnapshot(
@@ -690,7 +721,7 @@ def _capture_available_owner(
                         ),
                         (),
                     )
-                spec.validate(connection)
+                validator(connection)
                 before = _logical_observation(connection, spec)
                 connection.execute("COMMIT")
         except BaseException:
@@ -710,7 +741,7 @@ def _capture_available_owner(
                 if after_version != observed_version:
                     after = before
                 else:
-                    spec.validate(connection)
+                    validator(connection)
                     after = _logical_observation(connection, spec)
                 connection.execute("COMMIT")
         except BaseException:
@@ -724,6 +755,14 @@ def _capture_available_owner(
         logical_changed = after_version != observed_version or after != before
         if logical_changed and data_version_after == data_version_before:
             data_version_after = data_version_before + 1
+        warning_parts: list[str] = []
+        if observed_version < spec.expected_schema:
+            warning_parts.append(
+                "legacy_schema_read_compatible:"
+                f"{observed_version}->{spec.expected_schema}"
+            )
+        if logical_changed:
+            warning_parts.append("logical_watermark_changed")
         return (
             OwnerSnapshot(
                 owner=spec.owner,
@@ -734,7 +773,7 @@ def _capture_available_owner(
                 watermarks=after.watermarks,
                 data_version_before=data_version_before,
                 data_version_after=data_version_after,
-                warning=("logical_watermark_changed" if logical_changed else None),
+                warning=";".join(warning_parts) or None,
             ),
             after.active_models,
         )

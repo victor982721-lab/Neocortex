@@ -6,6 +6,38 @@
 > árbol; no sustituye las pruebas ni convierte una evaluación scripted en
 > evidencia de calidad sobre el corpus real.
 
+## Disponibilidad operativa
+
+Este documento describe una capacidad implementada, no certifica que cualquier
+estado local esté listo para usarla. Antes de afirmar que Knowledge funciona
+sobre el corpus:
+
+```powershell
+Neocortex --knowledge-status --knowledge-json
+```
+
+- `status` evalúa el snapshot completo: un owner `incompatible`, `future` o
+  `corrupt` produce `6` o `7` y nunca autoriza una migración implícita.
+- `search` y `context` distinguen los owners que bloquearon realmente la
+  consulta mediante `blocking_owners`. Un owner severo ajeno a los rankings
+  requeridos permanece visible, pero no invalida evidencia sana de otros
+  owners; el resultado sigue marcándose parcial cuando falta cobertura.
+- El ranking Semantic de Knowledge sólo aporta evidencia corporal cuando existe
+  un head publicado con embeddings compatibles; cero heads o cero embeddings no
+  es éxito semántico. `evidence` excluye basename/título. `discovery` puede
+  transportarlo como señal advisory separada y sólo refuerza un recurso y
+  revisión que ya tengan evidencia corporal; un título no crea hits ni citas.
+
+El checkpoint operativo actual se conserva en el
+[handoff 0.7.2](../.codex/handoffs/NEOCORTEX_0.7.2_PAUSE_2026-07-30.md), no en
+este contrato estable.
+
+Para el uso personal, Knowledge queda aceptado cuando tres preguntas
+representativas devuelven evidencia relevante y citable con latencia
+comprensible, y una brecha de cobertura se explica de forma explícita. El
+golden sintético y los contratos unitarios son regresiones necesarias, pero no
+sustituyen esa demostración.
+
 ## Objetivo y frontera
 
 La Knowledge Plane sirve a un agente una vista local, trazable y acotada del
@@ -62,6 +94,7 @@ o regiones.
 | `EvidenceRef` | Una evidencia concreta y su localizador heterogéneo. |
 | `RankingSignal` | Ranking de origen, tipo de score, score crudo, posición, modelo/generación y contribución RRF. |
 | `KnowledgeHit` | Recurso, revisión, evidencia, señales, score fusionado, razones y warnings. |
+| `KnowledgeSearchResult` | Resultado completo/parcial, rankings ejecutados, filas/vectores observados, `blocking_owners` y warnings. |
 | `KnowledgeSnapshot` | Schemas, publicaciones, watermarks y modelos activos de la vista consultada. |
 | `ContextPlanRef` / `ContextPlanStepRef` | Copia validada del plan normalizado completo y de cada paso requerido u opcional. |
 | `ContextEntityRef` / `ContextRelationRef` | Grafo acotado y grounded en evidencias citadas, con método, procedencia y confianza opcional. |
@@ -151,7 +184,7 @@ control.
 | Owner | Archivo | Schema esperado | Frontera observada | Uso en recuperación |
 |---|---|---:|---|---|
 | `inventory` | `dedup.sqlite3` | 8 | Checkpoint válido por raíz y firma cruda a un scan `complete`, más token del plan dedup completo; máximo 1024 heads. | Exact typed de path, nombre o huella sobre heads publicados; identidad física y relaciones planeadas no verificadas. |
-| `framework` | `framework.sqlite3` | 20 | Máximos de run, evento y acción; `best_effort_non_generational`. | Estado transversal; no produce ranking de contenido. |
+| `framework` | `framework.sqlite3` | 20 | Máximos de run, evento y acción; `best_effort_non_generational`. El schema 19 se admite sólo en lectura cuando pasa su validador estructural exacto y se marca `legacy_schema_read_compatible:19->20`. | Estado transversal; no produce ranking de contenido. |
 | `catalog` | `document_catalog.sqlite3` | 6 | Publicación `published` por `source_kind`. | Membership de filtros y exact typed de path, nombre o identificador en la generación publicada. |
 | `pdf` | `pdf.sqlite3` | 11 | Conteo, último `updated_ns` y run; no generacional. | FTS por página y fuentes semantic. |
 | `docx` | `docx.sqlite3` | 5 | Conteo, último `updated_ns` y run; no generacional. | FTS documental y partes semantic. |
@@ -177,7 +210,9 @@ No existe una transacción distribuida entre estos archivos SQLite.
 
 1. abre cada owner por URI `mode=ro` con timeout/busy timeout de 60 s,
    `foreign_keys=ON` y `query_only=ON`;
-2. valida la versión y el schema exacto esperado;
+2. valida la versión y el schema exacto esperado; la única compatibilidad
+   legacy explícita es framework 19→20, condicionada al contrato estructural
+   exacto y sin migrar ni escribir;
 3. observa publicaciones o watermarks dentro de una transacción de lectura;
 4. repite la observación sobre la misma conexión;
 5. compara el estado lógico y `PRAGMA data_version`;
@@ -280,7 +315,8 @@ La frontera `execute_knowledge_search()` reutiliza los owners existentes:
 | `exact_code_*` | Estado actual de archivos, huellas y símbolos de code. | Coincidencia exacta; cobertura `partial`. |
 | `exact_catalog_*` | Generaciones publicadas del catálogo. | Coincidencia exacta y generación fijada. |
 | `fts_pdf`, `fts_docx`, `fts_office`, `fts_audio` | FTS5 de cada owner. | BM25 del owner y posición original. |
-| `semantic_text`, `semantic_image` | Servicio semantic v6 local. | Coseno, firmas de modelo consultor/indexado, espacio y generación. |
+| `semantic_text`, `semantic_image` | Servicio semantic v6 local; `semantic_text` materializa sólo contenido corporal. | Coseno, firmas de modelo consultor/indexado, espacio y generación. |
+| `semantic_title` | Canal opcional sólo en planes `discovery` v3; basename durable, mutable y advisory. | Rango semántico con peso `0.5`; sólo refuerza evidencia corporal del mismo recurso y revisión. |
 | `code_structural` | `search_code` sin reentrar a semantic. | RRF propio de código y evidencia estructural. |
 | `catalog_metadata` | Generación de catálogo fijada por el snapshot. | Sin señal de relevancia: sólo membership/filtro y telemetría. |
 
@@ -561,13 +597,15 @@ Python y se valida antes del handler.
 | `3` | Búsqueda completa sin resultados o ContextBundle `no_evidence`. |
 | `4` | Resultado parcial o capacidad solicitada no soportada. |
 | `5` | Snapshot cambió después del único reintento. |
-| `6` | Schema futuro o incompatible. |
-| `7` | Base corrupta/no SQLite. |
+| `6` | `status`: algún schema futuro/incompatible. `search/context`: uno de esos owners bloqueó realmente la consulta. |
+| `7` | `status`: alguna base corrupta/no SQLite. `search/context`: esa base bloqueó realmente la consulta. |
 | `130` | Cancelación cooperativa o teclado. |
 
 La precedencia es corrupción, schema incompatible, snapshot cambiado, parcial
-y finalmente sin resultados. Una consulta sobre un directorio de estado ausente
-devuelve parcial (`4`), no un falso “sin resultados”, y no crea el directorio.
+y finalmente sin resultados. Para `search/context`, corrupción e
+incompatibilidad se aplican sólo a `blocking_owners`; `status` conserva la vista
+global. Una consulta sobre un directorio de estado ausente devuelve parcial
+(`4`), no un falso “sin resultados”, y no crea el directorio.
 Una ruta existente no-directorio o inaccesible devuelve `1` y no produce un
 snapshot de owners `absent`.
 
@@ -709,7 +747,11 @@ Limitaciones abiertas:
 
 - Semantic es opcional. Sólo usa modelos locales ya preparados y heads
   publicados; si faltan, el ranking se declara indisponible. La búsqueda es
-  exacta, comparte un presupuesto total `max_vectors` y no tiene ANN.
+  exacta, comparte un presupuesto total `max_vectors` y no tiene ANN. Knowledge
+  `discovery` ya transporta `semantic_title` sin convertirlo en evidencia, pero
+  su calibración cross-owner sigue abierta: la muestra de 35 PDF mejoró recall
+  y `Hit@10`, aunque no sostuvo todas las barreras de MRR/FamilyRecall. El cuerpo
+  continúa siendo la única evidencia citable y clasificable.
 - Los seriales exactos son `unsupported`. Las coincidencias exactas de Inventory
   y code se reportan `partial` porque no ofrecen una publicación as-of
   inmutable.
