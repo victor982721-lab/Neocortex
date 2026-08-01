@@ -49,6 +49,8 @@ _SE_FILE_OBJECT = 1
 _OWNER_SECURITY_INFORMATION = 0x00000001
 _GROUP_SECURITY_INFORMATION = 0x00000002
 _DACL_SECURITY_INFORMATION = 0x00000004
+_SE_DACL_AUTO_INHERITED = 0x0400
+_SECURITY_DESCRIPTOR_RELATIVE_HEADER_BYTES = 20
 _SECURITY_INFORMATION = (
     _OWNER_SECURITY_INFORMATION
     | _GROUP_SECURITY_INFORMATION
@@ -356,6 +358,19 @@ def _file_system(handle: int) -> str:
     return buffer.value
 
 
+def _canonical_security_descriptor(descriptor: bytes) -> bytes:
+    """Ignore only the Windows-derived DACL auto-inherited control bit."""
+
+    if len(descriptor) < _SECURITY_DESCRIPTOR_RELATIVE_HEADER_BYTES:
+        raise ReleaseTransitionError(
+            "security descriptor is shorter than its self-relative header"
+        )
+    canonical = bytearray(descriptor)
+    control = int.from_bytes(canonical[2:4], "little")
+    canonical[2:4] = (control & ~_SE_DACL_AUTO_INHERITED).to_bytes(2, "little")
+    return bytes(canonical)
+
+
 def _security_descriptor(handle: int, security_information: int) -> bytes:
     _require_windows()
     pointer = ctypes.c_void_p()
@@ -379,7 +394,8 @@ def _security_descriptor(handle: int, security_information: int) -> bytes:
         length = int(_advapi32.GetSecurityDescriptorLength(pointer))
         if length < 1:
             _raise_last_error()
-        return bytes(ctypes.string_at(pointer, length))
+        descriptor = bytes(ctypes.string_at(pointer, length))
+        return _canonical_security_descriptor(descriptor)
     finally:
         _kernel32.LocalFree(pointer)
 
