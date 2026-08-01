@@ -1,5 +1,10 @@
 # Handoff de evolución técnica de Neocortex
 
+> **HISTÓRICO — NO EJECUTAR.** Este documento conserva contexto de 0.7.1, pero
+> ya no define el orden ni el alcance del trabajo. La única instrucción
+> operativa vigente está en el
+> [handoff 0.7.2](../.codex/handoffs/NEOCORTEX_0.7.2_PAUSE_2026-07-30.md).
+
 **Corte documental:** 2026-07-29 08:21:42 -06:00  
 **Tipo:** instrucciones de ejecución para una sesión sucesora  
 **Fuente canónica:** <code>C:\Users\Victor\Neocortex\Repository</code>  

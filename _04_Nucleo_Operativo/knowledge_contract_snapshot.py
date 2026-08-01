@@ -85,11 +85,11 @@ def validate_owner_snapshot(
         and contract.observed_schema_version < 0
     ):
         raise ValueError("observed schema version cannot be negative")
-    if (
-        contract.state is owner_availability_type.AVAILABLE
-        and contract.observed_schema_version != contract.expected_schema_version
+    if contract.state is owner_availability_type.AVAILABLE and (
+        contract.observed_schema_version is None
+        or contract.observed_schema_version > contract.expected_schema_version
     ):
-        raise ValueError("available owner must expose its expected schema")
+        raise ValueError("available owner must expose a supported schema")
     if contract.data_version_before is not None and contract.data_version_before < 0:
         raise ValueError("data_version cannot be negative")
     if contract.data_version_after is not None and contract.data_version_after < 0:

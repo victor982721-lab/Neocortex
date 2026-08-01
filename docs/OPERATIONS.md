@@ -6,6 +6,25 @@ mantenimiento. La estructura de componentes se describe en
 en [PERSISTENCE.md](PERSISTENCE.md). La consulta cross-owner de solo lectura se
 documenta en [KNOWLEDGE.md](KNOWLEDGE.md); no se duplican esos contratos aquí.
 
+## Flujo personal recomendado
+
+Éste es el flujo predeterminado; las secciones posteriores son referencia
+cuando una frontera concreta lo requiera:
+
+1. Preflight read-only: versión, capacidades, estado general y estado del
+   subsistema implicado.
+2. Una sola ruta y una muestra representativa de 20–50 elementos, con límite
+   duro de 10–15 minutos.
+3. Una salida que Victor pueda usar: búsqueda, evidencia, clasificación o
+   preview; registre errores, tiempo y throughput.
+4. La misma corrida una segunda vez para probar caché, reanudación e
+   incrementalidad.
+5. Una búsqueda o revisión real y una proyección antes de escalar.
+
+Si el piloto falla o excede el límite, deténgalo y corrija la causa. `--all`, un
+watcher, una indexación Semantic completa, una migración, un rollback o una
+auditoría integral no son el punto de partida.
+
 ## Condiciones previas
 
 1. Confirme que no haya otra ejecución de NeoCortex usando el mismo directorio
@@ -70,12 +89,12 @@ Neocortex --status
 Neocortex --status --status-json
 ```
 
-Para varias rutas, especifique la lista o use `--all`. `--all` selecciona PDF,
-DOCX, Office, audio, imagen y código, actualiza el catálogo técnico y puede
-consumir recursos considerables:
+Después de aprobar cada ruta por separado se puede probar una lista aún
+acotada. `--all` selecciona PDF, DOCX, Office, audio, imagen y código, actualiza
+el catálogo técnico y se reserva para cuando exista una proyección aceptada:
 
 ```powershell
-Neocortex --root $Root --route pdf,docx,image --strict-exit-codes
+Neocortex --root $Root --route pdf,docx --MaxCount 25 --docx-max-count 25 --strict-exit-codes
 ```
 
 No use una corrida amplia como prueba de instalación. Ayuda, versión y doctors
@@ -107,10 +126,11 @@ ellas, causa abstención total con código `2` sin tocar el estado. Consulte
 [SELF_ANALYSIS.md](SELF_ANALYSIS.md) para preflight, policy/firma, puerta
 incremental, manifest y conteos cero.
 
-Un smoke de la raíz canónica debe analizar
-`%USERPROFILE%\Neocortex\Repository` con un estado externo nuevo bajo
-`%LOCALAPPDATA%\Neocortex\self-analysis\smokes`; el mini-root no demuestra
-cobertura del repositorio completo.
+Sólo un cambio al autoanálisis o un cierre de release requiere un smoke de la
+raíz canónica. En ese caso analiza `%USERPROFILE%\Neocortex\Repository` con un
+estado externo nuevo bajo
+`%LOCALAPPDATA%\Neocortex\self-analysis\smokes`. Un cambio cotidiano no debe
+convertirse por rutina en un análisis completo del repositorio.
 
 ## Reanudación
 
@@ -163,8 +183,13 @@ nueva en vez de forzar la reanudación.
 El watcher vive exclusivamente en el proceso y terminal actuales. No instala
 servicios, tareas programadas ni procesos desprendidos.
 
+Actívelo sólo después de aprobar, para una ruta, el piloto y su segunda corrida
+incremental. El watcher actual dispara corridas de contenido y catálogo; no
+ejecuta `--semantic-index` ni `--semantic-classify` y todavía no demuestra el
+daemon multimodal completo.
+
 ```powershell
-Neocortex --root $Root --watch --route pdf,image
+Neocortex --root $Root --watch --route pdf
 ```
 
 Opciones y valores predeterminados:
@@ -179,10 +204,10 @@ Opciones y valores predeterminados:
 | `--watch-error-backoff-max-seconds` | `60` | No menor que el inicial. |
 | `--watch-error-backoff-multiplier` | `2` | Mínimo 1. |
 
-Ejemplo con política explícita:
+Ejemplo con política explícita para una ruta ya aprobada:
 
 ```powershell
-Neocortex --root $Root --watch --all `
+Neocortex --root $Root --watch --route pdf `
   --watch-bootstrap if-needed `
   --watch-poll-timeout-seconds 2 `
   --watch-debounce-seconds 1 `
@@ -299,24 +324,33 @@ Neocortex --code-doctor
 - Los modelos semánticos sólo se adquieren mediante
   `--semantic-prepare-models`; indexar y clasificar son pasos separados.
 
-Durante `--semantic-index text`, cada fuente usa una sola sesión SQLite y
-confirma staging en lotes de hasta 128 items o chunks. Una cancelación o fallo
-revierte el lote en curso; el prefijo confirmado permanece en la generación
-`building`, no sustituye el head y puede reanudarse sin duplicar filas. No hay
-opciones CLI ni campos JSON nuevos.
+`--semantic-index` aplica por defecto 50 items nuevos o cambiados, 1 500 jobs
+durables nuevos o reactivados y 900 segundos. El presupuesto es compartido por
+texto, imagen y OCR; `all` no reinicia el reloj entre modalidades. Los replays
+exactos no consumen los límites de items o jobs, pero todavía enumeran la fuente
+en O(n); cuando no hay cambios reutilizan el head publicado sin clonarlo. Una
+generación con altas, bajas o cambios todavía materializa su base en O(n).
 
-El worker agota la reutilización exacta antes de cada claim. Así, un payload
-creado por el batch anterior satisface duplicados que aún no fueron reclamados.
-Ante `RuntimeError`, `KeyboardInterrupt` o cualquier `BaseException`, registra o
-libera los leases todavía propios y conserva la generación sin publicar. Esta
-revisión cerró 180 pruebas Semantic. Permanecen duplicados dentro del mismo
-batch y operaciones SQLite N+1 al completar o fallar jobs; no presente esta
-corrección como eliminación total de inferencia o I/O redundantes.
+El texto se ajusta con el tokenizador real antes de persistir cada job y el
+backend rechaza truncamiento. Cada fuente confirma staging por lotes; fallo,
+cancelación o deadline conservan el prefijo reanudable sin mover el head. Sólo
+una enumeración `bounded-v1` completa puede publicar. Si se agota un límite, la
+CLI informa `truncated=1`, devuelve `2` y conserva el head anterior.
 
-El microbenchmark sintético inicial de esta frontera midió `57.24x` y redujo
-conexiones de escritura de `1201` a `1`. Esa medición aísla staging SQLite: la
-corrida sobre el corpus vivo seguía en curso al documentarla y no demuestra ni
-cuantifica una aceleración end-to-end real.
+Cada item textual incorpora al final una sección de título
+`semantic_metadata_title`, derivada sólo del basename y firmada por
+`semantic-basename-title-v1`. El orden cuerpo→título preserva IDs y ordinales
+corporales en una actualización de política; el cache puede reutilizar cuerpos
+sin inferencia. Un cambio de nombre sí cambia la revisión del item y hoy puede
+crear trabajo durable corporal aunque la inferencia se reutilice: mida y
+optimice esa ruta antes de integrarla al watcher. La búsqueda pondera título
+`0.5` frente a cuerpo `1.0`; clasificación, evidencia y Knowledge `evidence`
+usan sólo el cuerpo. Knowledge `discovery` admite el título únicamente como
+prior de un recurso y revisión ya sustentados por evidencia corporal.
+
+No ejecute una cola operativa grande antes de demostrar en un estado aislado
+20–50 elementos, publicación, búsquedas representativas y segunda corrida
+incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
 No ejecute herramientas externas ni descargue modelos para validar una
 instalación básica.
@@ -338,7 +372,7 @@ Si se interrumpió una operación autorizada sobre archivos, **no la repita
 automáticamente**. Siga la sección de acciones inciertas de
 [RECOVERY.md](RECOVERY.md).
 
-En `0.7.0`, los rename y movimientos admitidos son únicamente de archivos
+En `0.7.2`, los rename y movimientos admitidos son únicamente de archivos
 regulares con un hard link en NTFS local y mismo volumen, mediante handles
 retenidos y sin reemplazo. Los demás casos se abstienen. La aplicación de
 candidatos de Papelera está deshabilitada; el dry-run continúa registrando el
@@ -346,24 +380,18 @@ plan y un `--apply` los marca `skipped` sin llamar a `Send2Trash`.
 
 ## Diagnóstico operativo
 
-Orden recomendado, sin modificar el corpus:
+Diagnóstico cotidiano mínimo, sin modificar el corpus:
 
 ```powershell
 Neocortex --version
+Neocortex doctor capabilities
 Neocortex --status --status-limit 20
-Neocortex --pdf-doctor
-Neocortex --audio-doctor
-Neocortex --code-status
-Neocortex --semantic-status
-Neocortex --knowledge-status
-Neocortex --action-recovery-status --action-recovery-limit 100
-Neocortex --retention-status
-py -3 -m pip check
 ```
 
-`pip check` sólo comprueba requisitos de la distribución instalada; no prueba
-que su versión coincida con el árbol fuente ni que wheel/entrypoint estén
-actualizados.
+Añada únicamente el status o doctor de la capacidad que está usando, por
+ejemplo `--knowledge-status` o `--semantic-status`. `pip check`, recovery,
+retención y todos los doctors se reservan para fallos de dependencias,
+operaciones inciertas o validación de una instalación.
 
 Preserve la salida exacta, código de salida, hora, versión y `run_id`. No adjunte
 contenido confidencial del corpus a diagnósticos sin autorización.
@@ -442,7 +470,10 @@ idempotente. SQLite no proporciona una transacción atómica entre esas bases.
 - Un WAL que crece requiere identificar primero el writer/lector que impide el
   checkpoint; no se corrige borrando el archivo.
 
-## Actualización y rollback
+## Actualización y rollback (procedimiento condicional)
+
+Esta sección se usa sólo al instalar, promover, migrar o restaurar una versión.
+No forma parte del flujo cotidiano ni de una corrección focal.
 
 1. Termine sólo los procesos propios de NeoCortex y confirme que no quede un
    watcher activo.
@@ -488,6 +519,8 @@ backup completo, nunca editar `schema_version`.
 
 ## Auditorías técnicas
 
-Toda auditoría nueva debe conservar los informes anteriores y seguir
+Cuando Victor solicite explícitamente una auditoría integral o un cierre de
+release, debe conservar los informes anteriores y seguir
 [AUDIT_REPORTING_STANDARD.md](AUDIT_REPORTING_STANDARD.md) para evidencia,
-manifiesto, barrera y cierre visible.
+manifiesto, barrera y cierre visible. Ese estándar no aplica a documentación,
+configuración, correcciones focales ni slices verticales ordinarios.

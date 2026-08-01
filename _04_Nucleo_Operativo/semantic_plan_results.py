@@ -48,9 +48,11 @@ from .semantic_service_contracts import (
 )
 from .semantic_sources import (
     IMAGE_SOURCE_KIND,
+    SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
     SOURCE_ADAPTER_VERSION,
     TEXT_SOURCE_KINDS,
     iter_text_source_records,
+    semantic_text_processing_signature,
     semantic_source_database,
 )
 # endregion [01]
@@ -246,8 +248,36 @@ def _plan_text_source(
                 counters.sections += 1
                 counters.section_text_bytes += encoded_bytes
                 yield record.section
+            title = _sources.semantic_item_title_section(first.item)
+            if title is None:
+                return
+            checkpoint()
+            title_fingerprint = fingerprint_text(title.text)
+            snapshot_hasher.update(b"\n")
+            snapshot_hasher.update(
+                canonical_json(
+                    {
+                        "item_id": first.item.item_id,
+                        "path": first.item.path,
+                        "section_kind": title.section_kind,
+                        "section_id": title.section_id,
+                        "section_fingerprint": {
+                            "xxh3_128": title_fingerprint.xxh3_128,
+                            "bytes": title_fingerprint.byte_count,
+                            "guard": title_fingerprint.xxh3_64_guard,
+                        },
+                    }
+                ).encode("utf-8")
+            )
+            counters.sections += 1
+            counters.section_text_bytes += title_fingerprint.byte_count
+            yield title
 
-        for chunk in iter_text_chunks(first.item.item_id, sections(), chunking):
+        for chunk in iter_text_chunks(
+            first.item.item_id,
+            sections(),
+            chunking,
+        ):
             checkpoint()
             input_bytes = chunk.fingerprint.byte_count
             counters.chunks += 1
@@ -477,18 +507,26 @@ def _build_workload_specs(
     embed_ocr_text: bool,
 ) -> tuple[_WorkloadSpec, ...]:
     specs: list[_WorkloadSpec] = []
+    planning_chunking_signature = (
+        None
+        if active_chunking is None
+        else active_chunking.signature
+        if active_chunking.model_token_limit is not None
+        else f"{active_chunking.signature}|tokenizer-contract=unresolved-v1"
+    )
     if scope in {"text", "all"}:
         assert selected_text_model is not None
         assert active_chunking is not None
+        assert planning_chunking_signature is not None
         specs.append(
             _WorkloadSpec(
                 "text",
                 selected_text_model,
                 EmbeddingRole.PASSAGE,
-                (
-                    f"{SEMANTIC_PIPELINE_VERSION}|{SOURCE_ADAPTER_VERSION}|"
-                    f"{active_chunking.signature}|"
-                    f"sources={','.join(selected_sources)}"
+                semantic_text_processing_signature(
+                    pipeline_version=SEMANTIC_PIPELINE_VERSION,
+                    chunking_signature=planning_chunking_signature,
+                    source_kinds=selected_sources,
                 ),
             )
         )
@@ -498,12 +536,16 @@ def _build_workload_specs(
                 "image",
                 clip_image_model(),
                 EmbeddingRole.IMAGE,
-                f"{SEMANTIC_PIPELINE_VERSION}|{SOURCE_ADAPTER_VERSION}|images",
+                (
+                    f"{SEMANTIC_PIPELINE_VERSION}|{SOURCE_ADAPTER_VERSION}|images|"
+                    f"enumeration={SEMANTIC_TEXT_ENUMERATION_PROTOCOL}"
+                ),
             )
         )
         if embed_ocr_text:
             assert selected_text_model is not None
             assert active_chunking is not None
+            assert planning_chunking_signature is not None
             specs.append(
                 _WorkloadSpec(
                     "image_ocr",
@@ -511,7 +553,8 @@ def _build_workload_specs(
                     EmbeddingRole.PASSAGE,
                     (
                         f"{SEMANTIC_PIPELINE_VERSION}|{SOURCE_ADAPTER_VERSION}|"
-                        f"image-ocr|{active_chunking.signature}"
+                        f"image-ocr|{planning_chunking_signature}|"
+                        f"enumeration={SEMANTIC_TEXT_ENUMERATION_PROTOCOL}"
                     ),
                 )
             )
@@ -836,5 +879,13 @@ def assemble_semantic_plan(
         max_scratch_bytes=max_scratch_bytes,
         originals_verified=(False if configuration.scope in {"image", "all"} else None),
         execution_ready=None,
+        estimate_kind=(
+            "model_only_request_range_from_exact_content_projection"
+            if configuration.active_chunking is None
+            or configuration.active_chunking.model_token_limit is not None
+            else "model_only_request_range_from_pre_tokenizer_content_projection"
+        ),
     )
+
+
 # endregion [02]

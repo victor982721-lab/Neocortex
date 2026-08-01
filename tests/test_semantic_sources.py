@@ -10,11 +10,20 @@ import pytest
 
 from _02_Deduplicacion.hashing import FULL_ALGORITHM, full_fingerprint, snapshot_path
 from _04_Nucleo_Operativo import semantic_sources
-from _04_Nucleo_Operativo.semantic_models import fingerprint_text
+from _04_Nucleo_Operativo.semantic_models import (
+    SemanticItem,
+    TextSection,
+    fingerprint_text,
+)
 from _04_Nucleo_Operativo.semantic_sources import (
+    MAX_SEMANTIC_TITLE_CHARS,
+    SEMANTIC_TITLE_POLICY,
+    SEMANTIC_TITLE_SECTION_KIND,
     SemanticSourceError,
     iter_image_source_records,
+    iter_text_sections_with_metadata,
     iter_text_source_records,
+    semantic_item_title_section,
 )
 
 
@@ -25,6 +34,55 @@ _TEXT_FILE_KEYS = (
     "00000000000000000000000000000001:00000000000000000000000000000002",
     "00000000000000000000000000000003:00000000000000000000000000000004",
 )
+
+
+def _title_item(path: str | None) -> SemanticItem:
+    return SemanticItem(
+        item_id="item:pdf:title-fixture",
+        source_kind="pdf",
+        source_identity="title-fixture",
+        identity_version="fixture-v1",
+        fingerprint=fingerprint_text("title-fixture"),
+        path=path,
+    )
+
+
+def test_semantic_title_uses_only_bounded_basename_and_appends_after_content() -> None:
+    item = _title_item(r"C:\sensitive\parent\  Protección   49T.v2.pdf")
+    title = semantic_item_title_section(item)
+
+    assert title is not None
+    assert title.section_kind == SEMANTIC_TITLE_SECTION_KIND
+    assert title.section_id == SEMANTIC_TITLE_POLICY
+    assert title.text == "Protección 49T.v2"
+    assert "sensitive" not in title.text
+    assert title.provenance == {
+        "policy_signature": SEMANTIC_TITLE_POLICY,
+        "basis": "basename_without_final_extension",
+        "mutable_metadata": True,
+        "advisory_only": True,
+    }
+    content = TextSection("pdf_page", "1", "contenido")
+    assert tuple(iter_text_sections_with_metadata(item, (content,))) == (
+        content,
+        title,
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        None,
+        " ",
+        "C:/fixture/invalid\nname.pdf",
+        "C:/fixture/" + ("x" * (MAX_SEMANTIC_TITLE_CHARS + 1)) + ".pdf",
+        "C:/fixture/",
+    ),
+)
+def test_semantic_title_abstains_on_missing_or_invalid_basename(
+    path: str | None,
+) -> None:
+    assert semantic_item_title_section(_title_item(path)) is None
 
 
 def _create_image_state(state_directory: Path, image_path: Path) -> tuple[str, bytes]:

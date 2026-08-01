@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -333,6 +332,7 @@ OPTIONAL_KEY_UNIVERSES = {
         "missing_information",
         "warnings",
         "telemetry",
+        "blocking_owners",
     ),
 }
 
@@ -516,8 +516,12 @@ def _optional_payload_variants() -> dict[str, dict[str, object]]:
             missing_information=(),
             warnings=(),
             telemetry=None,
+            blocking_owners=(),
         ).to_dict(),
-        "bundle:full": bundle.to_dict(),  # type: ignore[attr-defined]
+        "bundle:full": replace(
+            bundle,
+            blocking_owners=("semantic",),
+        ).to_dict(),
     }
 
 
@@ -1020,4 +1024,6 @@ def test_stable_id_seam_is_resolved_at_call_time(
     )
     assert calls == [expected_call, expected_call]
     assert created.contradiction_id == original(*expected_call)
+
+
 # endregion [02]

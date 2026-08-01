@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 __all__ = [
@@ -17,6 +18,25 @@ __all__ = [
 ]
 
 # region [01] Multimodal semantic index
+
+
+def _console_text(value: str) -> str:
+    """Keep corpus-derived CLI output printable on legacy Windows consoles."""
+
+    encoding = getattr(sys.stdout, "encoding", None)
+    if not encoding:
+        return value
+    try:
+        value.encode(encoding)
+    except UnicodeEncodeError:
+        return value.encode(encoding, errors="backslashreplace").decode(encoding)
+    except LookupError:  # pragma: no cover - defensive custom stream support
+        return value
+    return value
+
+
+def _print_console_line(value: str) -> None:
+    print(_console_text(value))
 
 
 def _semantic_text_model(profile: str):
@@ -91,7 +111,11 @@ def _print_semantic_index_result(scope: str, result) -> None:
     print(
         f"SEMANTIC_INDEX scope={scope} sources={','.join(result.sources)} "
         f"items={result.items_staged} chunks={result.chunks_staged} "
-        f"errors={result.errors} incomplete={result.incomplete} "
+        f"new_jobs={result.new_jobs_staged} "
+        f"errors={result.errors} stale={result.stale} "
+        f"incomplete={result.incomplete} complete={int(result.complete)} "
+        f"truncated={int(result.truncated)} "
+        f"truncation_reason={result.truncation_reason or '-'} "
         f"database={result.semantic_database}"
     )
     for work in result.generations:
@@ -297,9 +321,15 @@ def run_semantic_index(args: argparse.Namespace) -> int:
 
     from .locking import FrameworkRunLock
     from .semantic_service import index_image_embeddings, index_text_embeddings
+    from .semantic_work_budget import SemanticWorkBudget
 
     text_model = _semantic_text_model(args.semantic_text_profile)
     selected_sources = _selected_semantic_text_sources(args)
+    work_budget = SemanticWorkBudget.from_time_budget(
+        max_items=args.semantic_max_items,
+        max_new_jobs=args.semantic_max_new_jobs,
+        time_budget_seconds=args.semantic_time_budget_seconds,
+    )
     results = []
     try:
         _validate_semantic_state_write(
@@ -322,10 +352,11 @@ def run_semantic_index(args: argparse.Namespace) -> int:
                             model_cache=args.semantic_model_cache,
                             local_files_only=True,
                             threads=args.semantic_threads,
+                            work_budget=work_budget,
                         ),
                     )
                 )
-            if args.semantic_index in {"image", "all"}:
+            if args.semantic_index in {"image", "all"} and not work_budget.truncated:
                 results.append(
                     (
                         "image",
@@ -336,6 +367,7 @@ def run_semantic_index(args: argparse.Namespace) -> int:
                             threads=args.semantic_threads,
                             embed_ocr_text=not args.semantic_no_ocr,
                             ocr_model=text_model,
+                            work_budget=work_budget,
                         ),
                     )
                 )
@@ -346,7 +378,7 @@ def run_semantic_index(args: argparse.Namespace) -> int:
     failed = False
     for scope, result in results:
         _print_semantic_index_result(scope, result)
-        failed = failed or bool(result.errors or result.incomplete)
+        failed = failed or not result.complete
     return 2 if failed else 0
 
 
@@ -385,24 +417,27 @@ def run_semantic_search(args: argparse.Namespace) -> int:
             else f"{semantic_ranking.cutoff_score:.6f}"
         )
         next_cursor = semantic_ranking.next_cursor or "-"
-        print(
+        _print_console_line(
             f"SEMANTIC_RANKING name={semantic_ranking.name} "
             f"available={int(semantic_ranking.available)} "
             f"complete={int(semantic_ranking.complete)} "
             f"scanned={semantic_ranking.scanned} "
             f"hits={len(semantic_ranking.hits)} "
+            f"weight={semantic_ranking.fusion_weight:.6f} "
             f"reason={reason} cutoff_score={cutoff_score} "
-            f"next_cursor={next_cursor}"
+            f"next_cursor={next_cursor} "
+            "provenance="
+            f"{json.dumps(semantic_ranking.provenance, ensure_ascii=False, sort_keys=True, separators=(',', ':'))}"
         )
     for lexical_ranking in result.lexical_rankings:
         availability = lexical_ranking.availability.value
         available_rankings += int(availability == "available")
-        print(
+        _print_console_line(
             f"LEXICAL_RANKING name={lexical_ranking.ranking_name} "
             f"availability={availability} hits={len(lexical_ranking.hits)} "
             f"reason={lexical_ranking.unavailable_reason or '-'}"
         )
-    print(
+    _print_console_line(
         f"SEMANTIC_SEARCH query={json.dumps(result.query, ensure_ascii=False)} "
         f"complete={int(result.complete)} available_rankings={available_rankings} "
         f"fused_hits={len(result.fused)}"
@@ -413,7 +448,7 @@ def run_semantic_search(args: argparse.Namespace) -> int:
             f"{value.contribution:.6f}"
             for value in hit.fused.evidence
         )
-        print(
+        _print_console_line(
             f"SEMANTIC_HIT rank={rank} score={hit.fused.score:.6f} "
             f"item={hit.fused.item_id} source={hit.source_kind} "
             f"identity={json.dumps(hit.source_identity, ensure_ascii=False)} "

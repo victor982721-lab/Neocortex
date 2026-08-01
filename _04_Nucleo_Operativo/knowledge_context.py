@@ -1066,6 +1066,7 @@ def build_context_bundle(
         contradictions=state.contradictions,
         missing_information=state.missing_information,
         warnings=state.warnings,
+        blocking_owners=result.blocking_owners,
     )
 
 

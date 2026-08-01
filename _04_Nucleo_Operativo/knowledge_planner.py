@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -15,12 +16,15 @@ from .knowledge_planner_intents import (
 from .knowledge_planner_steps import (
     CODE_FORMATS as _CODE_FORMATS,
     KNOWLEDGE_PLAN_V2_PREFIX as _KNOWLEDGE_PLAN_V2_PREFIX,
+    KNOWLEDGE_PLAN_V3_PREFIX as _KNOWLEDGE_PLAN_V3_PREFIX,
     PlanLimits,
     canonical_retrieval_step_specs,
+    canonical_retrieval_step_specs_v3,
     knowledge_plan_identity_payload,
     semantic_ranking_names,
     validate_knowledge_plan_base,
     validate_knowledge_plan_v2,
+    validate_knowledge_plan_v3,
     validate_retrieval_step,
 )
 from .semantic_models import canonical_json, fingerprint_text
@@ -164,6 +168,8 @@ class KnowledgePlan:
         )
         if self.plan_id.startswith(_KNOWLEDGE_PLAN_V2_PREFIX):
             _validate_knowledge_plan_v2(self)
+        elif self.plan_id.startswith(_KNOWLEDGE_PLAN_V3_PREFIX):
+            _validate_knowledge_plan_v3(self)
         elif len(step_keys) != len(set(step_keys)):
             raise ValueError("Knowledge plan steps cannot contain duplicate rankings")
 
@@ -270,6 +276,43 @@ def _canonical_retrieval_steps(
     )
 
 
+def _canonical_retrieval_steps_v3(
+    *,
+    retrieval_mode: RetrievalMode,
+    exact_terms: tuple[str, ...],
+    intents: tuple[str, ...],
+    source_kinds: tuple[str, ...],
+    formats: tuple[str, ...],
+    project: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+) -> tuple[RetrievalStep, ...]:
+    specs = canonical_retrieval_step_specs_v3(
+        retrieval_mode=retrieval_mode,
+        exact_terms=exact_terms,
+        intents=intents,
+        source_kinds=source_kinds,
+        formats=formats,
+        project=project,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        max_results=MAX_KNOWLEDGE_RESULTS,
+        semantic_rankings=_semantic_ranking_names,
+    )
+    return tuple(
+        RetrievalStep(
+            spec.channel,
+            spec.ranking_name,
+            spec.reason,
+            spec.candidate_limit,
+            spec.required,
+        )
+        for spec in specs
+    )
+
+
 def _knowledge_plan_identity_payload(
     *,
     normalized_query: str,
@@ -351,6 +394,14 @@ def _knowledge_plan_identifier(
     return f"{_KNOWLEDGE_PLAN_V2_PREFIX}{fingerprint.xxh3_128}"
 
 
+def _knowledge_plan_identifier_v3(
+    **values: object,
+) -> str:
+    payload = _knowledge_plan_identity_payload(**values)  # type: ignore[arg-type]
+    fingerprint = fingerprint_text(canonical_json(payload))
+    return f"{_KNOWLEDGE_PLAN_V3_PREFIX}{fingerprint.xxh3_128}"
+
+
 def _validate_knowledge_plan_v2(plan: KnowledgePlan) -> None:
     return validate_knowledge_plan_v2(
         plan,
@@ -362,21 +413,48 @@ def _validate_knowledge_plan_v2(plan: KnowledgePlan) -> None:
     )
 
 
+def _validate_knowledge_plan_v3(plan: KnowledgePlan) -> None:
+    return validate_knowledge_plan_v3(
+        plan,
+        query_factory=KnowledgeQuery,
+        query_plan_signals=_query_plan_signals,
+        semantic_ranking_names=_semantic_ranking_names,
+        plan_identifier=_knowledge_plan_identifier_v3,
+        canonical_retrieval_steps=_canonical_retrieval_steps_v3,
+    )
+
+
 def plan_knowledge_query(query: KnowledgeQuery) -> KnowledgePlan:
     """Compile a fixed retrieval plan from explicit syntax and bounded rules."""
 
     terms, intents = _query_plan_signals(query)
-    steps = _canonical_retrieval_steps(
-        exact_terms=terms,
-        intents=intents,
-        source_kinds=query.source_kinds,
-        formats=query.formats,
-        project=query.project,
-        date_from=query.date_from,
-        date_to=query.date_to,
-        limit=query.limit,
-    )
-    plan_id = _knowledge_plan_identifier(
+    plan_identifier: Callable[..., str]
+    if query.retrieval_mode is RetrievalMode.DISCOVERY:
+        steps = _canonical_retrieval_steps_v3(
+            retrieval_mode=query.retrieval_mode,
+            exact_terms=terms,
+            intents=intents,
+            source_kinds=query.source_kinds,
+            formats=query.formats,
+            project=query.project,
+            date_from=query.date_from,
+            date_to=query.date_to,
+            limit=query.limit,
+        )
+        plan_identifier = _knowledge_plan_identifier_v3
+    else:
+        steps = _canonical_retrieval_steps(
+            exact_terms=terms,
+            intents=intents,
+            source_kinds=query.source_kinds,
+            formats=query.formats,
+            project=query.project,
+            date_from=query.date_from,
+            date_to=query.date_to,
+            limit=query.limit,
+        )
+        plan_identifier = _knowledge_plan_identifier
+    plan_id = plan_identifier(
         normalized_query=query.text,
         retrieval_mode=query.retrieval_mode,
         intents=intents,

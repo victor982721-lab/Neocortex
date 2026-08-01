@@ -180,15 +180,25 @@ _SPECS = {
         source_kind="docx",
         fts_table="document_fts",
         section_kind="document",
-        sql="""SELECT f.rowid AS fts_rowid,f.file_key,f.path,
-        snippet(document_fts,4,'[',']',' ... ',24) AS snippet,
+        sql="""WITH ranked AS MATERIALIZED (
+        SELECT f.rowid AS fts_rowid,f.file_key,f.path,
         bm25(document_fts) AS raw_bm25,d.size AS source_size,
         d.mtime_ns AS source_mtime_ns,d.birthtime_ns AS source_birthtime_ns,
         d.processing_signature AS source_processing_signature,
         d.last_seen_run_id AS source_last_seen_run_id,d.status AS source_status
         FROM document_fts AS f JOIN documents AS d ON d.file_key=f.file_key
-        WHERE document_fts MATCH ? AND d.status IN ('complete','partial')
-        ORDER BY raw_bm25,f.path COLLATE NOCASE LIMIT ?""",
+        WHERE document_fts MATCH ?1 AND d.status IN ('complete','partial')
+        ORDER BY raw_bm25,f.path COLLATE NOCASE LIMIT ?2
+        )
+        SELECT ranked.fts_rowid,ranked.file_key,ranked.path,
+        snippet(document_fts,4,'[',']',' ... ',24) AS snippet,
+        ranked.raw_bm25,ranked.source_size,ranked.source_mtime_ns,
+        ranked.source_birthtime_ns,ranked.source_processing_signature,
+        ranked.source_last_seen_run_id,ranked.source_status
+        FROM ranked JOIN document_fts
+        ON document_fts.rowid=ranked.fts_rowid
+        WHERE document_fts MATCH ?1
+        ORDER BY ranked.raw_bm25,ranked.path COLLATE NOCASE""",
     ),
     "office": _SourceSpec(
         source_kind="office",
@@ -380,9 +390,7 @@ def _search_compiled_source(
     for rank_position, row in enumerate(rows, start=1):
         if rank_position % _CANCELLATION_BATCH_ROWS == 0:
             cancellation.checkpoint()
-        hits.append(
-            _resolved_hit(spec, path, normalized_query, row, rank_position)
-        )
+        hits.append(_resolved_hit(spec, path, normalized_query, row, rank_position))
     cancellation.checkpoint()
     return LexicalRanking(
         source_kind=source_kind,
@@ -472,9 +480,7 @@ def search_lexical_sources(
                 LexicalAvailability.READ_FAILED,
                 f"state_database_read_failed:{type(exc).__name__}",
             )
-        rankings.append(
-            replace(ranking, elapsed_ns=_duration_ns(clock, started_ns))
-        )
+        rankings.append(replace(ranking, elapsed_ns=_duration_ns(clock, started_ns)))
     return tuple(rankings)
 
 

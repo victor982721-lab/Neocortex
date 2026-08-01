@@ -1067,9 +1067,10 @@ def _migrate_18_to_19(connection: sqlite3.Connection) -> None:
         raise _FrameworkSchemaMigrationError(
             "file_actions row preservation failed during version-19 migration"
         )
-    if int(
-        connection.execute("SELECT COUNT(*) FROM file_action_events").fetchone()[0]
-    ) != action_event_count:
+    if (
+        int(connection.execute("SELECT COUNT(*) FROM file_action_events").fetchone()[0])
+        != action_event_count
+    ):
         raise _FrameworkSchemaMigrationError(
             "file_action_events row preservation failed during version-19 migration"
         )
@@ -1208,9 +1209,59 @@ def _build_exact_schema(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _build_v19_exact_schema(connection: sqlite3.Connection) -> None:
+    """Reconstruct the exact v19 contract for read-only compatibility checks."""
+
+    _build_exact_schema(connection)
+    for trigger in (
+        "initial_runs_corpus_policy_no_update",
+        "file_actions_corpus_policy_insert",
+        "file_actions_corpus_policy_no_update",
+    ):
+        connection.execute(f"DROP TRIGGER {trigger}")
+    for column in (
+        "inventory_policy_signature",
+        "state_directory",
+        "root_birthtime_ns",
+        "root_file_id_hex",
+        "root_device_id_hex",
+        "corpus_access_mode",
+    ):
+        connection.execute(f"ALTER TABLE initial_runs DROP COLUMN {column}")
+    for column in (
+        "protected_root_birthtime_ns",
+        "protected_root_file_id_hex",
+        "protected_root_device_id_hex",
+        "protected_root",
+        "corpus_access_mode",
+    ):
+        connection.execute(f"ALTER TABLE file_actions DROP COLUMN {column}")
+
+
 @lru_cache(maxsize=1)
 def _exact_schema_contract() -> SQLiteSchemaContract:
     return schema_contract_from_builder(_build_exact_schema)
+
+
+@lru_cache(maxsize=1)
+def _v19_exact_schema_contract() -> SQLiteSchemaContract:
+    return schema_contract_from_builder(_build_v19_exact_schema)
+
+
+def validate_framework_schema_v19(connection: sqlite3.Connection) -> None:
+    """Validate an exact v19 database without migrating it to v20."""
+
+    try:
+        validate_sqlite_schema_contract(
+            connection,
+            _v19_exact_schema_contract(),
+            label="framework v19 read compatibility",
+            exact=True,
+        )
+    except SQLiteSchemaContractError as exc:
+        raise RuntimeError(
+            f"framework v19 schema contract validation failed: {exc}"
+        ) from exc
 
 
 @lru_cache(maxsize=1)

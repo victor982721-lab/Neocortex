@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -762,6 +761,45 @@ def test_inventory_path_name_and_full_hash_are_constrained_but_partial(
     assert not result.complete
 
 
+def test_incompatible_inventory_snapshot_never_opens_exact_state(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    inventory = state / "dedup.sqlite3"
+    inventory.write_bytes(b"must not be opened as SQLite")
+    before = inventory.read_bytes()
+
+    result = lookup_exact(
+        KnowledgeStatePaths.from_directory(state),
+        _snapshot(
+            OwnerSnapshot(
+                "inventory",
+                OwnerAvailability.INCOMPATIBLE,
+                8,
+                7,
+                error_code="schema_too_old",
+            ),
+        ),
+        ExactLookupRequest(
+            (
+                ExactLookupTerm(
+                    ExactLookupKind.PATH,
+                    "C:/docs/A%_# report.pdf",
+                ),
+            ),
+            owner_scope=("inventory",),
+        ),
+    )
+
+    assert result.matches == ()
+    assert len(result.reports) == 1
+    assert result.reports[0].status is ExactLookupStatus.UNAVAILABLE
+    assert result.reports[0].reason == "owner_unavailable:incompatible"
+    assert not result.reports[0].executed
+    assert inventory.read_bytes() == before
+
+
 def test_inventory_checkpoint_change_after_snapshot_abstains(tmp_path: Path) -> None:
     state = tmp_path / "state"
     state.mkdir()
@@ -1303,4 +1341,6 @@ def test_plan_exact_candidate_limit_override_is_backward_compatible(
     assert override_result is None
     assert [request.limit for request in observed] == [plan.limit, 7]
     assert [request.max_observed_rows for request in observed] == [plan.limit, 7]
+
+
 # endregion [02]

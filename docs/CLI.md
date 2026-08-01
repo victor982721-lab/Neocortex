@@ -5,6 +5,20 @@ La interfaz pública canónica de NeoCortex es el ejecutable instalado
 `_04_Nucleo_Operativo/cli_parser.py`; esta guía resume los contratos operativos
 que conviene conocer antes de usar `--help`.
 
+## Comandos cotidianos
+
+| Necesidad | Comando |
+|---|---|
+| Estado general | `Neocortex --status` |
+| Disponibilidad de Knowledge | `Neocortex --knowledge-status --knowledge-json` |
+| Buscar evidencia | `Neocortex --knowledge-search "consulta" --knowledge-limit 20` |
+| Compilar contexto citado | `Neocortex --knowledge-context "consulta" --knowledge-limit 12` |
+| Buscar en un owner concreto | `Neocortex --pdf-search "consulta"` o `Neocortex --code-search "consulta"` |
+
+Empiece por consultas sobre estado publicado. Si debe producir cobertura nueva,
+siga el piloto de 20–50 elementos y 10–15 minutos de
+[OPERATIONS.md](OPERATIONS.md).
+
 ## Comprobación previa de la instalación
 
 Ejecute primero comandos que no recorren el corpus ni escriben estado:
@@ -62,12 +76,10 @@ Las rutas de contenido vigentes en la CLI son:
 | `image` | Clasificación y evidencia de imágenes. |
 | `code` | Texto, estructura, símbolos y relaciones de código fuente. |
 
-Se acepta una ruta, una lista separada por comas o `--all`:
+El primer piloto usa una sola ruta y un límite explícito:
 
 ```powershell
-Neocortex --root $Root --route pdf
-Neocortex --root $Root --route pdf,docx,image
-Neocortex --root $Root --all
+Neocortex --root $Root --route pdf --MaxCount 25 --strict-exit-codes
 ```
 
 Estos comandos **no son consultas de sólo lectura**: recorren contenido y
@@ -75,8 +87,9 @@ actualizan las bases de estado aunque no se especifique `--apply`. Sin
 `--apply` no deben mutar los archivos del corpus, pero sí producen inventario,
 cachés, ejecuciones, diagnósticos y planes persistentes.
 
-`--all` no se combina con `--route` ni con operaciones directas de consulta o
-diagnóstico.
+Después de aprobar cada ruta y su proyección se acepta una lista separada por
+comas o `--all`. `--all` no se combina con `--route` ni con operaciones
+directas de consulta o diagnóstico.
 
 ## Modos de ejecución
 
@@ -84,10 +97,10 @@ diagnóstico.
 
 Una corrida normal actualiza el inventario común y después ejecuta las rutas
 seleccionadas. La omisión de `--apply` es el modo predeterminado no mutador del
-corpus:
+corpus. Amplíe a varias rutas sólo después del piloto:
 
 ```powershell
-Neocortex --root $Root --route pdf,docx
+Neocortex --root $Root --route pdf,docx --MaxCount 25 --docx-max-count 25 --strict-exit-codes
 ```
 
 `InternalPathsPolicy` reserva por ruta e identidad el repositorio, runtime,
@@ -189,6 +202,7 @@ corpus:
 ```powershell
 Neocortex --status
 Neocortex --status --status-run 40 --status-json
+Neocortex doctor capabilities
 Neocortex --pdf-doctor
 Neocortex --pdf-verify
 Neocortex --audio-doctor
@@ -200,9 +214,10 @@ Neocortex --retention-status
 ```
 
 Una base ausente, dañada o con esquema incompatible puede producir salida `2`;
-eso no convierte el diagnóstico en una operación de reparación. NeoCortex no
-ofrece actualmente un único flag `--doctor`. Los diagnósticos disponibles son
-específicos de PDF/OCR, audio, código y estado semántico.
+eso no convierte el diagnóstico en una operación de reparación.
+`doctor capabilities` comprueba la presencia de dependencias sin cargar
+modelos; los diagnósticos profundos siguen siendo específicos de PDF/OCR,
+audio, código y estado semántico.
 
 También son consultas directas las búsquedas y vistas persistidas, por ejemplo:
 
@@ -223,9 +238,40 @@ Neocortex --review-evidence-list 100 --review-json
 Estas consultas leen las bases existentes. No crean evidencia que todavía no
 haya sido materializada y pueden terminar con `2` cuando el estado requerido no
 está disponible. La búsqueda semántica usa modelos ya preparados en modo local;
-no autoriza una descarga implícita.
+no autoriza una descarga implícita. Ejecute primero `--semantic-status`:
+`--semantic-search` sólo lee embeddings y modelos publicados. Cero heads o cero
+embeddings significa que esa señal está indisponible, no que Semantic haya sido
+entregado.
 
-### Knowledge Plane de sólo lectura (`0.7.0`)
+En modo `text`, la salida separa los rankings `semantic_text` y
+`semantic_title`. El primero busca contenido con peso RRF `1.0`; el segundo usa
+el basename durable sin directorios ni extensión final con peso `0.5`. Ambos
+declaran peso y procedencia, comparten una sola vectorización de consulta y el
+resultado fusionado conserva de preferencia el snippet corporal. El título es
+advisory: no participa en clasificación ni evidencia materializada. Knowledge
+`evidence` lo excluye; Knowledge `discovery` puede usarlo sólo para reforzar un
+recurso y revisión que ya tengan evidencia corporal, nunca como cita. Un head
+anterior a esta política mantiene la búsqueda corporal y declara
+`title_channel_not_indexed` hasta ser republicado de forma acotada.
+
+### Indexación Semantic acotada
+
+`--semantic-index text|image|all` escribe staging bajo un presupuesto único:
+
+| Opción | Predeterminado | Contrato |
+|---|---:|---|
+| `--semantic-max-items N` | `50` | Items completos nuevos o cambiados; replay exacto no consume el límite. |
+| `--semantic-max-new-jobs N` | `1500` | Jobs durables nuevos o reactivados por cambio de fingerprint; replay exacto no consume el límite. |
+| `--semantic-time-budget-seconds N` | `900` | Deadline monotónico compartido por texto, imagen y OCR. |
+
+Estas opciones sólo se admiten con `--semantic-index`. Agotar un límite produce
+`truncated=1`, conserva la generación sin publicar y devuelve `2`; no constituye
+una corrida completa ni autoriza escalar. Un replay exacto sigue enumerando y
+reconciliando O(n) miembros para detectar cambios, aunque no cree jobs, clone el
+head ni haga inferencia. Si existen altas, bajas o cambios, el sucesor todavía
+materializa la base en O(n).
+
+### Knowledge Plane de sólo lectura (`0.7.2`)
 
 Knowledge ofrece tres acciones planas y mutuamente excluyentes. Todas leen el
 estado ya publicado; no recorren el corpus, crean directorios o bases, migran
@@ -418,32 +464,35 @@ y compruebe siempre el código de salida.
 |---:|---|
 | `0` | Ayuda/versión o ejecución/consulta completada según su contrato. |
 | `1` | Excepción fatal no normalizada o fallo interno del worker de GUI. No es el código de una validación ordinaria de argumentos. |
-| `2` | Error de argumentos detectado por `argparse` o por la validación posterior, como una combinación incompatible; estado requerido ausente o incompatible; diagnóstico fallido —incluida abstención total de `--code-status` ante cualquier sidecar o cerca inestable en code/framework/Dedup—; error de acciones u organización; conciliación con efecto ambiguo/imposible —incluso si su evento fue registrado—; plan de retención bloqueado; o, con `--strict-exit-codes`, errores/parciales retenidos por una ruta. El watcher también devuelve `2` si conserva corridas fallidas o errores de fuente. |
+| `2` | Error de argumentos detectado por `argparse` o por la validación posterior, como una combinación incompatible; estado requerido ausente o incompatible; diagnóstico fallido —incluida abstención total de `--code-status` ante cualquier sidecar o cerca inestable en code/framework/Dedup—; generación Semantic incompleta, truncada o no publicada; error de acciones u organización; conciliación con efecto ambiguo/imposible —incluso si su evento fue registrado—; plan de retención bloqueado; o, con `--strict-exit-codes`, errores/parciales retenidos por una ruta. El watcher también devuelve `2` si conserva corridas fallidas o errores de fuente. |
 | `3` | Knowledge terminó con snapshot estable y cobertura completa, pero search/context no obtuvo evidencia. |
 | `4` | Knowledge produjo una respuesta parcial o no soportada; incluye propietarios necesarios ausentes. |
 | `5` | El snapshot Knowledge volvió a cambiar durante el único reintento global acotado. |
-| `6` | Knowledge encontró al menos un esquema futuro o incompatible y se abstuvo. |
-| `7` | Knowledge detectó una base corrupta y se abstuvo. |
+| `6` | Knowledge status encontró un schema futuro/incompatible; en search/context, uno de esos owners figura en `blocking_owners` y obliga a abstenerse. |
+| `7` | Knowledge status detectó una base corrupta; en search/context, la base figura en `blocking_owners` y obliga a abstenerse. |
 | `130` | Cancelación por teclado o cancelación del watcher. |
 | otro no cero | Fallo no normalizado. Trátelo como fatal y preserve la evidencia. |
 
-Para las acciones Knowledge la precedencia es `7`, `6`, `5`, `4`, `3`, `0`:
-un problema de integridad o compatibilidad nunca queda oculto por una página
-vacía o parcial. El status con propietarios simplemente ausentes conserva `0`;
-la ausencia pasa a `4` cuando impide completar search/context.
+Para las acciones Knowledge la precedencia es `7`, `6`, `5`, `4`, `3`, `0`.
+`status` aplica integridad y compatibilidad al snapshot completo; search/context
+las elevan sólo cuando el owner severo aparece en `blocking_owners`, por lo que
+una base ajena no oculta evidencia válida. El status con propietarios
+simplemente ausentes conserva `0`; la ausencia pasa a `4` cuando impide
+completar search/context.
 
 Sin `--strict-exit-codes`, errores de documentos individuales pueden quedar
-registrados aunque la corrida general termine con `0`. Para automatización que
-exija integridad completa de todas las rutas:
+registrados aunque la corrida general termine con `0`. Automatice primero una
+ruta acotada; `--all` se reserva para cuando cada ruta y su costo ya fueron
+aceptados:
 
 ```powershell
-Neocortex --root $Root --all --strict-exit-codes
+Neocortex --root $Root --route pdf --MaxCount 25 --strict-exit-codes
 ```
 
 ## Operaciones que requieren autorización explícita
 
 `--apply` permite que una corrida integrada ejecute únicamente las mutaciones
-que satisfacen el contrato físico de `0.7.0`. Los rename de extensión y los
+que satisfacen el contrato físico de `0.7.2`. Los rename de extensión y los
 movimientos de organización requieren NTFS local, mismo volumen, archivo
 regular con un único hard link, ausencia de reparse y operación ligada a handles
 retenidos con *no-replace*. UNC, otros filesystems, directorios, múltiples hard

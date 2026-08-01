@@ -5,14 +5,18 @@ from __future__ import annotations
 import tempfile
 import time
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
+
+import xxhash
 
 from .semantic_backends import (
     EmbeddingBackend,
     FastEmbedBackend,
     fastembed_availability,
 )
+from .semantic_chunking import TextTokenCounter
 from .semantic_config import (
     COMPACT_TEXT_MODEL_SIGNATURE,
     FASTEMBED_RUNTIME_VERSION,
@@ -50,6 +54,63 @@ class BackendFactory(Protocol):
     ) -> EmbeddingBackend: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedTextTokenGuard:
+    counter: TextTokenCounter
+    tokenizer_signature: str
+    token_limit: int
+
+
+def resolve_text_token_guard(
+    embedding_backend: object,
+    model: EmbeddingModelSpec,
+) -> ResolvedTextTokenGuard:
+    """Resolve and freeze the exact tokenizer contract before staging."""
+
+    candidate = getattr(embedding_backend, "text_token_counts", None)
+    if not callable(candidate):
+        raise RuntimeError("text backend has no exact tokenizer counter")
+    counter = cast(TextTokenCounter, candidate)
+    contract_provider = getattr(
+        embedding_backend,
+        "text_tokenizer_contract",
+        None,
+    )
+    if callable(contract_provider):
+        tokenizer_signature, token_limit = contract_provider()
+    else:
+        if model.provider.startswith("fastembed"):
+            raise RuntimeError(
+                "FastEmbed text backend has no signed tokenizer contract"
+            )
+        _counts, token_limit = counter(("Neocortex fixture tokenizer contract",))
+        identity = f"exact-token-fit-v1\0{model.model_signature}\0{token_limit}"
+        tokenizer_signature = (
+            "exact-token-fit-v1:fixture-xxh3-128:"
+            + xxhash.xxh3_128_hexdigest(identity.encode("utf-8"))
+        )
+    if not isinstance(tokenizer_signature, str) or not tokenizer_signature.strip():
+        raise RuntimeError("text backend returned an invalid tokenizer signature")
+    if (
+        isinstance(token_limit, bool)
+        or not isinstance(token_limit, int)
+        or not 1 <= token_limit <= 1_000_000
+    ):
+        raise RuntimeError("text backend returned an invalid tokenizer limit")
+
+    def checked_counter(texts: Sequence[str]) -> tuple[Sequence[int], int]:
+        counts, observed_limit = counter(texts)
+        if observed_limit != token_limit:
+            raise RuntimeError("text tokenizer limit changed after contract binding")
+        return counts, observed_limit
+
+    return ResolvedTextTokenGuard(
+        checked_counter,
+        tokenizer_signature.strip(),
+        token_limit,
+    )
+
+
 class SemanticModelUnavailableError(RuntimeError):
     """Typed optional-runtime failure safe to degrade during read-only search."""
 
@@ -76,7 +137,7 @@ def _is_local_model_runtime_error(exc: Exception) -> bool:
 class _ReadOnlyFastEmbedBackend:
     """Translate only recognized local model-load failures to optional status."""
 
-    def __init__(self, delegate: EmbeddingBackend) -> None:
+    def __init__(self, delegate: FastEmbedBackend) -> None:
         self._delegate = delegate
 
     @property
@@ -93,6 +154,29 @@ class _ReadOnlyFastEmbedBackend:
     ) -> Sequence[BackendEmbedding]:
         try:
             return self._delegate.embed(requests)
+        except Exception as exc:  # optional runtime types are dependency-defined
+            if not _is_local_model_runtime_error(exc):
+                raise
+            raise SemanticModelUnavailableError(
+                "semantic_query_model_unloadable"
+            ) from exc
+
+    def text_token_counts(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[int, ...], int]:
+        try:
+            return self._delegate.text_token_counts(texts)
+        except Exception as exc:  # optional runtime types are dependency-defined
+            if not _is_local_model_runtime_error(exc):
+                raise
+            raise SemanticModelUnavailableError(
+                "semantic_query_model_unloadable"
+            ) from exc
+
+    def text_tokenizer_contract(self) -> tuple[str, int]:
+        try:
+            return self._delegate.text_tokenizer_contract()
         except Exception as exc:  # optional runtime types are dependency-defined
             if not _is_local_model_runtime_error(exc):
                 raise
@@ -125,18 +209,14 @@ def require_local_fastembed_model(
     contract = fastembed_cache_contract(model.model_signature)
     if not cache_dir.is_dir():
         raise SemanticModelUnavailableError("semantic_model_cache_missing")
-    repository = cache_dir / (
-        "models--" + contract.repository_id.replace("/", "--")
-    )
+    repository = cache_dir / ("models--" + contract.repository_id.replace("/", "--"))
     reference = repository / "refs" / "main"
     if not reference.is_file():
         raise SemanticModelUnavailableError("semantic_query_model_not_cached")
     try:
         reference_size = reference.stat().st_size
         if not 1 <= reference_size <= 256:
-            raise SemanticModelUnavailableError(
-                "semantic_query_model_cache_invalid"
-            )
+            raise SemanticModelUnavailableError("semantic_query_model_cache_invalid")
         commit = reference.read_text(encoding="ascii").strip()
     except (OSError, UnicodeError) as exc:
         raise SemanticModelUnavailableError(
@@ -159,9 +239,7 @@ def require_local_fastembed_model(
                 "semantic_query_model_cache_invalid"
             ) from exc
         if not valid:
-            raise SemanticModelUnavailableError(
-                "semantic_query_model_cache_incomplete"
-            )
+            raise SemanticModelUnavailableError("semantic_query_model_cache_incomplete")
 
 
 def backend(
@@ -184,9 +262,7 @@ def backend(
     except Exception as exc:  # optional runtime types are dependency-defined
         if not local_files_only or not _is_local_model_runtime_error(exc):
             raise
-        raise SemanticModelUnavailableError(
-            "semantic_query_model_unloadable"
-        ) from exc
+        raise SemanticModelUnavailableError("semantic_query_model_unloadable") from exc
     return (
         _ReadOnlyFastEmbedBackend(embedding_backend)
         if local_files_only

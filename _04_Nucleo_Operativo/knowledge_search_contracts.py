@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -16,6 +15,9 @@ from typing import TYPE_CHECKING
 from .knowledge_contracts import (
     KnowledgeQueryTelemetry,
     KnowledgeTelemetryOperation,
+    RankingSignal,
+    ResourceRef,
+    RevisionRef,
 )
 from .semantic_models import canonical_json
 # endregion [01]
@@ -27,9 +29,6 @@ if TYPE_CHECKING:
         EvidenceRef,
         KnowledgeHit,
         KnowledgeSnapshot,
-        RankingSignal,
-        ResourceRef,
-        RevisionRef,
     )
     from .knowledge_planner import KnowledgePlan
 
@@ -69,6 +68,30 @@ class KnowledgeCandidate:
             self.revision.revision_id,
             self.evidence.evidence_id,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResourceDiscoverySignal:
+    """Advisory resource-level signal that cannot stand in for evidence."""
+
+    resource: ResourceRef
+    revision: RevisionRef
+    signal: RankingSignal
+    reason: str
+    fusion_weight: float
+    warnings: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.reason.strip():
+            raise ValueError("resource discovery reason cannot be blank")
+        if self.revision.resource_id != self.resource.resource_id:
+            raise ValueError("resource discovery revision does not belong to resource")
+        if not math.isfinite(self.fusion_weight) or not 0.0 < self.fusion_weight <= 1.0:
+            raise ValueError("resource discovery fusion_weight must be in (0, 1]")
+
+    @property
+    def resource_revision_key(self) -> tuple[str, str]:
+        return self.resource.resource_id, self.revision.revision_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +164,7 @@ class KnowledgeSearchResult:
         compare=False,
         repr=False,
     )
+    blocking_owners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.telemetry is not None and (
@@ -148,6 +172,15 @@ class KnowledgeSearchResult:
             or self.telemetry.operation is not KnowledgeTelemetryOperation.SEARCH
         ):
             raise ValueError("KnowledgeSearchResult telemetry must describe search")
+        if not isinstance(self.blocking_owners, tuple):
+            raise ValueError("search blocking owners must be a tuple")
+        if any(
+            not isinstance(owner, str) or not owner.strip()
+            for owner in self.blocking_owners
+        ):
+            raise ValueError("search blocking owners cannot be blank")
+        if self.blocking_owners != tuple(sorted(set(self.blocking_owners))):
+            raise ValueError("search blocking owners must be unique and ordered")
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -170,6 +203,8 @@ class KnowledgeSearchResult:
             payload["warnings"] = list(self.warnings)
         if self.telemetry is not None:
             payload["telemetry"] = self.telemetry.to_dict()
+        if self.blocking_owners:
+            payload["blocking_owners"] = list(self.blocking_owners)
         return payload
 
     def to_json(self) -> str:
@@ -194,7 +229,12 @@ def _restore_legacy_module(contract: type[object]) -> None:
         _restore_function_module(member)
 
 
-for _contract in (KnowledgeCandidate, RankingExecution, KnowledgeSearchResult):
+for _contract in (
+    KnowledgeCandidate,
+    ResourceDiscoverySignal,
+    RankingExecution,
+    KnowledgeSearchResult,
+):
     _restore_legacy_module(_contract)
 
 del _contract
@@ -204,5 +244,6 @@ __all__ = (
     "KnowledgeCandidate",
     "KnowledgeSearchResult",
     "RankingExecution",
+    "ResourceDiscoverySignal",
 )
 # endregion [02]

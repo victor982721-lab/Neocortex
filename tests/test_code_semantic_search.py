@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -104,6 +103,15 @@ class _ConstantBackend:
             )
             for request in requests
         )
+
+    def text_token_counts(
+        self,
+        texts: Sequence[str],
+    ) -> tuple[tuple[int, ...], int]:
+        return tuple(len(text.split()) + 2 for text in texts), 512
+
+    def text_tokenizer_contract(self) -> tuple[str, int]:
+        return "code-semantic-fixture-tokenizer-v1", 512
 
 
 def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
@@ -240,10 +248,13 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
             "search_semantic_index",
             lambda *_args, _result=invalid_result, **_kwargs: _result,
         )
-        assert search_code(
-            state_path,
-            CodeSearchQuery(text="SQLite access", modes=("semantic",)),
-        ) == ()
+        assert (
+            search_code(
+                state_path,
+                CodeSearchQuery(text="SQLite access", modes=("semantic",)),
+            )
+            == ()
+        )
 
     source.write_text(source_text + "\n# changed revision\n", encoding="utf-8")
     CodeRoute(
@@ -258,10 +269,13 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
         "search_semantic_index",
         lambda *_args, **_kwargs: result,
     )
-    assert search_code(
-        state_path,
-        CodeSearchQuery(text="SQLite access", modes=("semantic",)),
-    ) == ()
+    assert (
+        search_code(
+            state_path,
+            CodeSearchQuery(text="SQLite access", modes=("semantic",)),
+        )
+        == ()
+    )
 
 
 def test_code_semantic_search_cancels_inside_exact_vector_scan(
@@ -327,4 +341,6 @@ def test_code_semantic_search_cancels_inside_exact_vector_scan(
     assert raised.value is cancellation
     assert entered_vector_scan
     assert repository_checkpoints == 2
+
+
 # endregion [02]

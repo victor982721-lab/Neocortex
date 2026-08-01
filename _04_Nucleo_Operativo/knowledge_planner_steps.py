@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -292,9 +291,63 @@ def canonical_retrieval_step_specs(
     return tuple(specs)
 
 
+def canonical_retrieval_step_specs_v3(
+    *,
+    retrieval_mode: RetrievalModeLike,
+    exact_terms: tuple[str, ...],
+    intents: tuple[str, ...],
+    source_kinds: tuple[str, ...],
+    formats: tuple[str, ...],
+    project: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    limit: int,
+    max_results: int,
+    semantic_rankings: Callable[
+        [tuple[str, ...], tuple[str, ...]],
+        tuple[str, ...],
+    ],
+) -> tuple[RetrievalStepSpec, ...]:
+    """Return v3 topology with an explicit optional title discovery channel."""
+
+    base = canonical_retrieval_step_specs(
+        exact_terms=exact_terms,
+        intents=intents,
+        source_kinds=source_kinds,
+        formats=formats,
+        project=project,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        max_results=max_results,
+        semantic_rankings=semantic_rankings,
+    )
+    if retrieval_mode.value != "discovery":
+        return base
+    candidate_limit = min(max_results, max(limit * 3, limit))
+    expanded: list[RetrievalStepSpec] = []
+    for spec in base:
+        expanded.append(spec)
+        if spec.channel == "semantic" and spec.ranking_name == "semantic_text":
+            expanded.append(
+                RetrievalStepSpec(
+                    "semantic_discovery",
+                    "semantic_title",
+                    "durable basename metadata may boost already-grounded resources",
+                    candidate_limit,
+                    False,
+                )
+            )
+    return tuple(expanded)
+
+
 KNOWLEDGE_PLAN_V2_PREFIX = "knowledge-plan-v2:"
 _KNOWLEDGE_PLAN_V2_PATTERN = re.compile(
     rf"{re.escape(KNOWLEDGE_PLAN_V2_PREFIX)}[0-9a-f]{{32}}"
+)
+KNOWLEDGE_PLAN_V3_PREFIX = "knowledge-plan-v3:"
+_KNOWLEDGE_PLAN_V3_PATTERN = re.compile(
+    rf"{re.escape(KNOWLEDGE_PLAN_V3_PREFIX)}[0-9a-f]{{32}}"
 )
 _ALLOWED_RETRIEVAL_STEPS = frozenset(
     {
@@ -308,6 +361,9 @@ _ALLOWED_RETRIEVAL_STEPS = frozenset(
         ("temporal", "published_history"),
     }
 )
+_ALLOWED_RETRIEVAL_STEPS_V3 = _ALLOWED_RETRIEVAL_STEPS | {
+    ("semantic_discovery", "semantic_title")
+}
 
 
 class RetrievalModeLike(Protocol):
@@ -321,6 +377,9 @@ class RetrievalStepLike(Protocol):
 
     @property
     def ranking_name(self) -> str: ...
+
+    @property
+    def required(self) -> bool: ...
 
     def to_dict(self) -> dict[str, object]: ...
 
@@ -768,19 +827,148 @@ def validate_knowledge_plan_v2(
         )
 
 
+def _validate_v3_shape(
+    plan: KnowledgePlanLike,
+    semantic_ranking_names: Callable[
+        [tuple[str, ...], tuple[str, ...]],
+        tuple[str, ...],
+    ],
+) -> None:
+    if _KNOWLEDGE_PLAN_V3_PATTERN.fullmatch(plan.plan_id) is None:
+        raise ValueError(
+            "Knowledge plan v3 plan_id must contain a lowercase XXH3-128 digest"
+        )
+    step_keys = tuple((step.channel, step.ranking_name) for step in plan.steps)
+    if any(step_key not in _ALLOWED_RETRIEVAL_STEPS_V3 for step_key in step_keys):
+        raise ValueError("Knowledge plan v3 contains an unsupported retrieval step")
+    lexical_steps = tuple(step for step in plan.steps if step.channel == "lexical")
+    if len(lexical_steps) != 1:
+        raise ValueError(
+            "Knowledge plan v3 must contain exactly one lexical retrieval step"
+        )
+    semantic_names = _semantic_names(plan)
+    if len(semantic_names) != len(set(semantic_names)):
+        raise ValueError(
+            "Knowledge plan v3 semantic rankings cannot contain duplicates"
+        )
+    if semantic_names != semantic_ranking_names(plan.source_kinds, plan.formats):
+        raise ValueError(
+            "Knowledge plan v3 semantic rankings do not match its retrieval scope"
+        )
+    discovery_steps = tuple(
+        step for step in plan.steps if step.channel == "semantic_discovery"
+    )
+    expected_title = (
+        plan.retrieval_mode.value == "discovery" and "semantic_text" in semantic_names
+    )
+    if expected_title:
+        if len(discovery_steps) != 1:
+            raise ValueError(
+                "Knowledge plan v3 discovery must contain one semantic title step"
+            )
+        title_step = discovery_steps[0]
+        if title_step.ranking_name != "semantic_title" or title_step.required:
+            raise ValueError("Knowledge plan v3 semantic title step must be optional")
+    elif discovery_steps:
+        raise ValueError(
+            "Knowledge plan v3 semantic title step is outside retrieval scope"
+        )
+    if len(step_keys) != len(set(step_keys)):
+        raise ValueError(
+            "Knowledge plan v3 retrieval rankings cannot contain duplicates"
+        )
+
+
+def validate_knowledge_plan_v3(
+    plan: KnowledgePlanLike,
+    *,
+    query_factory: Callable[..., _QueryT],
+    query_plan_signals: Callable[
+        [_QueryT],
+        tuple[tuple[str, ...], tuple[str, ...]],
+    ],
+    semantic_ranking_names: Callable[
+        [tuple[str, ...], tuple[str, ...]],
+        tuple[str, ...],
+    ],
+    plan_identifier: Callable[..., str],
+    canonical_retrieval_steps: Callable[..., tuple[_StepT, ...]],
+) -> None:
+    _validate_v3_shape(plan, semantic_ranking_names)
+    query = query_factory(
+        text=plan.normalized_query,
+        retrieval_mode=plan.retrieval_mode,
+        include_history=plan.include_history,
+        source_kinds=plan.source_kinds,
+        formats=plan.formats,
+        project=plan.project,
+        date_from=plan.date_from,
+        date_to=plan.date_to,
+        limit=plan.limit,
+        max_per_resource=plan.max_per_resource,
+        min_section_distance=plan.min_section_distance,
+        max_vectors=plan.max_vectors,
+    )
+    expected_terms, expected_intents = query_plan_signals(query)
+    if plan.exact_terms != expected_terms or plan.intents != expected_intents:
+        raise ValueError(
+            "Knowledge plan v3 query signals do not match its normalized query"
+        )
+    expected_identifier = plan_identifier(
+        normalized_query=plan.normalized_query,
+        retrieval_mode=plan.retrieval_mode,
+        intents=plan.intents,
+        exact_terms=plan.exact_terms,
+        source_kinds=plan.source_kinds,
+        formats=plan.formats,
+        project=plan.project,
+        date_from=plan.date_from,
+        date_to=plan.date_to,
+        include_history=plan.include_history,
+        limit=plan.limit,
+        max_per_resource=plan.max_per_resource,
+        min_section_distance=plan.min_section_distance,
+        max_vectors=plan.max_vectors,
+        steps=plan.steps,
+        notices=plan.notices,
+    )
+    if plan.plan_id != expected_identifier:
+        raise ValueError(
+            "Knowledge plan v3 plan_id does not match its canonical payload"
+        )
+    expected_steps = canonical_retrieval_steps(
+        retrieval_mode=plan.retrieval_mode,
+        exact_terms=expected_terms,
+        intents=expected_intents,
+        source_kinds=plan.source_kinds,
+        formats=plan.formats,
+        project=plan.project,
+        date_from=plan.date_from,
+        date_to=plan.date_to,
+        limit=plan.limit,
+    )
+    if plan.steps != expected_steps:
+        raise ValueError(
+            "Knowledge plan v3 steps do not match canonical executable topology"
+        )
+
+
 __all__ = (
     "CODE_FORMATS",
     "KNOWLEDGE_PLAN_V2_PREFIX",
+    "KNOWLEDGE_PLAN_V3_PREFIX",
     "KnowledgePlanLike",
     "PlanLimits",
     "RetrievalStepLike",
     "RetrievalStepSpec",
     "canonical_retrieval_step_specs",
+    "canonical_retrieval_step_specs_v3",
     "knowledge_plan_identity_payload",
     "semantic_ranking_names",
     "validated_date",
     "validate_knowledge_plan_base",
     "validate_knowledge_plan_v2",
+    "validate_knowledge_plan_v3",
     "validate_retrieval_step",
 )
 # endregion [02]

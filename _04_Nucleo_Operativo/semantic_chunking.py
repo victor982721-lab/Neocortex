@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections import deque
 from dataclasses import dataclass
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator, Sequence
 
 import xxhash
 
@@ -21,6 +21,9 @@ _SENTENCE_BREAK = re.compile(r"[.!?;:]\s+|[。！？]\s*", re.UNICODE)
 
 class ChunkLimitExceeded(RuntimeError):
     """Raised instead of silently truncating an unexpectedly large item."""
+
+
+TextTokenCounter = Callable[[Sequence[str]], tuple[Sequence[int], int]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +42,8 @@ class TextChunkingConfig:
     min_natural_break_chars: int = 160
     max_chunks_per_item: int = 100_000
     algorithm_version: str = "natural-window-v2"
+    model_token_limit: int | None = None
+    tokenizer_signature: str | None = None
 
     def __post_init__(self) -> None:
         if not 64 <= self.max_chars <= 1_000_000:
@@ -55,18 +60,39 @@ class TextChunkingConfig:
             raise ValueError("max_chunks_per_item is outside the supported range")
         if not self.algorithm_version.strip():
             raise ValueError("algorithm_version cannot be blank")
+        if (self.model_token_limit is None) != (self.tokenizer_signature is None):
+            raise ValueError(
+                "model_token_limit and tokenizer_signature must be set together"
+            )
+        if self.model_token_limit is not None and (
+            isinstance(self.model_token_limit, bool)
+            or not isinstance(self.model_token_limit, int)
+            or not 1 <= self.model_token_limit <= 1_000_000
+        ):
+            raise ValueError("model_token_limit must be between 1 and 1000000")
+        if self.tokenizer_signature is not None and (
+            not isinstance(self.tokenizer_signature, str)
+            or not self.tokenizer_signature.strip()
+        ):
+            raise ValueError("tokenizer_signature cannot be blank")
 
     @property
     def signature(self) -> str:
         """Algorithm-explicit signature used for cache invalidation."""
 
-        return (
+        signature = (
             f"{self.algorithm_version}|chars={self.max_chars}|terms={self.max_terms}"
             f"|overlap-chars={self.overlap_chars}"
             f"|overlap-terms={self.overlap_terms}"
             f"|natural-min={self.min_natural_break_chars}"
             f"|max-chunks={self.max_chunks_per_item}"
         )
+        if self.model_token_limit is not None:
+            signature += (
+                f"|model-token-limit={self.model_token_limit}"
+                f"|tokenizer={self.tokenizer_signature}"
+            )
+        return signature
 
 
 # endregion [01]
@@ -149,6 +175,74 @@ def _chunk_identifier(
     return f"chunk-xxh3-128:{xxhash.xxh3_128_hexdigest(identity.encode('utf-8'))}"
 
 
+def _exact_token_count(
+    text: str,
+    token_counter: TextTokenCounter,
+    expected_token_limit: int,
+) -> tuple[int, int]:
+    counts, token_limit = token_counter((text,))
+    if (
+        isinstance(token_limit, bool)
+        or not isinstance(token_limit, int)
+        or token_limit < 1
+    ):
+        raise RuntimeError("text tokenizer returned an invalid token limit")
+    if len(counts) != 1:
+        raise RuntimeError("text tokenizer returned an invalid result count")
+    token_count = counts[0]
+    if isinstance(token_count, bool) or not isinstance(token_count, int):
+        raise RuntimeError("text tokenizer returned a non-integer token count")
+    if token_count < 0:
+        raise RuntimeError("text tokenizer returned a negative token count")
+    if token_limit != expected_token_limit:
+        raise RuntimeError("text tokenizer limit changed during chunking")
+    return token_count, token_limit
+
+
+def _fit_exact_token_budget(
+    text: str,
+    start: int,
+    end: int,
+    config: TextChunkingConfig,
+    token_counter: TextTokenCounter,
+) -> tuple[int, str]:
+    """Shrink one natural window until the production tokenizer accepts it."""
+
+    while True:
+        normalized = normalize_embedding_text(text[start:end])
+        assert config.model_token_limit is not None
+        token_count, token_limit = _exact_token_count(
+            normalized,
+            token_counter,
+            config.model_token_limit,
+        )
+        if token_count <= token_limit:
+            return end, normalized
+        span = end - start
+        if span <= 1:
+            raise ChunkLimitExceeded(
+                "one source character exceeds the production tokenizer limit"
+            )
+
+        # Exact token counts are not assumed to be monotonic under every BPE
+        # vocabulary.  Reduce by at least five percent on each rejection and
+        # retain a small token reserve, so this loop is bounded without ever
+        # accepting truncation.
+        token_reserve = max(4, token_limit // 20)
+        target_tokens = max(1, token_limit - token_reserve)
+        proportional_span = max(1, span * target_tokens // max(1, token_count))
+        forced_reduction_span = max(1, span - max(1, span // 20))
+        next_span = min(span - 1, proportional_span, forced_reduction_span)
+        proposed_end = start + next_span
+        natural_end = _natural_end(
+            text,
+            start,
+            proposed_end,
+            min(config.min_natural_break_chars, next_span),
+        )
+        end = natural_end if start < natural_end < end else proposed_end
+
+
 # endregion [02]
 
 
@@ -159,12 +253,19 @@ def iter_text_chunks(
     item_id: str,
     sections: Iterable[TextSection],
     config: TextChunkingConfig | None = None,
+    *,
+    token_counter: TextTokenCounter | None = None,
 ) -> Iterator[TextChunk]:
     """Yield bounded chunks without materializing an entire item-wide list."""
 
     if not item_id.strip():
         raise ValueError("item_id cannot be blank")
     active_config = config or TextChunkingConfig()
+    exact_contract = active_config.model_token_limit is not None
+    if exact_contract != (token_counter is not None):
+        raise RuntimeError(
+            "exact tokenizer counter and signed token contract must be used together"
+        )
     ordinal = 0
     for section in sections:
         source = section.text
@@ -190,7 +291,16 @@ def iter_text_chunks(
                 )
             if end <= cursor:
                 end = min(len(source), cursor + active_config.max_chars)
-            normalized = normalize_embedding_text(source[cursor:end])
+            if token_counter is None:
+                normalized = normalize_embedding_text(source[cursor:end])
+            else:
+                end, normalized = _fit_exact_token_budget(
+                    source,
+                    cursor,
+                    end,
+                    active_config,
+                    token_counter,
+                )
             if normalized:
                 if ordinal >= active_config.max_chunks_per_item:
                     raise ChunkLimitExceeded(
@@ -228,10 +338,19 @@ def chunk_text_sections(
     item_id: str,
     sections: Iterable[TextSection],
     config: TextChunkingConfig | None = None,
+    *,
+    token_counter: TextTokenCounter | None = None,
 ) -> tuple[TextChunk, ...]:
     """Materialize chunks only under the configuration's explicit item cap."""
 
-    return tuple(iter_text_chunks(item_id, sections, config))
+    return tuple(
+        iter_text_chunks(
+            item_id,
+            sections,
+            config,
+            token_counter=token_counter,
+        )
+    )
 
 
 # endregion [03]

@@ -439,6 +439,9 @@ def classify_embedding_model(
         database,
         indexed_model.model_signature,
         page_size=page_size,
+        text_scope=(
+            "content" if indexed_model.modality is EmbeddingModality.TEXT else "all"
+        ),
     ):
         if not page.records:
             continue

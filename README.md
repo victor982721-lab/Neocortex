@@ -5,6 +5,30 @@ clasificar, revisar y buscar documentos, imágenes, audio y código mediante un
 inventario y estado compartidos. Conserva evidencia, incertidumbre y versiones
 de procesamiento. El modo predeterminado no modifica el corpus.
 
+## Empieza aquí
+
+El flujo personal normal es deliberadamente corto:
+
+1. Comprueba el runtime y el estado de la capacidad que necesitas.
+2. Busca primero en el estado ya publicado.
+3. Si falta cobertura, procesa una sola ruta sobre 20–50 archivos con un límite
+   duro de 10–15 minutos.
+4. Verifica una salida útil y repite la misma corrida para comprobar que es
+   incremental.
+5. Escala sólo después de revisar resultados, errores, velocidad y proyección.
+
+`--all`, el watcher, una indexación Semantic completa, una auditoría integral y
+un ciclo de release no son pruebas iniciales. Si el piloto no produce algo útil,
+se detiene y se corrige. La continuación técnica vigente, con el estado
+observado y la siguiente acción única, está en el
+[handoff operativo 0.7.2](.codex/handoffs/NEOCORTEX_0.7.2_PAUSE_2026-07-30.md).
+
+Esta precaución aplica al arranque y diagnóstico, no elimina la experiencia
+simple buscada: una vez validado el entorno, `Neocortex --all --apply` debe ser
+el comando cotidiano integrado que haga todo lo soportado y aplique sólo
+acciones seguras. Las etapas aún no conectadas deben integrarse al comando, no
+convertirse en trabajo manual para Victor.
+
 ## Topología canónica por usuario
 
 La fuente, el runtime y el estado ocupan árboles separados:
@@ -34,13 +58,17 @@ $RuntimeId = '0.7.2-artifact-id' # sustituya por el identificador validado
 $Venv = Join-Path $env:LOCALAPPDATA "Programs\Neocortex\versions\$RuntimeId\venv"
 py -3 -m venv $Venv
 Set-Location -LiteralPath $Repository
-& "$Venv\Scripts\python.exe" -m pip install -c constraints.txt .
+& "$Venv\Scripts\python.exe" -m pip install -c constraints.txt ".[full]"
 ```
 
-La base mínima instala únicamente `rich` y `xxhash`. Conserva el entrypoint,
-inventario, código y las consultas Knowledge sobre estado existente, sin
-forzar runtimes de documentos, audio, imagen, embeddings o UI. Las capacidades
-opcionales se instalan por dominio:
+Para el uso personal de Victor, `full` es la instalación canónica: el comando
+`Neocortex` debe exponer documentos, audio, imagen, Semantic y UI sin exigirle
+elegir perfiles. Si una capacidad central aparece `unavailable`, se repara la
+instalación o su declaración antes de operar; no se trata como una decisión
+cotidiana del usuario.
+
+Los extras individuales se conservan únicamente como detalle de empaquetado y
+desarrollo:
 
 | Extra | Runtime añadido |
 |---|---|
@@ -57,16 +85,16 @@ habilitan OCR y recuperación PDF degradables en `documents`; y `tesseract`
 habilita el OCR documental degradable en `image`. El probe ligero sólo busca
 estos ejecutables en `PATH`; no interpreta overrides de una ejecución concreta.
 
-Para el runtime integrado completo y para desarrollo:
+Para desarrollo sobre el runtime completo:
 
 ```powershell
-& "$Venv\Scripts\python.exe" -m pip install -c constraints.txt ".[full]"
 & "$Venv\Scripts\python.exe" -m pip install -c constraints.txt ".[full,dev]"
 ```
 
-También se pueden combinar sólo los dominios necesarios, por ejemplo
-`.[documents,audio]`. Pillow se declara directamente en `documents`, `image`
-y `semantic` porque los tres dominios lo importan en sus rutas propias.
+Los mantenedores pueden combinar dominios para probar el empaquetado, por
+ejemplo `.[documents,audio]`. Esa modularidad no cambia el producto personal
+canónico. Pillow se declara directamente en `documents`, `image` y `semantic`
+porque los tres dominios lo importan en sus rutas propias.
 
 La API pública ligera permite inspeccionar prerrequisitos sin importar engines
 ni cargar o descargar modelos:
@@ -124,15 +152,16 @@ valide el artefacto en un entorno aislado antes de promover el launcher estable.
 ## Primer uso y rutas
 
 Una corrida sin `--apply` actualiza inventarios y cachés, pero preserva los
-archivos originales:
+archivos originales. El primer uso debe cubrir una sola ruta y como máximo
+20–50 archivos:
 
 ```powershell
-Neocortex --root C:\Datos --route pdf,docx
+Neocortex --root C:\Datos --route pdf --MaxCount 25
 ```
 
 Las rutas vigentes son `pdf`, `docx`, `office`, `audio`, `image` y `code`.
-También se admite una lista separada por comas o `--all`. Las búsquedas operan
-sobre estado ya construido, por ejemplo:
+Las listas y `--all` se reservan para después de aprobar cada ruta y su
+proyección. Las búsquedas operan sobre estado ya construido, por ejemplo:
 
 ```powershell
 Neocortex --code-search "dónde se valida el acceso a SQLite" --code-search-mode hybrid
@@ -163,8 +192,19 @@ el preset.
 
 ### Knowledge Plane de sólo lectura
 
-La Fase 1 ofrece una recuperación unificada sobre el estado ya producido por
-inventario, FTS de documentos, catálogo, semantic y código. Captura un
+La Fase 1 implementa el contrato de recuperación unificada sobre el estado ya
+producido por inventario, FTS de documentos, catálogo, Semantic y código.
+Su disponibilidad operativa no se presupone: primero se ejecuta
+`--knowledge-status`. `status` conserva la vista global y devuelve `6` o `7`
+ante cualquier owner incompatible o corrupto; `search` y `context` sólo se
+abstienen cuando ese owner aparece en `blocking_owners`. Un owner severo ajeno
+a los rankings requeridos permanece visible sin ocultar evidencia sana.
+
+Framework schema 19 es la única compatibilidad legacy explícita: se admite
+sólo en lectura cuando satisface exactamente el contrato estructural esperado,
+se marca `legacy_schema_read_compatible:19->20` y nunca se migra.
+
+Cuando los owners requeridos por la consulta son utilizables, Knowledge captura un
 `KnowledgeSnapshot` lógico —no una transacción distribuida—, construye un plan
 determinista, fusiona rankings sin confundir sus scores y compila contexto con
 citas y presupuesto explícitos. El modo `evidence`, predeterminado, puede
@@ -196,7 +236,7 @@ salida y límites verificables.
 
 ### Plan semántico de sólo lectura
 
-El preflight semántico proyecta trabajo exacto sobre las cachés durables sin
+El preflight semántico hace un inventario exacto de las cachés durables sin
 cargar modelos, crear jobs ni mutar estado durable:
 
 ```powershell
@@ -206,6 +246,10 @@ Neocortex --semantic-plan image --semantic-plan-max-scratch-bytes 536870912
 
 El plan informa recursos, contenido único, reutilización, bytes vectoriales
 como cota inferior y solicitudes al modelo como rango inferior/superior. El
+canal textual se marca
+`model_only_request_range_from_pre_tokenizer_content_projection`: el productor
+liga después el tokenizador exacto y puede dividir más chunks. Por eso ese rango
+no sustituye el piloto acotado. Imagen sin OCR conserva proyección exacta. El
 tiempo de modelo sólo tiene rango cuando la API de servicio recibe una
 calibración exacta compatible; la CLI no inventa esa calibración. Cada base
 física se observa en su propia transacción con fences de cambio y el SQLite
@@ -216,10 +260,34 @@ originales. Por ello informa `originals_verified=false`,
 `execution_ready=null` y `complete=false`; un plan calculado no certifica que
 la ejecución posterior esté lista.
 
+Antes de cualquier indexación compruebe `--semantic-status`. Cero modelos
+publicados o cero embeddings significa que la señal semántica aún no está
+entregada. `--semantic-index` usa por defecto un único presupuesto compartido
+de 50 items nuevos o cambiados, 1 500 jobs durables nuevos o reactivados y
+900 segundos. Los replays exactos no consumen los dos primeros límites.
+
+La indexación textual publica también un título durable derivado únicamente del
+basename, sin directorios ni la extensión final. La búsqueda lo mantiene como
+señal semántica separada y advisory: fusiona cuerpo (peso `1.0`) y título (peso
+`0.5`) por RRF, conserva la procedencia de ambos y devuelve el snippet corporal
+cuando existe. Clasificación, evidencia materializada y el modo Knowledge
+`evidence` continúan consumiendo sólo contenido. El modo Knowledge `discovery`
+puede usar el título únicamente como prior de recurso con peso `0.5`, y sólo si
+ese mismo recurso y revisión ya tienen evidencia corporal; nunca lo serializa
+como evidencia. Un título nunca autoriza mover, renombrar o borrar.
+Un head legado sin ese canal informa `title_channel_not_indexed` hasta una
+publicación acotada compatible.
+
+Si se agota un límite, la salida marca `truncated=1`, devuelve `2` y conserva la
+generación sin publicar; el head anterior no cambia. Una generación
+`bounded-v1` sólo puede publicarse después de confirmar la enumeración completa.
+Valide primero sobre 20–50 elementos: embeddings, publicación, búsquedas reales
+y segunda corrida incremental.
+
 ## Uso seguro
 
 `--apply` y `--organization-apply` son autorizaciones explícitas para mutar
-archivos; no son necesarias para indexar o buscar. En `0.7.0`, rename y
+archivos; no son necesarias para indexar o buscar. En `0.7.2`, rename y
 organización sólo operan sobre un archivo regular con un único hard link, en
 NTFS local y en el mismo volumen, mediante handles retenidos y semántica
 *no-replace*. Rutas UNC, otros filesystems, reparses, directorios y movimientos
@@ -268,8 +336,7 @@ WAL.
 - [Arquitectura](docs/ARCHITECTURE.md)
 - [Autoanálisis protegido de código](docs/SELF_ANALYSIS.md)
 - [Knowledge Plane](docs/KNOWLEDGE.md)
-- [Cierre de Fase 1 Knowledge](docs/KNOWLEDGE_EVOLUTION_2026-07-26_010033.md)
-- [Handoff de evolución técnica](docs/TECHNICAL_EVOLUTION_HANDOFF_2026-07-29_082142.md)
+- [Handoff operativo vigente](.codex/handoffs/NEOCORTEX_0.7.2_PAUSE_2026-07-30.md)
 - [Persistencia y migraciones](docs/PERSISTENCE.md)
 - [Recuperación y rollback](docs/RECOVERY.md)
 - [Seguridad y operaciones sobre archivos](docs/SECURITY.md)
@@ -278,8 +345,11 @@ WAL.
 - [Estándar de cierre de auditorías](docs/AUDIT_REPORTING_STANDARD.md)
 - [Núcleo operativo](_04_Nucleo_Operativo/README.md)
 
-Las auditorías históricas se conservan sin sobrescritura. El informe integral
-de la campaña 0.7.1 está en
-[docs/TECHNICAL_EVOLUTION_2026-07-26_173000.md](docs/TECHNICAL_EVOLUTION_2026-07-26_173000.md).
-La instrucción vigente para continuar la evolución está en
-[docs/TECHNICAL_EVOLUTION_HANDOFF_2026-07-29_082142.md](docs/TECHNICAL_EVOLUTION_HANDOFF_2026-07-29_082142.md).
+### Referencia histórica; no es flujo de trabajo
+
+Las auditorías y handoffs anteriores se conservan como evidencia, pero no deben
+ejecutarse como instrucciones vigentes:
+
+- [Cierre histórico de Fase 1 Knowledge](docs/KNOWLEDGE_EVOLUTION_2026-07-26_010033.md)
+- [Informe integral histórico 0.7.1](docs/TECHNICAL_EVOLUTION_2026-07-26_173000.md)
+- [Handoff técnico histórico 0.7.1](docs/TECHNICAL_EVOLUTION_HANDOFF_2026-07-29_082142.md)

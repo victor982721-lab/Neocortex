@@ -1,9 +1,15 @@
-# Estándar obligatorio para el cierre de auditorías
+# Estándar para auditorías integrales y cierres de release
 
 Este documento es la fuente de verdad del repositorio para redactar y cerrar
 auditorías técnicas de NeoCortex. No sustituye los contratos del código, la
 ayuda viva, los esquemas ni los procedimientos operativos; define cómo se
 obtiene, distingue y comunica su evidencia.
+
+Su uso es obligatorio únicamente cuando Victor solicita de forma explícita una
+auditoría integral o un cierre de release. No aplica a correcciones focales,
+documentación, configuración ni slices verticales ordinarios; esos trabajos
+usan validación proporcional conforme a AGENTS.md. No convierta este estándar
+en una barrera rutinaria para entregar una mejora usable.
 
 ## Principios
 

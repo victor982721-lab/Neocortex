@@ -44,6 +44,8 @@ from .semantic_evidence_repository import (
     store_label_prototype,
 )
 from .semantic_generation_repository import (
+    EmbeddingGenerationRebaseRequiredError,
+    EnqueueJobBatchResult,
     _attach_payload,
     _enqueue_jobs,
     _generation_model,
@@ -57,12 +59,16 @@ from .semantic_generation_repository import (
     complete_embedding_job,
     embedding_request_from_lease,
     enqueue_image_item_jobs,
+    enqueue_image_item_jobs_bounded,
     enqueue_text_chunk_jobs,
+    enqueue_text_chunk_jobs_bounded,
     fail_embedding_job,
     finalize_embedding_generation,
     generation_summary,
     heartbeat_embedding_job,
     heartbeat_embedding_jobs,
+    prepare_embedding_generation,
+    release_embedding_job_lease_for_deadline,
     reuse_cached_jobs,
     start_embedding_generation,
     update_embedding_generation_cursor,
@@ -188,4 +194,6 @@ def publish_semantic_evidence_entities(
         _max_entities=MAX_EVIDENCE_ENTITIES_PER_PUBLICATION,
         _max_rows=MAX_EVIDENCE_ROWS_PER_PUBLICATION,
     )
+
+
 # endregion [02]

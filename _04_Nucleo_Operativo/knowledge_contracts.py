@@ -827,6 +827,7 @@ class ContextBundle:
         compare=False,
         repr=False,
     )
+    blocking_owners: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _contract_context.validate_context_bundle(

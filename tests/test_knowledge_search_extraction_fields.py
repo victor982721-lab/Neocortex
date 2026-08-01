@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -59,6 +58,7 @@ def test_contract_field_topology_and_class_pickle_bytes_are_stable() -> None:
             "elapsed_milliseconds",
             "warnings",
             "telemetry",
+            "blocking_owners",
         ),
     }
     pickle_sha256 = {
@@ -86,4 +86,6 @@ def test_contract_field_topology_and_class_pickle_bytes_are_stable() -> None:
     telemetry = KnowledgeSearchResult.__dataclass_fields__["telemetry"]
     assert telemetry.compare is False
     assert telemetry.repr is False
+
+
 # endregion [02]

@@ -70,6 +70,10 @@ from _04_Nucleo_Operativo.semantic_state import (
     update_embedding_generation_cursor,
     upsert_semantic_item,
 )
+from _04_Nucleo_Operativo.semantic_sources import (
+    SEMANTIC_TITLE_POLICY,
+    SEMANTIC_TITLE_SECTION_KIND,
+)
 
 
 # region [01] Test builders
@@ -191,6 +195,117 @@ def _complete_text_job(
     )
     finalize_embedding_generation(path, generation, completed_ns=24)
     return generation
+
+
+def test_text_embedding_scopes_separate_title_from_content_and_validate_empty_head(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model = _text_model()
+    _initialize(database, model)
+    query = ExactSearchQuery(
+        query_model_signature=model.model_signature,
+        vector_space=model.vector_space,
+        dimensions=model.dimensions,
+        vector=(1.0, 0.0, 0.0, 0.0),
+        target_modality=EmbeddingModality.TEXT,
+        indexed_model_signatures=(model.model_signature,),
+    )
+    with pytest.raises(ValueError, match="text_scope"):
+        search_exact_page(database, query, text_scope="invalid")  # type: ignore[arg-type]
+
+    item = SemanticItem(
+        item_id="item:pdf:scoped",
+        source_kind="pdf",
+        source_identity="scoped",
+        identity_version="fixture-v1",
+        fingerprint=fingerprint_text("source-scoped"),
+        path="C:/fixtures/proteccion-49T.pdf",
+    )
+    upsert_semantic_item(database, item, refresh_token="item-scope")
+    config = TextChunkingConfig(
+        max_chars=256,
+        max_terms=64,
+        overlap_chars=0,
+        overlap_terms=0,
+        min_natural_break_chars=32,
+    )
+    chunks = chunk_text_sections(
+        item.item_id,
+        (
+            TextSection("pdf_page", "1", "contenido de transformador"),
+            TextSection(
+                SEMANTIC_TITLE_SECTION_KIND,
+                SEMANTIC_TITLE_POLICY,
+                "proteccion-49T",
+                {"advisory_only": True},
+            ),
+        ),
+        config,
+    )
+    assert len(chunks) == 2
+    stage_text_chunks(database, chunks, refresh_token="chunks-scope")
+    finalize_text_chunk_refresh(
+        database,
+        item_id=item.item_id,
+        chunking_signature=config.signature,
+        refresh_token="chunks-scope",
+    )
+    generation = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="scope-fixture-v1",
+    )
+    enqueue_text_chunk_jobs(
+        database,
+        generation,
+        (chunk.chunk_id for chunk in chunks),
+    )
+    for lease in claim_embedding_jobs(
+        database,
+        generation,
+        worker_id="scope-worker",
+        limit=2,
+    ):
+        complete_embedding_job(
+            database,
+            lease.job_id,
+            worker_id="scope-worker",
+            vector=(1.0, 0.0, 0.0, 0.0),
+            provenance={"fixture": "scope"},
+        )
+    finalize_embedding_generation(database, generation)
+
+    all_page = search_exact_page(database, query, text_scope="all")
+    content_page = search_exact_page(database, query, text_scope="content")
+    title_page = search_exact_page(database, query, text_scope="title")
+    assert (all_page.scanned, content_page.scanned, title_page.scanned) == (2, 1, 1)
+    assert resolve_search_hits(database, content_page.hits)[0].section_kind == (
+        "pdf_page"
+    )
+    assert resolve_search_hits(database, title_page.hits)[0].section_kind == (
+        SEMANTIC_TITLE_SECTION_KIND
+    )
+    assert (
+        len(
+            load_active_embedding_page(
+                database,
+                model.model_signature,
+                text_scope="content",
+            ).records
+        )
+        == 1
+    )
+    assert (
+        len(
+            load_active_embedding_page(
+                database,
+                model.model_signature,
+                text_scope="title",
+            ).records
+        )
+        == 1
+    )
 
 
 # endregion [01]
@@ -496,9 +611,7 @@ def test_expired_worker_failure_cannot_overwrite_reclaimed_lease(
         def execute(self, sql: str, parameters: tuple[object, ...] = ()):
             cursor = self._connection.execute(sql, parameters)
             normalized = " ".join(sql.split())
-            if normalized.startswith(
-                "SELECT attempts,max_attempts,status,lease_owner"
-            ):
+            if normalized.startswith("SELECT attempts,max_attempts,status,lease_owner"):
                 return PausingCursor(cursor)
             return cursor
 

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -15,7 +14,9 @@ from typing import Any
 import pytest
 
 import _04_Nucleo_Operativo.knowledge_snapshot as knowledge_snapshot
+from _02_Deduplicacion import inventory_schema as inventory_schema_module
 from _02_Deduplicacion.inventory_schema import initialize_inventory_schema
+from _04_Nucleo_Operativo import framework_schema as framework_schema_module
 from _04_Nucleo_Operativo.code_schema import initialize_code_state
 from _04_Nucleo_Operativo.document_catalog import initialize_document_catalog
 from _04_Nucleo_Operativo.knowledge_contracts import (
@@ -114,6 +115,20 @@ def _published_fixture(state: Path) -> None:
     initialize_code_state(state / "code.sqlite3")
 
 
+def _legacy_read_compatible_fixture(state: Path) -> None:
+    state.mkdir()
+    with sqlite3.connect(state / "dedup.sqlite3") as connection:
+        inventory_schema_module._build_v7_schema(connection)
+        connection.execute(
+            "INSERT INTO metadata(key,value) VALUES('schema_version','7')"
+        )
+    with sqlite3.connect(state / "framework.sqlite3") as connection:
+        framework_schema_module._build_v19_exact_schema(connection)
+        connection.execute(
+            "INSERT INTO metadata(key,value) VALUES('schema_version','19')"
+        )
+
+
 def _set_duplicate_plan_summary(
     inventory: Path,
     *,
@@ -158,9 +173,7 @@ def test_public_snapshot_allows_missing_root_without_creation(
     )
 
     assert snapshot.consistency is SnapshotConsistency.STABLE
-    assert all(
-        owner.state is OwnerAvailability.ABSENT for owner in snapshot.owners
-    )
+    assert all(owner.state is OwnerAvailability.ABSENT for owner in snapshot.owners)
     assert not state.exists()
 
 
@@ -479,6 +492,52 @@ def test_snapshot_collects_real_heads_and_marks_absent_owners(tmp_path: Path) ->
     assert not (state / "pdf.sqlite3").exists()
 
 
+def test_snapshot_reads_safe_previous_framework_and_abstains_inventory(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    _legacy_read_compatible_fixture(state)
+    inventory = state / "dedup.sqlite3"
+    framework = state / "framework.sqlite3"
+    inventory_before = inventory.read_bytes()
+    framework_before = framework.read_bytes()
+
+    snapshot = collect_knowledge_snapshot(
+        KnowledgeStatePaths.from_directory(state),
+        source_version="0.7.2",
+    )
+
+    inventory_owner = _owner(snapshot, "inventory")
+    framework_owner = _owner(snapshot, "framework")
+    assert snapshot.consistency is SnapshotConsistency.STABLE
+    assert snapshot.attempts == 1
+    assert inventory_owner.state is OwnerAvailability.INCOMPATIBLE
+    assert inventory_owner.observed_schema_version == 7
+    assert inventory_owner.error_code == "legacy_schema"
+    assert inventory_owner.publications == ()
+    assert framework_owner.state is OwnerAvailability.AVAILABLE
+    assert framework_owner.observed_schema_version == 19
+    assert framework_owner.warning == "legacy_schema_read_compatible:19->20"
+    assert inventory.read_bytes() == inventory_before
+    assert framework.read_bytes() == framework_before
+
+
+def test_snapshot_rejects_extended_previous_framework_schema(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    _legacy_read_compatible_fixture(state)
+    with sqlite3.connect(state / "framework.sqlite3") as connection:
+        connection.execute("ALTER TABLE initial_runs ADD COLUMN unexpected TEXT")
+
+    snapshot = collect_knowledge_snapshot(
+        KnowledgeStatePaths.from_directory(state),
+        source_version="0.7.2",
+    )
+
+    framework_owner = _owner(snapshot, "framework")
+    assert framework_owner.state is OwnerAvailability.INCOMPATIBLE
+    assert "v19 schema contract validation failed" in (framework_owner.warning or "")
+
+
 def test_snapshot_distinguishes_absent_future_and_corrupt_without_mutation(
     tmp_path: Path,
 ) -> None:
@@ -535,6 +594,36 @@ def test_snapshot_retries_once_after_external_owner_change(tmp_path: Path) -> No
 
     assert snapshot.consistency is SnapshotConsistency.STABLE
     assert snapshot.attempts == 2
+
+
+def test_snapshot_retries_after_commit_without_logical_watermark_change(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    code = state / "code.sqlite3"
+    initialize_code_state(code)
+    changed = False
+
+    def mutate_metadata(owner: str, attempt: int) -> None:
+        nonlocal changed
+        if owner != "code" or attempt != 1 or changed:
+            return
+        changed = True
+        with sqlite3.connect(code) as connection:
+            connection.execute(
+                "INSERT INTO metadata(key,value) VALUES('snapshot_probe','1')"
+            )
+
+    snapshot = collect_knowledge_snapshot(
+        KnowledgeStatePaths.from_directory(state),
+        source_version="0.7.2",
+        _between_observations=mutate_metadata,
+    )
+
+    assert snapshot.consistency is SnapshotConsistency.STABLE
+    assert snapshot.attempts == 2
+    assert changed
 
 
 def test_snapshot_observes_cancellation_before_global_retry(
@@ -881,4 +970,6 @@ def test_snapshot_rejects_invalid_inventory_checkpoint_head(tmp_path: Path) -> N
     assert mismatched_inventory.state is OwnerAvailability.INCOMPATIBLE
     assert mismatched_inventory.warning is not None
     assert "root-mismatched scan" in mismatched_inventory.warning
+
+
 # endregion [02]

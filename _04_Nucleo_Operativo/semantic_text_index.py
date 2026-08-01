@@ -6,15 +6,16 @@ import itertools
 import sqlite3
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 
-from .semantic_chunking import TextChunkingConfig, iter_text_chunks
+from .semantic_chunking import TextChunkingConfig, TextTokenCounter, iter_text_chunks
 from .semantic_config import (
     SEMANTIC_PIPELINE_VERSION,
     multilingual_text_model,
     text_chunking_for_model,
 )
-from .semantic_generation_repository import _enqueue_text_chunk_batch
+from .semantic_generation_repository import _enqueue_text_chunk_batch_bounded
 from .semantic_generation_worker import GenerationRunner
 from .semantic_item_repository import (
     _finalize_semantic_item_refresh,
@@ -33,22 +34,32 @@ from .semantic_preparation import (
     initialize_models,
     model_cache,
     require_source_databases,
+    resolve_text_token_guard,
     text_probe,
 )
 from .semantic_service_contracts import (
     SEMANTIC_DATABASE_NAME,
     STAGING_BATCH_SIZE,
+    GenerationWorkResult,
     SemanticIndexResult,
 )
 from .semantic_sources import (
-    SOURCE_ADAPTER_VERSION,
+    SEMANTIC_TITLE_POLICY,
+    SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
     TEXT_SOURCE_KINDS,
     TextSourceRecord,
+    iter_text_sections_with_metadata,
+    semantic_text_processing_signature,
 )
 from .semantic_schema import semantic_database
 from .semantic_state import (
+    prepare_embedding_generation,
     start_embedding_generation,
     update_embedding_generation_cursor,
+)
+from .semantic_work_budget import (
+    SemanticWorkBudget,
+    unlimited_semantic_work_budget,
 )
 from .sqlite_cancellation import (
     CancellationCheck,
@@ -83,14 +94,18 @@ class _SemanticTextStagingSession:
         source_kind: str,
         refresh_token: str,
         chunking: TextChunkingConfig,
+        token_counter: TextTokenCounter | None = None,
         cancellation: SQLiteCancellationBridge,
+        work_budget: SemanticWorkBudget,
     ) -> None:
         self._connection = connection
         self._generation_id = generation_id
         self._source_kind = source_kind
         self._refresh_token = refresh_token
         self._chunking = chunking
+        self._token_counter = token_counter
         self._cancellation = cancellation
+        self._work_budget = work_budget
         self._transaction_chunks = 0
         self._transaction_items = 0
 
@@ -111,7 +126,7 @@ class _SemanticTextStagingSession:
         self,
         item: SemanticItem,
         sections: Iterable[TextSection],
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, int, bool]:
         """Stage one item while committing oversized work in bounded slices."""
 
         self._begin()
@@ -122,8 +137,13 @@ class _SemanticTextStagingSession:
             updated_ns=time.time_ns(),
             invalidate_text_on_fingerprint_change=True,
         )
-        chunks_staged = queued = 0
-        chunks = iter_text_chunks(item.item_id, sections, self._chunking)
+        chunks_staged = queued = new_jobs = 0
+        chunks = iter_text_chunks(
+            item.item_id,
+            iter_text_sections_with_metadata(item, sections),
+            self._chunking,
+            token_counter=self._token_counter,
+        )
         while True:
             capacity = STAGING_BATCH_SIZE - self._transaction_chunks
             batch = tuple(itertools.islice(chunks, capacity))
@@ -137,14 +157,24 @@ class _SemanticTextStagingSession:
                 refresh_token=self._refresh_token,
                 updated_ns=selected_ns,
             )
-            queued += _enqueue_text_chunk_batch(
+            allowance = self._work_budget.new_job_allowance(STAGING_BATCH_SIZE)
+            enqueue_result = _enqueue_text_chunk_batch_bounded(
                 self._connection,
                 self._generation_id,
                 tuple(chunk.chunk_id for chunk in batch),
+                max_new_jobs=allowance,
                 now_ns=selected_ns,
             )
+            queued += enqueue_result.touched
+            new_jobs += enqueue_result.new_jobs
+            self._work_budget.record_new_jobs(enqueue_result.new_jobs)
+            self._work_budget.record_rebound_members(enqueue_result.rebound_members)
             self._transaction_chunks += len(batch)
             self._cancellation.checkpoint()
+            if not enqueue_result.complete:
+                self._work_budget.mark_job_limit()
+                self._commit()
+                return chunks_staged, queued, new_jobs, False
             if self._transaction_chunks >= STAGING_BATCH_SIZE:
                 self._commit()
 
@@ -160,7 +190,7 @@ class _SemanticTextStagingSession:
         self._cancellation.checkpoint()
         if self._transaction_items >= STAGING_BATCH_SIZE:
             self._commit()
-        return chunks_staged, queued
+        return chunks_staged, queued, new_jobs, True
 
     def finalize_source(self) -> None:
         """Deactivate unseen source members only after the refresh completed."""
@@ -183,18 +213,27 @@ def _stage_source(
     generation_id: int,
     refresh_token: str,
     chunking: TextChunkingConfig,
+    token_counter: TextTokenCounter | None = None,
     source_record_iterator: TextRecordIterator,
+    work_budget: SemanticWorkBudget | None = None,
     cancellation_check: CancellationCheck | None = None,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, bool]:
     if not source_kind.strip() or not refresh_token.strip():
         raise ValueError("source_kind and refresh_token cannot be blank")
+    budget = work_budget or unlimited_semantic_work_budget()
     source_items = chunks_staged = queued = 0
     groups = grouped_text_records(
         state_directory,
         source_kind,
         source_record_iterator=source_record_iterator,
     )
-    bridge = SQLiteCancellationBridge(cancellation_check)
+
+    def staging_checkpoint() -> None:
+        if cancellation_check is not None:
+            cancellation_check()
+        budget.checkpoint()
+
+    bridge = SQLiteCancellationBridge(staging_checkpoint)
     with semantic_database(database) as connection:
         with sqlite_cancellation_scope(connection, bridge):
             session = _SemanticTextStagingSession(
@@ -203,23 +242,41 @@ def _stage_source(
                 source_kind=source_kind,
                 refresh_token=refresh_token,
                 chunking=chunking,
+                token_counter=token_counter,
                 cancellation=bridge,
+                work_budget=budget,
             )
+            source_complete = True
             for _item_id, grouped in groups:
                 bridge.checkpoint()
+                if not budget.try_admit_item():
+                    source_complete = False
+                    break
                 iterator = iter(grouped)
                 first = next(iterator)
                 item = first.item
+                item_rebounds_before = budget.rebound_members
                 sections = itertools.chain(
                     (first.section,),
                     (record.section for record in iterator),
                 )
-                item_chunks, item_jobs = session.stage_item(item, sections)
+                item_chunks, item_jobs, item_new_jobs, item_complete = (
+                    session.stage_item(item, sections)
+                )
                 source_items += 1
                 chunks_staged += item_chunks
                 queued += item_jobs
-            session.finalize_source()
-    return source_items, chunks_staged, queued
+                if not item_complete:
+                    source_complete = False
+                    break
+                if (
+                    item_new_jobs == 0
+                    and budget.rebound_members == item_rebounds_before
+                ):
+                    budget.refund_replayed_item()
+            if source_complete:
+                session.finalize_source()
+    return source_items, chunks_staged, queued, source_complete
 
 
 # endregion [01]
@@ -240,9 +297,12 @@ def index_text_embeddings(
     backend_factory: BackendFactory,
     source_record_iterator: TextRecordIterator,
     generation_runner: GenerationRunner,
+    work_budget: SemanticWorkBudget | None = None,
 ) -> SemanticIndexResult:
     """Incrementally embed extracted text; source files are never rescanned."""
 
+    budget = work_budget or unlimited_semantic_work_budget()
+    new_jobs_before = budget.new_jobs_admitted
     selected_sources = tuple(dict.fromkeys(source_kinds))
     if not selected_sources or any(
         kind not in TEXT_SOURCE_KINDS for kind in selected_sources
@@ -252,7 +312,7 @@ def index_text_embeddings(
     if selected_model.modality is not EmbeddingModality.TEXT:
         raise ValueError("text indexing requires a text model")
     require_source_databases(state_directory, selected_sources)
-    active_chunking = chunking or text_chunking_for_model(selected_model)
+    base_chunking = chunking or text_chunking_for_model(selected_model)
     cache = model_cache(state_directory, model_cache_override)
     embedding_backend = backend_factory(
         selected_model,
@@ -261,12 +321,19 @@ def index_text_embeddings(
         threads=threads,
     )
     text_probe(embedding_backend)
+    token_guard = resolve_text_token_guard(embedding_backend, selected_model)
+    active_chunking = replace(
+        base_chunking,
+        model_token_limit=token_guard.token_limit,
+        tokenizer_signature=token_guard.tokenizer_signature,
+    )
 
     database = state_directory / SEMANTIC_DATABASE_NAME
     initialize_models(database, (selected_model,))
-    processing_signature = (
-        f"{SEMANTIC_PIPELINE_VERSION}|{SOURCE_ADAPTER_VERSION}|"
-        f"{active_chunking.signature}|sources={','.join(selected_sources)}"
+    processing_signature = semantic_text_processing_signature(
+        pipeline_version=SEMANTIC_PIPELINE_VERSION,
+        chunking_signature=active_chunking.signature,
+        source_kinds=selected_sources,
     )
     generation_id = start_embedding_generation(
         database,
@@ -276,41 +343,107 @@ def index_text_embeddings(
             "pipeline": SEMANTIC_PIPELINE_VERSION,
             "sources": list(selected_sources),
             "chunking_signature": active_chunking.signature,
+            "title_policy": SEMANTIC_TITLE_POLICY,
+            "tokenizer_signature": token_guard.tokenizer_signature,
+            "model_token_limit": token_guard.token_limit,
+        },
+        materialize_base=False,
+    )
+    completed_sources: list[str] = []
+    update_embedding_generation_cursor(
+        database,
+        generation_id,
+        cursor={
+            "protocol": SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
+            "enumeration_complete": False,
+            "selected_sources": list(selected_sources),
+            "completed_sources": completed_sources,
         },
     )
     items_staged = chunks_staged = queued = 0
+    enumeration_complete = True
     for source_kind in selected_sources:
         refresh_token = f"generation:{generation_id}:source:{source_kind}"
-        source_items, source_chunks, source_jobs = _stage_source(
+        source_items, source_chunks, source_jobs, source_complete = _stage_source(
             database,
             state_directory,
             source_kind,
             generation_id=generation_id,
             refresh_token=refresh_token,
             chunking=active_chunking,
+            token_counter=token_guard.counter,
             source_record_iterator=source_record_iterator,
+            work_budget=budget,
         )
         items_staged += source_items
         chunks_staged += source_chunks
         queued += source_jobs
+        if not source_complete:
+            enumeration_complete = False
+            update_embedding_generation_cursor(
+                database,
+                generation_id,
+                cursor={
+                    "protocol": SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
+                    "enumeration_complete": False,
+                    "selected_sources": list(selected_sources),
+                    "completed_sources": completed_sources,
+                    "current_source": source_kind,
+                    "truncation_reason": budget.truncation_reason,
+                },
+            )
+            break
+        completed_sources.append(source_kind)
         update_embedding_generation_cursor(
             database,
             generation_id,
-            cursor={"completed_source": source_kind, "items": source_items},
+            cursor={
+                "protocol": SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
+                "enumeration_complete": False,
+                "selected_sources": list(selected_sources),
+                "completed_sources": completed_sources,
+                "completed_source": source_kind,
+                "items": source_items,
+            },
         )
 
-    result = generation_runner(
+    if enumeration_complete:
+        update_embedding_generation_cursor(
+            database,
+            generation_id,
+            cursor={
+                "protocol": SEMANTIC_TEXT_ENUMERATION_PROTOCOL,
+                "enumeration_complete": True,
+                "selected_sources": list(selected_sources),
+                "completed_sources": completed_sources,
+            },
+        )
+
+    reused_summary = prepare_embedding_generation(
         database,
         generation_id,
-        embedding_backend,
-        queued=queued,
+        enumeration_complete=enumeration_complete,
     )
+    if reused_summary is None:
+        result = generation_runner(
+            database,
+            generation_id,
+            embedding_backend,
+            queued=queued,
+            work_budget=budget,
+            publish_if_complete=enumeration_complete,
+        )
+    else:
+        result = GenerationWorkResult(reused_summary, 0, 0, 0, 0)
     return SemanticIndexResult(
         database,
         selected_sources,
         items_staged,
         chunks_staged,
         (result,),
+        new_jobs_staged=budget.new_jobs_admitted - new_jobs_before,
+        truncated=budget.truncated,
+        truncation_reason=budget.truncation_reason,
     )
 
 

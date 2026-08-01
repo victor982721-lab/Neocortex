@@ -68,6 +68,9 @@ class SemanticIndexResult:
     items_staged: int
     chunks_staged: int
     generations: tuple[GenerationWorkResult, ...]
+    new_jobs_staged: int = 0
+    truncated: bool = False
+    truncation_reason: str | None = None
 
     @property
     def errors(self) -> int:
@@ -76,6 +79,26 @@ class SemanticIndexResult:
     @property
     def incomplete(self) -> int:
         return sum(result.summary.unfinished for result in self.generations)
+
+    @property
+    def stale(self) -> int:
+        return sum(result.summary.stale for result in self.generations)
+
+    @property
+    def complete(self) -> bool:
+        """Only a fully published, non-partial invocation is delivered."""
+
+        return (
+            bool(self.generations)
+            and not self.truncated
+            and all(
+                result.summary.status == "ready"
+                and result.summary.unfinished == 0
+                and result.summary.errors == 0
+                and result.summary.stale == 0
+                for result in self.generations
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +294,8 @@ class SemanticRanking:
     cutoff_reason: str | None = None
     next_cursor: int | None = None
     cutoff_score: float | None = None
+    fusion_weight: float = 1.0
+    provenance: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

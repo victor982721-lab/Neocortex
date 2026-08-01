@@ -253,17 +253,20 @@ def test_text_plan_is_deterministic_bounded_and_creates_no_state(
     assert first.plan_signature == second.plan_signature
     assert first.content_set_xxh3_128 == second.content_set_xxh3_128
     assert first.resources == 2
-    assert first.sections == 2
-    assert first.chunks == 2
-    assert first.embedding_entities == 2
-    assert first.unique_contents == 1
-    assert first.new_unique_contents == 1
+    assert first.sections == 4
+    assert first.chunks == 4
+    assert first.embedding_entities == 4
+    assert first.unique_contents == 3
+    assert first.new_unique_contents == 3
     assert first.reusable_unique_contents == 0
-    assert first.input_bytes == 2 * len(text.encode())
-    assert first.unique_input_bytes == len(text.encode())
-    assert first.new_vector_blob_bytes_lower_bound == 768 * 2
-    assert first.model_request_contents_lower_bound == 1
-    assert first.model_request_contents_upper_bound == 2
+    assert "title-policy=semantic-basename-title-v1" in (
+        first.workloads[0].processing_signature
+    )
+    assert first.input_bytes == (2 * len(text.encode())) + 2
+    assert first.unique_input_bytes == len(text.encode()) + 2
+    assert first.new_vector_blob_bytes_lower_bound == 3 * 768 * 2
+    assert first.model_request_contents_lower_bound == 3
+    assert first.model_request_contents_upper_bound == 4
     assert first.estimated_model_seconds_lower_bound is None
     assert first.estimated_model_seconds_upper_bound is None
     assert first.estimated_model_seconds is None
@@ -296,16 +299,16 @@ def test_text_plan_reuses_existing_payload_without_jobs(tmp_path: Path) -> None:
         source_kinds=("pdf",),
     )
 
-    assert plan.unique_contents == 1
+    assert plan.unique_contents == 3
     assert plan.reusable_unique_contents == 1
-    assert plan.new_unique_contents == 0
-    assert plan.new_vector_blob_bytes_lower_bound == 0
-    assert plan.model_request_contents_lower_bound == 0
-    assert plan.model_request_contents_upper_bound == 0
-    assert plan.estimated_model_seconds_lower_bound == 0.0
-    assert plan.estimated_model_seconds_upper_bound == 0.0
-    assert plan.estimated_model_seconds == 0.0
-    assert plan.cost_complete is True
+    assert plan.new_unique_contents == 2
+    assert plan.new_vector_blob_bytes_lower_bound == 2 * 768 * 2
+    assert plan.model_request_contents_lower_bound == 2
+    assert plan.model_request_contents_upper_bound == 2
+    assert plan.estimated_model_seconds_lower_bound is None
+    assert plan.estimated_model_seconds_upper_bound is None
+    assert plan.estimated_model_seconds is None
+    assert plan.cost_complete is False
     assert plan.cost_calibrated is False
     with semantic_database(semantic, readonly=True) as connection:
         after = tuple(
@@ -329,8 +332,8 @@ def test_malformed_cached_vector_is_not_counted_as_reusable(tmp_path: Path) -> N
     )
 
     assert plan.reusable_unique_contents == 0
-    assert plan.new_unique_contents == 1
-    assert plan.model_request_contents_lower_bound == 1
+    assert plan.new_unique_contents == 2
+    assert plan.model_request_contents_lower_bound == 2
 
 
 def test_cost_requires_one_exact_execution_calibration(tmp_path: Path) -> None:
@@ -373,9 +376,9 @@ def test_cost_requires_one_exact_execution_calibration(tmp_path: Path) -> None:
     assert mismatch.workloads[0].cost_unavailable_reason == (
         "no_exact_cost_calibration"
     )
-    assert calibrated.estimated_model_seconds == pytest.approx(0.5)
-    assert calibrated.estimated_model_seconds_lower_bound == pytest.approx(0.5)
-    assert calibrated.estimated_model_seconds_upper_bound == pytest.approx(0.5)
+    assert calibrated.estimated_model_seconds == pytest.approx(1.0)
+    assert calibrated.estimated_model_seconds_lower_bound == pytest.approx(1.0)
+    assert calibrated.estimated_model_seconds_upper_bound == pytest.approx(1.0)
     assert calibrated.cost_complete is True
     assert calibrated.workloads[0].cost_calibration_signature == "fixture-rate-v1"
 
@@ -497,6 +500,36 @@ def test_image_plan_uses_cached_digest_and_separates_ocr(tmp_path: Path) -> None
     assert plan.originals_verified is False
     assert plan.execution_ready is None
     assert plan.complete is False
+
+
+def test_image_plan_processing_signatures_match_bounded_producer_contracts(
+    tmp_path: Path,
+) -> None:
+    _create_image_state(
+        tmp_path,
+        include_dedup=True,
+        ocr_text="Transformador industrial",
+    )
+
+    plan = plan_semantic_index(tmp_path, scope="image")
+
+    signatures = {
+        workload.name: workload.processing_signature for workload in plan.workloads
+    }
+    assert signatures == {
+        "image": (
+            "neocortex-semantic-pipeline-v2|semantic-source-adapters-v2|"
+            "images|enumeration=bounded-v1"
+        ),
+        "image_ocr": (
+            "neocortex-semantic-pipeline-v2|semantic-source-adapters-v2|"
+            f"image-ocr|{plan.text_chunking_signature}|"
+            "tokenizer-contract=unresolved-v1|enumeration=bounded-v1"
+        ),
+    }
+    assert plan.estimate_kind == (
+        "model_only_request_range_from_pre_tokenizer_content_projection"
+    )
 
 
 def test_image_plan_blocks_missing_digest_without_reading_original(
@@ -641,9 +674,10 @@ def test_preexisting_reuse_is_batched_on_the_bounded_scratch_connection(
             source_kinds=("pdf",),
         )
 
-    assert batch_sizes == [100, 100, 5]
+    assert sum(batch_sizes) == len(texts)
+    assert all(1 <= size <= 100 for size in batch_sizes)
     assert plan.reusable_unique_contents == len(texts)
-    assert plan.new_unique_contents == 0
+    assert plan.new_unique_contents == len(texts)
     assert observed_names == {"content-keys.sqlite3"}
     assert plan.scratch_storage_bytes <= plan.max_scratch_bytes
 
@@ -1140,10 +1174,10 @@ def test_request_and_cost_are_ranges_until_duplicate_requests_collapse(
         execution_signature=calibration.execution_signature,
     )
 
-    assert calibrated.model_request_contents_lower_bound == 1
-    assert calibrated.model_request_contents_upper_bound == 2
-    assert calibrated.estimated_model_seconds_lower_bound == pytest.approx(0.5)
-    assert calibrated.estimated_model_seconds_upper_bound == pytest.approx(1.0)
+    assert calibrated.model_request_contents_lower_bound == 3
+    assert calibrated.model_request_contents_upper_bound == 4
+    assert calibrated.estimated_model_seconds_lower_bound == pytest.approx(1.5)
+    assert calibrated.estimated_model_seconds_upper_bound == pytest.approx(2.0)
     assert calibrated.estimated_model_seconds is None
     assert calibrated.cost_complete is False
     assert calibrated.cost_calibrated is True
@@ -1177,7 +1211,7 @@ def test_calibration_is_snapshotted_before_cancellation_callbacks_can_mutate_it(
     )
 
     assert callbacks > 0
-    assert plan.estimated_model_seconds == pytest.approx(0.5)
+    assert plan.estimated_model_seconds == pytest.approx(1.0)
     assert math.isfinite(plan.estimated_model_seconds or math.inf)
 
 
@@ -1302,19 +1336,19 @@ def test_all_scope_separates_image_and_ocr_but_reuses_pdf_content(
         "image_ocr",
     )
     assert first.resources == 2
-    assert first.sections == 2
-    assert first.chunks == 2
-    assert first.embedding_entities == 3
-    assert first.unique_contents == 2
-    assert first.new_unique_contents == 2
-    assert first.model_request_contents_lower_bound == 2
-    assert first.model_request_contents_upper_bound == 3
-    assert first.new_vector_blob_bytes_lower_bound == (768 * 2) + (512 * 2)
+    assert first.sections == 3
+    assert first.chunks == 3
+    assert first.embedding_entities == 4
+    assert first.unique_contents == 3
+    assert first.new_unique_contents == 3
+    assert first.model_request_contents_lower_bound == 3
+    assert first.model_request_contents_upper_bound == 4
+    assert first.new_vector_blob_bytes_lower_bound == (2 * 768 * 2) + (512 * 2)
     text_workload, image_workload, ocr_workload = first.workloads
     assert (
         text_workload.model_request_contents_lower_bound,
         text_workload.model_request_contents_upper_bound,
-    ) == (1, 1)
+    ) == (2, 2)
     assert (
         image_workload.model_request_contents_lower_bound,
         image_workload.model_request_contents_upper_bound,
@@ -1347,15 +1381,15 @@ def test_all_scope_preexisting_text_payload_is_reused_across_pdf_and_ocr(
     )
 
     text_workload, image_workload, ocr_workload = plan.workloads
-    assert plan.embedding_entities == 3
-    assert plan.unique_contents == 2
+    assert plan.embedding_entities == 4
+    assert plan.unique_contents == 3
     assert plan.reusable_unique_contents == 1
-    assert plan.new_unique_contents == 1
-    assert plan.model_request_contents_lower_bound == 1
-    assert plan.model_request_contents_upper_bound == 1
-    assert plan.new_vector_blob_bytes_lower_bound == 512 * 2
+    assert plan.new_unique_contents == 2
+    assert plan.model_request_contents_lower_bound == 2
+    assert plan.model_request_contents_upper_bound == 2
+    assert plan.new_vector_blob_bytes_lower_bound == (768 * 2) + (512 * 2)
     assert text_workload.preexisting_reusable_contents == 1
-    assert text_workload.new_unique_contents == 0
+    assert text_workload.new_unique_contents == 1
     assert image_workload.preexisting_reusable_contents == 0
     assert image_workload.new_unique_contents == 1
     assert ocr_workload.preexisting_reusable_contents == 1
@@ -1447,9 +1481,11 @@ def test_workload_and_plan_contracts_reject_inconsistent_algebra(
                 replace(
                     workload,
                     planned_reusable_contents=1,
-                    new_unique_contents=0,
-                    new_vector_blob_bytes_lower_bound=0,
-                    model_request_contents_lower_bound=0,
+                    new_unique_contents=workload.unique_contents - 1,
+                    new_vector_blob_bytes_lower_bound=(
+                        (workload.unique_contents - 1) * workload.dimensions * 2
+                    ),
+                    model_request_contents_lower_bound=(workload.unique_contents - 1),
                 ),
             ),
         )

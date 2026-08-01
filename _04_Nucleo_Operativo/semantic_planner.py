@@ -1,8 +1,9 @@
 """Read-only Semantic workload planning over validated durable owner caches.
 
 The planner deliberately has no path to model loading, generations, staging or
-jobs.  Exact content cardinality spills to a private temporary SQLite database
-that is removed on success, failure and cancellation.
+jobs. Source cardinality spills to a private temporary SQLite database that is
+removed on success, failure and cancellation. Text projections without an
+externally bound exact tokenizer contract are explicitly marked pre-tokenizer.
 """
 
 from __future__ import annotations
@@ -68,7 +69,7 @@ from .sqlite_cancellation import (
 # region [01] Planner constant and dynamic owner seams
 
 
-PLAN_ALGORITHM_VERSION = "semantic-readonly-plan-v3"
+PLAN_ALGORITHM_VERSION = "semantic-readonly-plan-v4"
 
 
 def _plan_text_database_group(
@@ -200,7 +201,7 @@ def plan_semantic_index(
     max_scratch_bytes: int = DEFAULT_MAX_SCRATCH_BYTES,
     cancellation_check: CancellationCheck | None = None,
 ) -> SemanticPlan:
-    """Project exact Semantic work without creating or mutating owner state."""
+    """Project bounded Semantic work without creating or mutating owner state."""
 
     configuration = _prepare_plan_configuration(
         scope=scope,

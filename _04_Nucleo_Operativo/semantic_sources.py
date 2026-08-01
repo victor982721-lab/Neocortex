@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import unicodedata
 import zlib
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from pathlib import PureWindowsPath
 
 from _02_Deduplicacion import FileSnapshot
 from _02_Deduplicacion.hashing import FULL_ALGORITHM, stat_matches_snapshot
@@ -42,6 +44,10 @@ SOURCE_DATABASE_NAMES = {
 }
 SOURCE_ADAPTER_VERSION = "semantic-source-adapters-v2"
 CODE_SOURCE_ADAPTER_VERSION = "semantic-code-source-v1"
+SEMANTIC_TITLE_SECTION_KIND = "semantic_metadata_title"
+SEMANTIC_TITLE_POLICY = "semantic-basename-title-v1"
+SEMANTIC_TEXT_ENUMERATION_PROTOCOL = "bounded-v1"
+MAX_SEMANTIC_TITLE_CHARS = 512
 MAX_SECTION_TEXT_BYTES = 32 * 1024 * 1024
 MAX_SECTION_TEXT_CHARS = 20_000_000
 FILE_HASH_BUFFER_BYTES = 4 * 1024 * 1024
@@ -65,6 +71,69 @@ class ImageSourceRecord:
 
 class SemanticSourceError(RuntimeError):
     """A durable route cache contains invalid or unsafe source evidence."""
+
+
+def semantic_item_title_section(item: SemanticItem) -> TextSection | None:
+    """Project bounded basename evidence without importing parent directories."""
+
+    if item.path is None:
+        return None
+    candidate_path = item.path.strip()
+    if not candidate_path or candidate_path.endswith(("/", "\\")):
+        return None
+    basename = PureWindowsPath(candidate_path.replace("/", "\\")).name
+    raw_title = PureWindowsPath(basename).stem
+    if any(unicodedata.category(character) == "Cc" for character in raw_title):
+        return None
+    title = " ".join(raw_title.split())
+    if not title or len(title) > MAX_SEMANTIC_TITLE_CHARS:
+        return None
+    return TextSection(
+        section_kind=SEMANTIC_TITLE_SECTION_KIND,
+        section_id=SEMANTIC_TITLE_POLICY,
+        text=title,
+        provenance={
+            "policy_signature": SEMANTIC_TITLE_POLICY,
+            "basis": "basename_without_final_extension",
+            "mutable_metadata": True,
+            "advisory_only": True,
+        },
+    )
+
+
+def iter_text_sections_with_metadata(
+    item: SemanticItem,
+    sections: Iterable[TextSection],
+) -> Iterator[TextSection]:
+    """Append optional metadata evidence after all source-owned sections."""
+
+    yield from sections
+    title = semantic_item_title_section(item)
+    if title is not None:
+        yield title
+
+
+def semantic_text_processing_signature(
+    *,
+    pipeline_version: str,
+    chunking_signature: str,
+    source_kinds: Sequence[str],
+) -> str:
+    """Build the shared producer/planner identity for durable text projection."""
+
+    selected_sources = tuple(source_kinds)
+    if (
+        not pipeline_version.strip()
+        or not chunking_signature.strip()
+        or not selected_sources
+        or any(not source.strip() for source in selected_sources)
+    ):
+        raise ValueError("semantic text processing signature inputs cannot be blank")
+    return (
+        f"{pipeline_version}|{SOURCE_ADAPTER_VERSION}|{chunking_signature}|"
+        f"sources={','.join(selected_sources)}|title-policy={SEMANTIC_TITLE_POLICY}|"
+        f"enumeration={SEMANTIC_TEXT_ENUMERATION_PROTOCOL}"
+    )
 
 
 def semantic_source_database(state_directory: Path, source_kind: str) -> Path:

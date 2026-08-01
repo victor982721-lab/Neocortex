@@ -12,7 +12,9 @@ import pytest
 from _04_Nucleo_Operativo.semantic_config import (
     FastEmbedCacheContract,
     fastembed_cache_contract,
+    multilingual_text_model,
     production_models,
+    text_chunking_for_model,
 )
 # endregion [01]
 
@@ -34,6 +36,19 @@ def test_production_fastembed_cache_contracts_remain_valid() -> None:
     assert len(contracts) == 4
     assert all(contract.repository_id.count("/") == 1 for contract in contracts)
     assert all(contract.required_files for contract in contracts)
+
+
+def test_quality_text_chunking_keeps_measured_jina_headroom() -> None:
+    chunking = text_chunking_for_model(multilingual_text_model())
+
+    assert (
+        chunking.max_chars,
+        chunking.max_terms,
+        chunking.overlap_chars,
+        chunking.overlap_terms,
+        chunking.min_natural_break_chars,
+    ) == (1_600, 280, 192, 40, 128)
+    assert "jina-512-exact-token-guard-v2" in chunking.algorithm_version
 
 
 @pytest.mark.parametrize("repository_id", (None, 42, True))
@@ -136,4 +151,6 @@ def test_valid_nested_required_files_preserve_exact_contract_values() -> None:
 
     assert contract.repository_id == "qdrant/model-name_v1"
     assert contract.required_files == ("onnx/model.onnx", "config.json")
+
+
 # endregion [02]

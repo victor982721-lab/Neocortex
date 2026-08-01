@@ -38,6 +38,7 @@ from _04_Nucleo_Operativo.semantic_state import (
     finalize_text_chunk_refresh,
     has_active_embeddings,
     initialize_semantic_state,
+    prepare_embedding_generation,
     register_embedding_model,
     resolve_search_hits,
     search_exact_page,
@@ -112,6 +113,48 @@ def _stage(path: Path, item_id: str, text: str, revision: int) -> TextChunk:
     return chunks[0]
 
 
+def _stage_profile(
+    path: Path,
+    item_id: str,
+    text: str,
+    revision: int,
+    *,
+    source_kind: str,
+    config: TextChunkingConfig,
+) -> TextChunk:
+    item = SemanticItem(
+        item_id,
+        source_kind,
+        f"identity:{item_id}",
+        "fixture-v1",
+        fingerprint_text(text),
+        path=f"C:/fixtures/{item_id}",
+        provenance={"revision": revision},
+    )
+    upsert_semantic_item(
+        path,
+        item,
+        refresh_token=f"item-r{revision}:{item_id}",
+        updated_ns=revision * 10,
+    )
+    chunks = chunk_text_sections(
+        item_id,
+        (TextSection("fixture", "1", text, {"revision": revision}),),
+        config,
+    )
+    assert len(chunks) == 1
+    refresh = f"chunk-r{revision}:{item_id}:{config.signature}"
+    stage_text_chunks(path, chunks, refresh_token=refresh, updated_ns=revision * 10 + 1)
+    finalize_text_chunk_refresh(
+        path,
+        item_id=item_id,
+        chunking_signature=config.signature,
+        refresh_token=refresh,
+        updated_ns=revision * 10 + 2,
+    )
+    return chunks[0]
+
+
 def _query(model: EmbeddingModelSpec) -> ExactSearchQuery:
     return ExactSearchQuery(
         model.model_signature,
@@ -121,6 +164,126 @@ def _query(model: EmbeddingModelSpec) -> ExactSearchQuery:
         EmbeddingModality.TEXT,
         indexed_model_signatures=(model.model_signature,),
     )
+
+
+def test_successor_replaces_only_the_selected_source_chunking_profile(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model = _initialize(database)
+    profile_a = TextChunkingConfig(
+        max_chars=256,
+        max_terms=64,
+        overlap_chars=0,
+        overlap_terms=0,
+        min_natural_break_chars=32,
+        algorithm_version="fixture-profile-a",
+    )
+    profile_b = TextChunkingConfig(
+        max_chars=192,
+        max_terms=48,
+        overlap_chars=0,
+        overlap_terms=0,
+        min_natural_break_chars=32,
+        algorithm_version="fixture-profile-b",
+    )
+    pdf_a = _stage_profile(
+        database,
+        "pdf-item",
+        "protección diferencial de transformador",
+        1,
+        source_kind="pdf",
+        config=profile_a,
+    )
+    docx_a = _stage_profile(
+        database,
+        "docx-item",
+        "mantenimiento preventivo de subestación",
+        1,
+        source_kind="docx",
+        config=profile_a,
+    )
+    baseline = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="fixture-profile-a|sources=pdf,docx",
+        provenance={
+            "sources": ["pdf", "docx"],
+            "chunking_signature": profile_a.signature,
+        },
+        started_ns=90,
+    )
+    assert (
+        enqueue_text_chunk_jobs(
+            database,
+            baseline,
+            (pdf_a.chunk_id, docx_a.chunk_id),
+            now_ns=90,
+        )
+        == 2
+    )
+    _complete_jobs(database, baseline, now_ns=100)
+    finalize_embedding_generation(database, baseline, completed_ns=110)
+
+    pdf_b = _stage_profile(
+        database,
+        "pdf-item",
+        "protección diferencial de transformador",
+        2,
+        source_kind="pdf",
+        config=profile_b,
+    )
+    successor = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="fixture-profile-b|sources=pdf",
+        provenance={
+            "sources": ["pdf"],
+            "chunking_signature": profile_b.signature,
+        },
+        started_ns=120,
+    )
+    assert (
+        enqueue_text_chunk_jobs(database, successor, (pdf_b.chunk_id,), now_ns=120) == 1
+    )
+    _complete_jobs(database, successor, now_ns=130)
+    finalize_embedding_generation(database, successor, completed_ns=140)
+
+    with semantic_database(database, readonly=True) as connection:
+        profiles = tuple(
+            (
+                str(row["source_kind"]),
+                str(row["chunking_signature"]),
+                str(row["entity_id"]),
+            )
+            for row in connection.execute(
+                """SELECT item_revision.source_kind,
+                    chunk_revision.chunking_signature,member.entity_id
+                FROM embedding_generation_members member
+                JOIN semantic_item_revisions item_revision
+                  ON item_revision.item_revision_id=member.item_revision_id
+                JOIN semantic_chunk_revisions chunk_revision
+                  ON chunk_revision.chunk_revision_id=member.chunk_revision_id
+                WHERE member.generation_id=? ORDER BY item_revision.source_kind""",
+                (successor,),
+            )
+        )
+        retained_historical_chunks = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM semantic_chunk_revisions"
+            ).fetchone()[0]
+        )
+    assert profiles == (
+        ("docx", profile_a.signature, docx_a.chunk_id),
+        ("pdf", profile_b.signature, pdf_b.chunk_id),
+    )
+    assert retained_historical_chunks == 3
+    assert {
+        hit.entity_id for hit in search_exact_page(database, _query(model)).hits
+    } == {
+        docx_a.chunk_id,
+        pdf_b.chunk_id,
+    }
 
 
 def _complete_jobs(path: Path, generation_id: int, *, now_ns: int) -> None:
@@ -141,6 +304,322 @@ def _complete_jobs(path: Path, generation_id: int, *, now_ns: int) -> None:
             provenance={"fixture": "publication"},
             now_ns=now_ns + offset,
         )
+
+
+def test_lazy_exact_replay_returns_published_head_without_member_clone(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model = _initialize(database)
+    chunk = _stage(database, "document", "published transformer record", 1)
+    provenance = {"fixture": "stable-replay"}
+    baseline = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="stable-replay",
+        provenance=provenance,
+        started_ns=100,
+    )
+    enqueue_text_chunk_jobs(database, baseline, (chunk.chunk_id,), now_ns=101)
+    _complete_jobs(database, baseline, now_ns=102)
+    finalize_embedding_generation(database, baseline, completed_ns=110)
+
+    candidate = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="stable-replay",
+        provenance=provenance,
+        materialize_base=False,
+        started_ns=120,
+    )
+    assert candidate != baseline
+    with semantic_database(database, readonly=True) as connection:
+        candidate_row = connection.execute(
+            "SELECT base_generation_id,base_clone_complete "
+            "FROM embedding_generations WHERE generation_id=?",
+            (candidate,),
+        ).fetchone()
+        candidate_members = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM embedding_generation_members "
+                "WHERE generation_id=?",
+                (candidate,),
+            ).fetchone()[0]
+        )
+    assert candidate_row is not None
+    assert int(candidate_row["base_generation_id"]) == baseline
+    assert int(candidate_row["base_clone_complete"]) == 0
+    assert candidate_members == 0
+    assert (
+        enqueue_text_chunk_jobs(
+            database,
+            candidate,
+            (chunk.chunk_id,),
+            now_ns=121,
+        )
+        == 0
+    )
+
+    no_op = prepare_embedding_generation(
+        database,
+        candidate,
+        enumeration_complete=True,
+    )
+
+    assert no_op is not None
+    assert no_op.generation_id == baseline
+    assert no_op.status == "ready"
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT 1 FROM embedding_generations WHERE generation_id=?",
+                (candidate,),
+            ).fetchone()
+            is None
+        )
+        assert (
+            int(
+                connection.execute(
+                    "SELECT generation_id FROM published_embedding_heads "
+                    "WHERE model_signature=?",
+                    (model.model_signature,),
+                ).fetchone()[0]
+            )
+            == baseline
+        )
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM embedding_generation_members"
+                ).fetchone()[0]
+            )
+            == 1
+        )
+
+
+def test_done_job_metadata_restage_rebinds_current_item_revision_without_inference(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model = _initialize(database)
+    text = "published transformer record"
+    chunk = _stage(database, "metadata-document", text, 1)
+    generation = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="metadata-rebind",
+        started_ns=100,
+    )
+    enqueue_text_chunk_jobs(database, generation, (chunk.chunk_id,), now_ns=101)
+    _complete_jobs(database, generation, now_ns=102)
+    with semantic_database(database, readonly=True) as connection:
+        baseline_member = connection.execute(
+            "SELECT item_revision_id,chunk_revision_id,payload_id "
+            "FROM embedding_generation_members "
+            "WHERE generation_id=? AND entity_kind='text_chunk' AND entity_id=?",
+            (generation, chunk.chunk_id),
+        ).fetchone()
+        baseline_payloads = int(
+            connection.execute("SELECT COUNT(*) FROM vector_payloads").fetchone()[0]
+        )
+    assert baseline_member is not None
+
+    upsert_semantic_item(
+        database,
+        SemanticItem(
+            "metadata-document",
+            "pdf",
+            "identity:metadata-document",
+            "fixture-v1",
+            fingerprint_text(text),
+            path="C:/fixtures/moved/metadata-document.pdf",
+            provenance={"revision": 1},
+        ),
+        refresh_token="metadata-move",
+        updated_ns=120,
+    )
+    enqueue_text_chunk_jobs(database, generation, (chunk.chunk_id,), now_ns=121)
+
+    summary = finalize_embedding_generation(database, generation, completed_ns=122)
+
+    assert summary.status == "ready"
+    with semantic_database(database, readonly=True) as connection:
+        rebound_member = connection.execute(
+            "SELECT item_revision_id,chunk_revision_id,payload_id "
+            "FROM embedding_generation_members "
+            "WHERE generation_id=? AND entity_kind='text_chunk' AND entity_id=?",
+            (generation, chunk.chunk_id),
+        ).fetchone()
+        assert rebound_member is not None
+        rebound_revision = connection.execute(
+            "SELECT path FROM semantic_item_revisions WHERE item_revision_id=?",
+            (int(rebound_member["item_revision_id"]),),
+        ).fetchone()
+        payloads = int(
+            connection.execute("SELECT COUNT(*) FROM vector_payloads").fetchone()[0]
+        )
+        published_head = int(
+            connection.execute(
+                "SELECT generation_id FROM published_embedding_heads "
+                "WHERE model_signature=?",
+                (model.model_signature,),
+            ).fetchone()[0]
+        )
+    assert int(rebound_member["item_revision_id"]) != int(
+        baseline_member["item_revision_id"]
+    )
+    assert int(rebound_member["chunk_revision_id"]) == int(
+        baseline_member["chunk_revision_id"]
+    )
+    assert int(rebound_member["payload_id"]) == int(baseline_member["payload_id"])
+    assert rebound_revision is not None
+    assert str(rebound_revision["path"]) == "C:/fixtures/moved/metadata-document.pdf"
+    assert payloads == baseline_payloads
+    assert published_head == generation
+
+
+def test_done_replaced_title_job_is_reconciled_and_successor_can_publish(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model = _initialize(database)
+    item_id = "title-document"
+    content_fingerprint = fingerprint_text("stable document body")
+    config = TextChunkingConfig(
+        max_chars=256,
+        max_terms=64,
+        overlap_chars=0,
+        overlap_terms=0,
+        min_natural_break_chars=32,
+    )
+
+    upsert_semantic_item(
+        database,
+        SemanticItem(
+            item_id,
+            "pdf",
+            f"identity:{item_id}",
+            "fixture-v1",
+            content_fingerprint,
+            path="C:/fixtures/original-title.pdf",
+            provenance={"revision": 1},
+        ),
+        refresh_token="title-item-original",
+        updated_ns=10,
+    )
+    original_title = chunk_text_sections(
+        item_id,
+        (
+            TextSection(
+                "semantic_metadata_title",
+                "basename",
+                "original-title",
+                {"policy": "fixture-title-v1"},
+            ),
+        ),
+        config,
+    )[0]
+    stage_text_chunks(
+        database,
+        (original_title,),
+        refresh_token="title-original",
+        updated_ns=11,
+    )
+    finalize_text_chunk_refresh(
+        database,
+        item_id=item_id,
+        chunking_signature=config.signature,
+        refresh_token="title-original",
+        updated_ns=12,
+    )
+    generation = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="title-replacement",
+        started_ns=100,
+    )
+    enqueue_text_chunk_jobs(
+        database,
+        generation,
+        (original_title.chunk_id,),
+        now_ns=101,
+    )
+    _complete_jobs(database, generation, now_ns=102)
+
+    upsert_semantic_item(
+        database,
+        SemanticItem(
+            item_id,
+            "pdf",
+            f"identity:{item_id}",
+            "fixture-v1",
+            content_fingerprint,
+            path="C:/fixtures/renamed-title.pdf",
+            provenance={"revision": 1},
+        ),
+        refresh_token="title-item-renamed",
+        updated_ns=120,
+    )
+    renamed_title = chunk_text_sections(
+        item_id,
+        (
+            TextSection(
+                "semantic_metadata_title",
+                "basename",
+                "renamed-title",
+                {"policy": "fixture-title-v1"},
+            ),
+        ),
+        config,
+    )[0]
+    assert renamed_title.chunk_id != original_title.chunk_id
+    stage_text_chunks(
+        database,
+        (renamed_title,),
+        refresh_token="title-renamed",
+        updated_ns=121,
+    )
+    finalize_text_chunk_refresh(
+        database,
+        item_id=item_id,
+        chunking_signature=config.signature,
+        refresh_token="title-renamed",
+        updated_ns=122,
+    )
+    enqueue_text_chunk_jobs(
+        database,
+        generation,
+        (renamed_title.chunk_id,),
+        now_ns=123,
+    )
+    _complete_jobs(database, generation, now_ns=124)
+
+    summary = finalize_embedding_generation(database, generation, completed_ns=130)
+
+    assert summary.status == "ready"
+    with semantic_database(database, readonly=True) as connection:
+        members = tuple(
+            str(row["entity_id"])
+            for row in connection.execute(
+                "SELECT entity_id FROM embedding_generation_members "
+                "WHERE generation_id=? AND entity_kind='text_chunk' "
+                "ORDER BY entity_id",
+                (generation,),
+            )
+        )
+        published_head = int(
+            connection.execute(
+                "SELECT generation_id FROM published_embedding_heads "
+                "WHERE model_signature=?",
+                (model.model_signature,),
+            ).fetchone()[0]
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
+    assert members == (renamed_title.chunk_id,)
+    assert published_head == generation
+    assert tuple(
+        hit.entity_id for hit in search_exact_page(database, _query(model)).hits
+    ) == (renamed_title.chunk_id,)
 
 
 def _create_populated_v5(path: Path) -> tuple[EmbeddingModelSpec, TextChunk]:
@@ -392,7 +871,9 @@ def test_source_change_preserves_old_snapshot_until_successor_is_published(
     current_resolved = resolve_search_hits(database, current)[0]
     assert current_resolved.snippet == "new breaker record"
     assert current_resolved.published_revision_id is not None
-    assert current_resolved.published_revision_id == current_resolved.current_revision_id
+    assert (
+        current_resolved.published_revision_id == current_resolved.current_revision_id
+    )
     assert current_resolved.source_revision_is_current is True
 
 
@@ -455,6 +936,13 @@ def test_resolve_uses_current_path_without_marking_safe_move_stale(
     _complete_jobs(database, generation, now_ns=102)
     finalize_embedding_generation(database, generation, completed_ns=110)
     hit = search_exact_page(database, _query(model)).hits[0]
+    with semantic_database(database, readonly=True) as connection:
+        baseline_member = connection.execute(
+            "SELECT payload_id,item_revision_id FROM embedding_generation_members "
+            "WHERE generation_id=? AND entity_kind='text_chunk' AND entity_id=?",
+            (generation, chunk.chunk_id),
+        ).fetchone()
+    assert baseline_member is not None
 
     upsert_semantic_item(
         database,
@@ -477,29 +965,96 @@ def test_resolve_uses_current_path_without_marking_safe_move_stale(
     moved_generation = start_embedding_generation(
         database,
         model_signature=model.model_signature,
-        processing_signature="safe-move",
+        processing_signature="published",
+        materialize_base=False,
         started_ns=121,
     )
-    enqueue_text_chunk_jobs(
-        database,
-        moved_generation,
-        (chunk.chunk_id,),
-        now_ns=122,
-    )
-    _complete_jobs(database, moved_generation, now_ns=123)
     with semantic_database(database, readonly=True) as connection:
-        assert int(
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM embedding_generation_members "
+                    "WHERE generation_id=?",
+                    (moved_generation,),
+                ).fetchone()[0]
+            )
+            == 0
+        )
+        generation_row = connection.execute(
+            "SELECT base_generation_id,base_clone_complete "
+            "FROM embedding_generations WHERE generation_id=?",
+            (moved_generation,),
+        ).fetchone()
+    assert generation_row is not None
+    assert int(generation_row["base_generation_id"]) == generation
+    assert int(generation_row["base_clone_complete"]) == 0
+
+    assert (
+        enqueue_text_chunk_jobs(
+            database,
+            moved_generation,
+            (chunk.chunk_id,),
+            now_ns=122,
+        )
+        == 0
+    )
+    with semantic_database(database, readonly=True) as connection:
+        assert (
+            int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM embedding_jobs WHERE generation_id=?",
+                    (moved_generation,),
+                ).fetchone()[0]
+            )
+            == 0
+        )
+
+    assert (
+        prepare_embedding_generation(
+            database,
+            moved_generation,
+            enumeration_complete=True,
+        )
+        is None
+    )
+    finalize_embedding_generation(database, moved_generation, completed_ns=123)
+    with semantic_database(database, readonly=True) as connection:
+        moved_member = connection.execute(
+            "SELECT payload_id,item_revision_id FROM embedding_generation_members "
+            "WHERE generation_id=? AND entity_kind='text_chunk' AND entity_id=?",
+            (moved_generation, chunk.chunk_id),
+        ).fetchone()
+        assert moved_member is not None
+        published_path = connection.execute(
+            "SELECT path FROM semantic_item_revisions WHERE item_revision_id=?",
+            (int(moved_member["item_revision_id"]),),
+        ).fetchone()
+        published_head = int(
             connection.execute(
-                "SELECT COUNT(*) FROM semantic_item_revisions WHERE item_id=?",
-                ("document",),
+                "SELECT generation_id FROM published_embedding_heads "
+                "WHERE model_signature=?",
+                (model.model_signature,),
             ).fetchone()[0]
-        ) == 2
+        )
+    assert int(moved_member["payload_id"]) == int(baseline_member["payload_id"])
+    assert int(moved_member["item_revision_id"]) != int(
+        baseline_member["item_revision_id"]
+    )
+    assert published_path is not None
+    assert str(published_path["path"]) == "C:/fixtures/moved-document.pdf"
+    assert published_head == moved_generation
 
     resolved = resolve_search_hits(database, (hit,))[0]
     assert resolved.path == "C:/fixtures/moved-document.pdf"
     assert resolved.source_status == "complete"
     assert resolved.published_revision_id == resolved.current_revision_id
     assert resolved.source_revision_is_current is True
+
+    moved_hit = search_exact_page(database, _query(model)).hits[0]
+    moved_resolved = resolve_search_hits(database, (moved_hit,))[0]
+    assert moved_resolved.path == "C:/fixtures/moved-document.pdf"
+    assert moved_resolved.published_revision_id == moved_resolved.current_revision_id
+    assert moved_resolved.source_revision_is_current is True
 
 
 def test_exact_search_checks_cancellation_at_scan_batches(tmp_path: Path) -> None:
@@ -557,7 +1112,13 @@ def test_partial_and_cas_loser_generations_never_replace_the_published_head(
         processing_signature="partial",
         started_ns=120,
     )
-    enqueue_text_chunk_jobs(database, partial, (chunk.chunk_id,), now_ns=121)
+    failed_chunk = _stage(
+        database,
+        "failed-document",
+        "unpublished breaker maintenance record",
+        1,
+    )
+    enqueue_text_chunk_jobs(database, partial, (failed_chunk.chunk_id,), now_ns=121)
     lease = claim_embedding_jobs(
         database,
         partial,
@@ -582,9 +1143,9 @@ def test_partial_and_cas_loser_generations_never_replace_the_published_head(
         completed_ns=124,
     )
     assert summary.status == "ready_partial"
-    assert {hit.generation_id for hit in search_exact_page(database, _query(model)).hits} == {
-        initial
-    }
+    assert {
+        hit.generation_id for hit in search_exact_page(database, _query(model)).hits
+    } == {initial}
 
     winner = start_embedding_generation(
         database,
@@ -601,10 +1162,33 @@ def test_partial_and_cas_loser_generations_never_replace_the_published_head(
     finalize_embedding_generation(database, winner, completed_ns=132)
     with pytest.raises(SemanticStateError, match="must be rebased"):
         finalize_embedding_generation(database, loser, completed_ns=133)
-    assert {hit.generation_id for hit in search_exact_page(database, _query(model)).hits} == {
-        winner
-    }
+    rebased = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="loser",
+        started_ns=134,
+    )
+    assert rebased != loser
+    assert {
+        hit.generation_id for hit in search_exact_page(database, _query(model)).hits
+    } == {winner}
     with semantic_database(database, readonly=True) as connection:
+        loser_row = connection.execute(
+            "SELECT status,completed_ns FROM embedding_generations "
+            "WHERE generation_id=?",
+            (loser,),
+        ).fetchone()
+        rebased_row = connection.execute(
+            "SELECT status,base_generation_id FROM embedding_generations "
+            "WHERE generation_id=?",
+            (rebased,),
+        ).fetchone()
+        assert loser_row is not None
+        assert str(loser_row["status"]) == "failed"
+        assert loser_row["completed_ns"] is not None
+        assert rebased_row is not None
+        assert str(rebased_row["status"]) == "building"
+        assert int(rebased_row["base_generation_id"]) == winner
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
 
@@ -624,13 +1208,22 @@ def test_populated_v5_migration_preserves_legacy_rows_and_publishes_snapshot(
     assert resolved[0].snippet == "legacy published transformer record"
     with semantic_database(database, readonly=True) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
-        assert connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM embedding_generation_members"
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM published_embedding_heads"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM embedding_generation_members"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM published_embedding_heads"
+            ).fetchone()[0]
+            == 1
+        )
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert connection.execute("PRAGMA foreign_key_check").fetchone() is None
     before = database.read_bytes()
@@ -666,11 +1259,17 @@ def test_v6_migration_rolls_back_on_base_exception(
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
         ).fetchone() == ("5",)
-        assert connection.execute(
-            "SELECT COUNT(*) FROM sqlite_master "
-            "WHERE type='table' AND name='published_embedding_heads'"
-        ).fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type='table' AND name='published_embedding_heads'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0]
+            == 1
+        )
 
 
 @pytest.mark.parametrize("unknown_kind", ("table", "column", "index", "trigger"))
@@ -712,15 +1311,23 @@ def test_v5_migration_abstains_from_unknown_objects_without_mutation(
 
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
-        assert connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0] == 1
+        assert (
+            connection.execute("SELECT COUNT(*) FROM text_embeddings").fetchone()[0]
+            == 1
+        )
         if unknown_kind == "table":
             assert connection.execute(
                 "SELECT value FROM vendor_extension"
             ).fetchone() == ("preserve-me",)
-        assert tuple(
-            connection.execute(
-                "SELECT type,name,tbl_name,sql FROM sqlite_master "
-                "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+        assert (
+            tuple(
+                connection.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+                )
             )
-        ) == before_objects
+            == before_objects
+        )
+
+
 # endregion [02]

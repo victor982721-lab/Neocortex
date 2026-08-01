@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -89,6 +88,55 @@ def test_planner_combines_exact_lexical_semantic_and_structural_signals() -> Non
     assert r"C:\Corpus\Área #1\control.py" in first.exact_terms
     assert any("SN-2048" in value for value in first.exact_terms)
     assert first.to_dict()["schema_version"] == 1
+
+
+def test_discovery_v3_declares_optional_title_without_changing_evidence_v2() -> None:
+    discovery = plan_knowledge_query(
+        KnowledgeQuery("transformador", retrieval_mode=RetrievalMode.DISCOVERY)
+    )
+    evidence = plan_knowledge_query(
+        KnowledgeQuery("transformador", retrieval_mode=RetrievalMode.EVIDENCE)
+    )
+
+    assert discovery.plan_id.startswith("knowledge-plan-v3:")
+    assert [
+        (step.channel, step.ranking_name, step.required)
+        for step in discovery.steps
+        if step.ranking_name in {"semantic_text", "semantic_title"}
+    ] == [
+        ("semantic", "semantic_text", True),
+        ("semantic_discovery", "semantic_title", False),
+    ]
+    assert evidence.plan_id.startswith("knowledge-plan-v2:")
+    assert all(step.ranking_name != "semantic_title" for step in evidence.steps)
+
+
+def test_v2_rejects_title_and_v3_requires_its_canonical_optional_step() -> None:
+    evidence = plan_knowledge_query(KnowledgeQuery("transformador"))
+    title = RetrievalStep(
+        "semantic_discovery",
+        "semantic_title",
+        "fixture title prior",
+        20,
+        False,
+    )
+    with pytest.raises(
+        ValueError,
+        match="Knowledge plan v2 contains an unsupported retrieval step",
+    ):
+        replace(evidence, steps=(*evidence.steps, title))
+
+    discovery = plan_knowledge_query(
+        KnowledgeQuery("transformador", retrieval_mode=RetrievalMode.DISCOVERY)
+    )
+    without_title = tuple(
+        step for step in discovery.steps if step.ranking_name != "semantic_title"
+    )
+    with pytest.raises(
+        ValueError,
+        match="Knowledge plan v3 discovery must contain one semantic title step",
+    ):
+        replace(discovery, steps=without_title)
 
 
 def test_standalone_exact_identifier_routes_to_published_catalog() -> None:
@@ -770,4 +818,6 @@ def test_plan_json_is_stable_for_unicode_filters() -> None:
         ).to_json()
         == expected_json
     )
+
+
 # endregion [02]

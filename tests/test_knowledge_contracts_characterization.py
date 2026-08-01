@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -338,6 +337,7 @@ EXPECTED_DATACLASS_SIGNATURES = {
         "missing_information:tuple[str, ...]=()",
         "warnings:tuple[str, ...]=()",
         "telemetry:KnowledgeQueryTelemetry | None=None",
+        "blocking_owners:tuple[str, ...]=()",
     ),
 }
 
@@ -1438,4 +1438,6 @@ def test_context_bundle_validation_branches_are_exact(
     with pytest.raises(ValueError) as captured:
         _make_invalid_bundle(case)
     assert str(captured.value) == message
+
+
 # endregion [02]

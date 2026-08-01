@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -108,6 +107,36 @@ EXPECTED_SEMANTIC_ACTIONS = (
         "semantic_index",
         choices=("text", "image", "all"),
         help_text="incrementally index existing durable text caches, images, or both",
+    ),
+    _expected_store(
+        "--semantic-max-items",
+        "semantic_max_items",
+        default=50,
+        type_name="int",
+        metavar="N",
+        help_text=(
+            "maximum complete new or changed source items admitted by one "
+            "semantic index run; exact replay is free"
+        ),
+    ),
+    _expected_store(
+        "--semantic-max-new-jobs",
+        "semantic_max_new_jobs",
+        default=1_500,
+        type_name="int",
+        metavar="N",
+        help_text=(
+            "maximum durable embedding jobs newly created or reactivated by one "
+            "semantic index run; exact replay is free"
+        ),
+    ),
+    _expected_store(
+        "--semantic-time-budget-seconds",
+        "semantic_time_budget_seconds",
+        default=900.0,
+        type_name="float",
+        metavar="SECONDS",
+        help_text="shared monotonic time budget for one semantic index run",
     ),
     _expected_store(
         "--semantic-search",
@@ -216,6 +245,16 @@ EXPECTED_SEMANTIC_HELP = (
     "  --semantic-index {text,image,all}\n"
     "                        incrementally index existing durable text caches,\n"
     "                        images, or both\n"
+    "  --semantic-max-items N\n"
+    "                        maximum complete new or changed source items admitted\n"
+    "                        by one semantic index run; exact replay is free\n"
+    "  --semantic-max-new-jobs N\n"
+    "                        maximum durable embedding jobs newly created or\n"
+    "                        reactivated by one semantic index run; exact replay is\n"
+    "                        free\n"
+    "  --semantic-time-budget-seconds SECONDS\n"
+    "                        shared monotonic time budget for one semantic index\n"
+    "                        run\n"
     "  --semantic-search QUERY\n"
     "                        search lexical and/or separate semantic vector spaces\n"
     "  --semantic-classify {text,image,all}\n"
@@ -361,4 +400,6 @@ def test_semantic_validation_error_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+
+
 # endregion [02]

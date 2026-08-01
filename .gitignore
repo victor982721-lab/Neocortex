@@ -36,7 +36,9 @@ htmlcov/
 
 # Test and laboratory outputs
 .codex-bootstrap/
+.pytest-ranking-*/
 .pytest-tmp-*/
+.test-tmp/
 .tmp/
 tmp/
 temp/
@@ -66,4 +68,3 @@ Backups/
 Thumbs.db
 .idea/
 .vscode/
-

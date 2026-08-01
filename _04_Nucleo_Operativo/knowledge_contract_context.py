@@ -640,6 +640,21 @@ def _validate_bundle_notices(
             )
 
 
+def _validate_bundle_blocking_owners(
+    contract: ContextBundle,
+    *,
+    required_text_fn: RequiredText,
+) -> None:
+    if not isinstance(contract.blocking_owners, tuple):
+        raise ValueError("context blocking owners must be a tuple")
+    for owner in contract.blocking_owners:
+        if not isinstance(owner, str):
+            raise ValueError("context blocking owners must contain strings")
+        required_text_fn("context blocking owner", owner)
+    if contract.blocking_owners != tuple(sorted(set(contract.blocking_owners))):
+        raise ValueError("context blocking owners must be unique and ordered")
+
+
 def _validate_bundle_character_budget(contract: ContextBundle) -> None:
     if len(contract.rendered_context) != contract.budget.characters_used:
         raise ValueError("rendered context and budget character count disagree")
@@ -703,6 +718,10 @@ def validate_context_bundle(
     _validate_bundle_rendered_graph(contract)
     _validate_bundle_contradictions(contract, citation_names=citation_names)
     _validate_bundle_notices(contract, required_text_fn=required_text_fn)
+    _validate_bundle_blocking_owners(
+        contract,
+        required_text_fn=required_text_fn,
+    )
     _validate_bundle_character_budget(contract)
     _validate_bundle_telemetry(
         contract,

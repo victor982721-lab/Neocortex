@@ -9,7 +9,7 @@ import sys
 import threading
 from collections.abc import Callable
 from enum import IntEnum
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TextIO, TypeVar
 
 from .console_cancellation import ConsoleCancellationBridge
 from .knowledge_contracts import (
@@ -41,6 +41,26 @@ class KnowledgeExitCode(IntEnum):
 
 
 _T = TypeVar("_T")
+
+
+def _console_text(value: str, stream: object) -> str:
+    """Keep corpus-derived output printable on legacy Windows consoles."""
+
+    encoding = getattr(stream, "encoding", None)
+    if not encoding:
+        return value
+    try:
+        value.encode(encoding)
+    except UnicodeEncodeError:
+        return value.encode(encoding, errors="backslashreplace").decode(encoding)
+    except LookupError:  # pragma: no cover - defensive custom stream support
+        return value
+    return value
+
+
+def _print_console_line(value: str, *, file: TextIO | None = None) -> None:
+    stream = sys.stdout if file is None else file
+    print(_console_text(value, stream), file=stream)
 
 
 def _with_cancellation(operation: Callable[[Callable[[], None]], _T]) -> _T:
@@ -77,9 +97,22 @@ def _snapshot_exit_code(snapshot: KnowledgeSnapshot) -> KnowledgeExitCode:
     states = {owner.state for owner in snapshot.owners}
     if OwnerAvailability.CORRUPT in states:
         return KnowledgeExitCode.CORRUPT
-    if states.intersection(
-        {OwnerAvailability.FUTURE, OwnerAvailability.INCOMPATIBLE}
-    ):
+    if states.intersection({OwnerAvailability.FUTURE, OwnerAvailability.INCOMPATIBLE}):
+        return KnowledgeExitCode.SCHEMA_INCOMPATIBLE
+    if snapshot.consistency is SnapshotConsistency.SNAPSHOT_CHANGED:
+        return KnowledgeExitCode.SNAPSHOT_CHANGED
+    return KnowledgeExitCode.SUCCESS
+
+
+def _blocking_snapshot_exit_code(
+    snapshot: KnowledgeSnapshot,
+    blocking_owners: tuple[str, ...],
+) -> KnowledgeExitCode:
+    required = set(blocking_owners)
+    states = {owner.state for owner in snapshot.owners if owner.owner in required}
+    if OwnerAvailability.CORRUPT in states:
+        return KnowledgeExitCode.CORRUPT
+    if states.intersection({OwnerAvailability.FUTURE, OwnerAvailability.INCOMPATIBLE}):
         return KnowledgeExitCode.SCHEMA_INCOMPATIBLE
     if snapshot.consistency is SnapshotConsistency.SNAPSHOT_CHANGED:
         return KnowledgeExitCode.SNAPSHOT_CHANGED
@@ -87,7 +120,10 @@ def _snapshot_exit_code(snapshot: KnowledgeSnapshot) -> KnowledgeExitCode:
 
 
 def knowledge_search_exit_code(result: KnowledgeSearchResult) -> KnowledgeExitCode:
-    snapshot_code = _snapshot_exit_code(result.snapshot)
+    snapshot_code = _blocking_snapshot_exit_code(
+        result.snapshot,
+        result.blocking_owners,
+    )
     if snapshot_code is not KnowledgeExitCode.SUCCESS:
         return snapshot_code
     if not result.complete:
@@ -98,7 +134,10 @@ def knowledge_search_exit_code(result: KnowledgeSearchResult) -> KnowledgeExitCo
 
 
 def knowledge_context_exit_code(bundle: ContextBundle) -> KnowledgeExitCode:
-    snapshot_code = _snapshot_exit_code(bundle.snapshot)
+    snapshot_code = _blocking_snapshot_exit_code(
+        bundle.snapshot,
+        bundle.blocking_owners,
+    )
     if snapshot_code is not KnowledgeExitCode.SUCCESS:
         return snapshot_code
     if bundle.completeness in {
@@ -112,7 +151,7 @@ def knowledge_context_exit_code(bundle: ContextBundle) -> KnowledgeExitCode:
 
 
 def _failure(operation: str, exc: BaseException) -> int:
-    print(
+    _print_console_line(
         f"ERROR {operation} {type(exc).__name__}: {exc}",
         file=sys.stderr,
     )
@@ -126,7 +165,7 @@ def _failure(operation: str, exc: BaseException) -> int:
 
 
 def _print_snapshot(snapshot: KnowledgeSnapshot) -> None:
-    print(
+    _print_console_line(
         f"KNOWLEDGE_STATUS snapshot={snapshot.snapshot_id} "
         f"consistency={snapshot.consistency.value} attempts={snapshot.attempts}"
     )
@@ -134,7 +173,7 @@ def _print_snapshot(snapshot: KnowledgeSnapshot) -> None:
         publications = ",".join(
             f"{head.scope}:{head.generation}" for head in owner.publications
         )
-        print(
+        _print_console_line(
             f"KNOWLEDGE_OWNER owner={owner.owner} state={owner.state.value} "
             f"schema={owner.observed_schema_version or '-'} "
             f"expected={owner.expected_schema_version} "
@@ -144,14 +183,14 @@ def _print_snapshot(snapshot: KnowledgeSnapshot) -> None:
 
 
 def _print_search(result: KnowledgeSearchResult) -> None:
-    print(
+    _print_console_line(
         f"KNOWLEDGE_SEARCH query={json.dumps(result.plan.normalized_query, ensure_ascii=False)} "
         f"snapshot={result.snapshot.snapshot_id} complete={int(result.complete)} "
         f"hits={len(result.hits)} rows={result.rows_scanned} "
         f"vectors={result.vectors_scanned} truncated={int(result.truncated)}"
     )
     for ranking in result.rankings:
-        print(
+        _print_console_line(
             f"KNOWLEDGE_RANKING name={ranking.name} channel={ranking.channel} "
             f"executed={int(ranking.executed)} available={int(ranking.available)} "
             f"complete={int(ranking.complete)} returned={ranking.returned} "
@@ -164,7 +203,7 @@ def _print_search(result: KnowledgeSearchResult) -> None:
             sort_keys=True,
             separators=(",", ":"),
         )
-        print(
+        _print_console_line(
             f"KNOWLEDGE_HIT rank={hit.rank} score={hit.fused_score:.12f} "
             f"resource={hit.resource.resource_id} revision={hit.revision.revision_id} "
             f"path={json.dumps(hit.resource.current_path, ensure_ascii=False)} "
@@ -181,14 +220,12 @@ def _print_search(result: KnowledgeSearchResult) -> None:
 def run_knowledge_status(args: argparse.Namespace) -> int:
     try:
         snapshot = _with_cancellation(
-            lambda checkpoint: _service(args).status(
-                cancellation_check=checkpoint
-            )
+            lambda checkpoint: _service(args).status(cancellation_check=checkpoint)
         )
     except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
         return _failure("knowledge-status", exc)
     if args.knowledge_json:
-        print(snapshot.to_json())
+        _print_console_line(snapshot.to_json())
     else:
         _print_snapshot(snapshot)
     return int(_snapshot_exit_code(snapshot))
@@ -206,7 +243,7 @@ def run_knowledge_search(args: argparse.Namespace) -> int:
     except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
         return _failure("knowledge-search", exc)
     if args.knowledge_json:
-        print(result.to_json())
+        _print_console_line(result.to_json())
     else:
         _print_search(result)
     return int(knowledge_search_exit_code(result))
@@ -226,14 +263,14 @@ def run_knowledge_context(args: argparse.Namespace) -> int:
     except (OSError, RuntimeError, sqlite3.Error, TypeError, ValueError) as exc:
         return _failure("knowledge-context", exc)
     if args.knowledge_json:
-        print(bundle.to_json())
+        _print_console_line(bundle.to_json())
     else:
-        print(
+        _print_console_line(
             f"KNOWLEDGE_CONTEXT completeness={bundle.completeness.value} "
             f"citations={len(bundle.citation_ids)} "
             f"characters={bundle.budget.characters_used}"
         )
-        print(bundle.rendered_context)
+        _print_console_line(bundle.rendered_context)
     return int(knowledge_context_exit_code(bundle))
 
 

@@ -7,6 +7,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from typing import Literal
 
 from .semantic_item_repository import _decode_chunk_text
 from .semantic_models import (
@@ -29,8 +30,21 @@ from .semantic_repository_common import (
     _load_model,
 )
 from .semantic_schema import SemanticStateError, semantic_database
+from .semantic_sources import SEMANTIC_TITLE_SECTION_KIND
+
+TextEmbeddingScope = Literal["all", "content", "title"]
 
 # region [06] Bounded exact cosine fallback
+
+
+def _validate_text_scope(
+    modality: EmbeddingModality,
+    text_scope: TextEmbeddingScope,
+) -> None:
+    if text_scope not in {"all", "content", "title"}:
+        raise ValueError("text_scope must be all, content or title")
+    if modality is not EmbeddingModality.TEXT and text_scope != "all":
+        raise ValueError("text_scope is only valid for text embeddings")
 
 
 def _search_models(
@@ -65,9 +79,17 @@ def _search_models(
 def _search_sql(
     modality: EmbeddingModality,
     pair_count: int,
+    *,
+    text_scope: TextEmbeddingScope = "all",
 ) -> str:
+    _validate_text_scope(modality, text_scope)
     selected = ",".join("(?,?)" for _ in range(pair_count))
     if modality is EmbeddingModality.TEXT:
+        scope_clause = {
+            "all": "",
+            "content": (f" AND c.section_kind<>'{SEMANTIC_TITLE_SECTION_KIND}'"),
+            "title": f" AND c.section_kind='{SEMANTIC_TITLE_SECTION_KIND}'",
+        }[text_scope]
         return f"""WITH selected(model_signature,generation_id) AS
             (VALUES {selected})
         SELECT e.member_id AS ref_id,e.entity_id,i.item_id,
@@ -88,6 +110,7 @@ def _search_sql(
           AND e.content_xxh3_128=c.content_xxh3_128
           AND e.content_bytes=c.content_bytes
           AND e.content_xxh3_64_guard=c.content_xxh3_64_guard
+          {scope_clause}
         ORDER BY e.member_id LIMIT ?"""
     return f"""WITH selected(model_signature,generation_id) AS
         (VALUES {selected})
@@ -268,10 +291,12 @@ def _search_exact_page(
     after_ref_id: int = 0,
     batch_size: int = 512,
     evidence_mode: bool,
+    text_scope: TextEmbeddingScope = "all",
     cancellation_check: Callable[[], None] | None = None,
 ) -> ExactSearchPage:
     """Shared bounded scan for discovery and concrete-evidence retrieval."""
 
+    _validate_text_scope(query.target_modality, text_scope)
     if not 1 <= limit <= 10_000:
         raise ValueError("limit must be between 1 and 10000")
     if not 1 <= max_vectors <= 10_000_000:
@@ -294,7 +319,11 @@ def _search_exact_page(
         pairs = _published_model_generations(connection, model_signatures)
         if not pairs:
             return ExactSearchPage((), 0, None, True)
-        sql = _search_sql(query.target_modality, len(pairs))
+        sql = _search_sql(
+            query.target_modality,
+            len(pairs),
+            text_scope=text_scope,
+        )
         pair_values = tuple(value for pair in pairs for value in pair)
         cursor = connection.execute(
             sql,
@@ -357,6 +386,7 @@ def search_exact_page(
     max_vectors: int = 50_000,
     after_ref_id: int = 0,
     batch_size: int = 512,
+    text_scope: TextEmbeddingScope = "all",
     cancellation_check: Callable[[], None] | None = None,
 ) -> ExactSearchPage:
     """Scan discovery hits, retaining the best entity per resource item."""
@@ -369,6 +399,7 @@ def search_exact_page(
         after_ref_id=after_ref_id,
         batch_size=batch_size,
         evidence_mode=False,
+        text_scope=text_scope,
         cancellation_check=cancellation_check,
     )
 
@@ -381,6 +412,7 @@ def search_exact_evidence_page(
     max_vectors: int = 50_000,
     after_ref_id: int = 0,
     batch_size: int = 512,
+    text_scope: TextEmbeddingScope = "all",
     cancellation_check: Callable[[], None] | None = None,
 ) -> ExactSearchPage:
     """Scan concrete evidence while retaining several entities per resource."""
@@ -393,6 +425,7 @@ def search_exact_evidence_page(
         after_ref_id=after_ref_id,
         batch_size=batch_size,
         evidence_mode=True,
+        text_scope=text_scope,
         cancellation_check=cancellation_check,
     )
 
@@ -403,6 +436,7 @@ def load_active_embedding_page(
     *,
     after_ref_id: int = 0,
     limit: int = 512,
+    text_scope: TextEmbeddingScope = "all",
     _generation_id: int | None = None,
 ) -> ActiveEmbeddingPage:
     """Read current vectors once for bounded prototype/evidence scoring."""
@@ -413,6 +447,7 @@ def load_active_embedding_page(
         raise ValueError("limit must be between 1 and 10000")
     with semantic_database(path, readonly=True) as connection:
         model = _load_model(connection, model_signature)
+        _validate_text_scope(model.modality, text_scope)
         if _generation_id is None:
             pairs = _published_model_generations(connection, (model_signature,))
         else:
@@ -430,7 +465,7 @@ def load_active_embedding_page(
             pairs = ((model_signature, _generation_id),)
         if not pairs:
             return ActiveEmbeddingPage((), None, True)
-        sql = _search_sql(model.modality, 1)
+        sql = _search_sql(model.modality, 1, text_scope=text_scope)
         rows = connection.execute(
             sql,
             (model_signature, pairs[0][1], after_ref_id, limit + 1),
@@ -479,11 +514,13 @@ def iter_active_embedding_pages(
     *,
     after_ref_id: int = 0,
     page_size: int = 512,
+    text_scope: TextEmbeddingScope = "all",
 ) -> Iterator[ActiveEmbeddingPage]:
     """Iterate bounded pages without holding a corpus-wide SQLite snapshot."""
 
     with semantic_database(path, readonly=True) as connection:
-        _load_model(connection, model_signature)
+        model = _load_model(connection, model_signature)
+        _validate_text_scope(model.modality, text_scope)
         pairs = _published_model_generations(connection, (model_signature,))
     if not pairs:
         yield ActiveEmbeddingPage((), None, True)
@@ -496,6 +533,7 @@ def iter_active_embedding_pages(
             model_signature,
             after_ref_id=cursor,
             limit=page_size,
+            text_scope=text_scope,
             _generation_id=generation_id,
         )
         yield page
@@ -625,9 +663,7 @@ def resolve_search_hits(
         )
         status_provenance = published_provenance
         if current_revision_id == published_revision_id:
-            current_provenance = json.loads(
-                str(source["current_item_provenance_json"])
-            )
+            current_provenance = json.loads(str(source["current_item_provenance_json"]))
             if not isinstance(current_provenance, dict):
                 raise SemanticStateError(
                     "semantic current-item provenance is not a JSON object"
@@ -643,9 +679,7 @@ def resolve_search_hits(
             None,
         )
         if hit.modality is EmbeddingModality.TEXT:
-            section_provenance = json.loads(
-                str(source["section_provenance_json"])
-            )
+            section_provenance = json.loads(str(source["section_provenance_json"]))
             if not isinstance(section_provenance, dict):
                 raise SemanticStateError(
                     "semantic section provenance is not a JSON object"
