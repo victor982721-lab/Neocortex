@@ -1,19 +1,28 @@
 {
-  "schema": "neocortex-0.7.2-pause-handoff-v2",
-  "updated_at": "2026-07-31T17:29:12-06:00",
-  "status": "paused_release_closure_waiting_for_quota_and_acl_patch_authorization",
+  "schema": "neocortex-0.7.2-pause-handoff-v3",
+  "updated_at": "2026-07-31T23:01:11-06:00",
+  "status": "acl_patch_implemented_in_draft_pr_waiting_for_green_quality_gates_and_merge",
   "repository": "C:\\Users\\Victor\\Neocortex\\Repository",
-  "branch": "neocortex-0.7.2-work",
-  "source_head": "5cce0cf1ac43de9859f2d51dd836fe5a0493b206",
-  "git_clean_before_handoff_update": true,
+  "branch": "agent/release-quality-gates",
+  "source_head_before_handoff_update": "fc233fb48eaaee62a610f0a6653452982219419c",
+  "pull_request": {
+    "number": 1,
+    "base": "main",
+    "draft": true,
+    "title": "ci: enforce Windows release quality gates"
+  },
   "implementation_complete": true,
-  "next_action": "Ask Victor for explicit authorization to canonicalize only SE_DACL_AUTO_INHERITED 0x0400, then apply the documented two-file patch and validate it.",
-  "pending_patch": {
-    "authorized": false,
+  "next_action": "Keep PR #1 in draft until static, tests and artifacts pass on its latest head; review and merge it, then rebuild and revalidate wheel and sdist before any live promotion.",
+  "acl_patch": {
+    "authorized": true,
+    "authorization_basis": "Victor explicitly requested applying the recommended repository improvements through GitHub on 2026-07-31.",
+    "implemented": true,
+    "merged_to_main": false,
     "production_file": "tools/release_windows_ntfs_native.py",
-    "test_file": "tests/test_release_windows_ntfs.py",
+    "test_file": "tests/test_release_windows_acl_canonicalization.py",
     "ignored_control_bit": "0x0400",
     "symbol": "SE_DACL_AUTO_INHERITED",
+    "minimum_self_relative_descriptor_bytes": 20,
     "preserve_exactly": [
       "owner",
       "group",
@@ -24,15 +33,32 @@
       "physical identity and CAS contracts"
     ]
   },
-  "known_green": {
+  "github_quality_gates": {
+    "workflow": ".github/workflows/quality.yml",
+    "required_checks": [
+      "static",
+      "tests",
+      "artifacts"
+    ],
+    "latest_validation_state": "in_progress_on_pull_request_head",
+    "first_run_findings": [
+      "The artifact build exposed an absent setuptools build backend in the no-isolation environment; the workflow now installs the constrained backend explicitly.",
+      "The repository has a pre-existing Ruff-format baseline affecting 222 Python files; CI now keeps global lint and requires formatting for newly added Python files without rewriting unrelated source.",
+      "Artifact reproducibility now builds from two independent git-archive source snapshots."
+    ],
+    "main_ruleset_configured": false,
+    "main_ruleset_next_step": "After the workflow exists on main, require pull requests, an up-to-date branch, resolved conversations and the static/tests/artifacts checks; block force-push and branch deletion."
+  },
+  "known_green_before_acl_patch": {
     "full_coverage_suite": "3063 passed, 89 subtests passed",
     "freeze_suite": "3063 passed, 89 subtests passed",
     "line_combined_percent": 83.408,
     "branch_percent": 72.281,
     "mypy_sources": 252,
-    "artifact_matrix": "118 passed"
+    "artifact_matrix": "118 passed",
+    "warning": "These results belong to the pre-patch source head and do not certify PR #1."
   },
-  "artifacts_before_pending_patch": {
+  "artifacts_before_acl_patch": {
     "directory": "C:\\Users\\Victor\\Neocortex\\Laboratory\\release-0.7.2-20260731-04\\final",
     "wheel_sha256": "AD38C60C97E75ED870700C617FFF9B6058BE21BE94C985AC3C5530B5E76556F9",
     "wheel_payload_sha256": "1081636cd6de8500d57e3e1d1ff83952e516822bcd82385785555e00751ef0f7",
@@ -101,8 +127,9 @@
   },
   "user_path_bin_occurrences": 0,
   "required_live_sequence": [
-    "authorize and validate ACL canonicalization patch",
-    "rebuild and revalidate wheel and sdist from post-patch HEAD",
+    "obtain green static, tests and artifacts checks on the latest PR #1 head",
+    "review and merge PR #1 without bypassing failed checks",
+    "rebuild and revalidate wheel and sdist from the merged post-patch head",
     "promote 0.7.2",
     "rollback to 0.7.1",
     "repromote 0.7.2",
@@ -110,7 +137,11 @@
     "verify a fresh child session resolves Neocortex 0.7.2",
     "update final handoff and leave Git clean"
   ],
+  "license_decision_made": false,
   "live_state_touched": false,
   "corpus_touched": false,
-  "watcher_or_reprocess_run": false
+  "watcher_or_reprocess_run": false,
+  "runtime_touched_by_this_pull_request": false,
+  "launcher_touched_by_this_pull_request": false,
+  "path_touched_by_this_pull_request": false
 }
