@@ -1,0 +1,219 @@
+name: Windows quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  SOURCE_DATE_EPOCH: "1785369600"
+
+jobs:
+  static:
+    name: static
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up CPython 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: constraints.txt
+
+      - name: Install validated development dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt ".[full,dev]"
+          python -m pip check
+
+      - name: Ruff lint
+        shell: pwsh
+        run: python -m ruff check .
+
+      - name: Ruff format
+        shell: pwsh
+        run: python -m ruff format --check .
+
+      - name: Mypy canonical sources
+        shell: pwsh
+        run: >-
+          python -m mypy
+          neocortex
+          _01_Enumeracion
+          _02_Deduplicacion
+          _03_Progreso
+          _04_Nucleo_Operativo
+          _05_Interfaz
+          tools
+          Orquestador.py
+
+  tests:
+    name: tests
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up CPython 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: constraints.txt
+
+      - name: Install validated test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt ".[full,dev]"
+          python -m pip check
+
+      - name: Prepare isolated NTFS audit laboratory
+        shell: pwsh
+        run: |
+          $RepositoryParent = Split-Path -Parent $env:GITHUB_WORKSPACE
+          $LaboratoryParent = Join-Path $RepositoryParent 'Laboratory'
+          $AuditRoot = Join-Path $LaboratoryParent ("github-actions-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          $TempRoot = Join-Path $AuditRoot 'temp'
+          $PycacheRoot = Join-Path $AuditRoot 'pycache'
+          $PytestBase = Join-Path $AuditRoot 'pytest-basetemp'
+          $PytestCache = Join-Path $AuditRoot 'pytest-cache'
+          New-Item -ItemType Directory -Force -Path $AuditRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path $PycacheRoot | Out-Null
+          New-Item -ItemType Directory -Force -Path $PytestBase | Out-Null
+          New-Item -ItemType Directory -Force -Path $PytestCache | Out-Null
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NEOCORTEX_AUDIT_LAB_ROOT=$AuditRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TEMP=$TempRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TMP=$TempRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "TMPDIR=$TempRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "PYTHONPYCACHEPREFIX=$PycacheRoot"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "PYTEST_BASETEMP=$PytestBase"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "PYTEST_CACHE_DIR=$PytestCache"
+
+      - name: Full branch-aware test suite
+        shell: pwsh
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch -m pytest -q --basetemp "$env:PYTEST_BASETEMP" -o "cache_dir=$env:PYTEST_CACHE_DIR"
+          python -m coverage report --fail-under=83
+          python -m coverage xml -o coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  artifacts:
+    name: artifacts
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up CPython 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: constraints.txt
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt ".[dev]"
+          python -m pip check
+
+      - name: Build two independent artifact sets
+        shell: pwsh
+        run: |
+          $First = Join-Path $env:RUNNER_TEMP 'neocortex-dist-a'
+          $Second = Join-Path $env:RUNNER_TEMP 'neocortex-dist-b'
+          New-Item -ItemType Directory -Force -Path $First | Out-Null
+          New-Item -ItemType Directory -Force -Path $Second | Out-Null
+          python -m build --no-isolation --outdir $First .
+          python -m build --no-isolation --outdir $Second .
+
+      - name: Validate and publish canonical artifacts
+        shell: pwsh
+        run: |
+          @'
+          from __future__ import annotations
+
+          import hashlib
+          import os
+          import shutil
+          from pathlib import Path
+
+          from tools.release_artifacts import (
+              canonicalize_sdist,
+              compare_logical_payloads,
+              validate_release_artifact,
+          )
+
+          runner_temp = Path(os.environ["RUNNER_TEMP"])
+          first = runner_temp / "neocortex-dist-a"
+          second = runner_temp / "neocortex-dist-b"
+          final = runner_temp / "neocortex-dist-final"
+          final.mkdir()
+
+          def only(directory: Path, pattern: str) -> Path:
+              matches = tuple(directory.glob(pattern))
+              if len(matches) != 1:
+                  raise RuntimeError(
+                      f"expected one {pattern} in {directory}, found {len(matches)}"
+                  )
+              return matches[0]
+
+          wheel_a = only(first, "*.whl")
+          wheel_b = only(second, "*.whl")
+          sdist_a = only(first, "*.tar.gz")
+          sdist_b = only(second, "*.tar.gz")
+
+          compare_logical_payloads(wheel_a, wheel_b)
+          compare_logical_payloads(sdist_a, sdist_b)
+          if hashlib.sha256(wheel_a.read_bytes()).digest() != hashlib.sha256(
+              wheel_b.read_bytes()
+          ).digest():
+              raise RuntimeError("independent wheel builds are not byte-identical")
+
+          final_wheel = final / wheel_a.name
+          shutil.copyfile(wheel_a, final_wheel)
+          final_sdist = final / sdist_a.name
+          canonicalize_sdist(sdist_a, sdist_b, final_sdist)
+          validate_release_artifact(final_wheel)
+          validate_release_artifact(final_sdist)
+          print(final_wheel)
+          print(final_sdist)
+          '@ | python -
+
+      - name: Upload validated artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: neocortex-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\neocortex-dist-final\*
+          if-no-files-found: error
+          retention-days: 14
