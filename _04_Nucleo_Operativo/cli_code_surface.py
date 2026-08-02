@@ -75,6 +75,14 @@ def register_code_arguments(
         action="store_true",
         help="show bounded code database, analyzer and index status",
     )
+    code.add_argument(
+        "--code-review",
+        action="store_true",
+        help=(
+            "show a deterministic read-only top-10 maintenance shortlist from "
+            "published self-analysis"
+        ),
+    )
     code.add_argument("--code-search", metavar="QUERY")
     code.add_argument(
         "--code-search-mode",

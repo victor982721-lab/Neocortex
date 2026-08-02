@@ -48,6 +48,7 @@ from .code_detection import (
     likely_code_candidate,
     looks_binary,
 )
+from .code_schema import checkpoint_code_wal, remove_checkpointed_code_sidecars
 from .code_state import CachedCodeVersion, CodeState, SkippedCodeObservation
 from .semantic_models import fingerprint_bytes
 
@@ -655,6 +656,7 @@ class CodeRoute:
         elapsed_nanoseconds = {"read": 0, "analyze": 0, "persist": 0}
         graph_inputs_changed = False
         analysis_run_id: int | None = None
+        summary: CodeRouteSummary | None = None
         current_phase = "analysis"
         self.framework_state.begin_route_phase(
             self.framework_run_id, self.route_name, current_phase
@@ -768,7 +770,14 @@ class CodeRoute:
                     errors=counters["errors"],
                     cache_hits=counters["cache_hits"],
                 )
-                return summary
+                checkpoint_code_wal(state.connection)
+            remove_checkpointed_code_sidecars(
+                self.config.state_path,
+                require_removal=False,
+            )
+            if summary is None:  # pragma: no cover - successful flow assigns it
+                raise RuntimeError("code route completed without a summary")
+            return summary
         except BaseException as exc:
             if analysis_run_id is not None:
                 try:

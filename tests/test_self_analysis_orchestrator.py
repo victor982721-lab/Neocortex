@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -16,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import _04_Nucleo_Operativo.orchestrator as orchestrator_module
+from _01_Enumeracion import VolumeAccessError
 from _02_Deduplicacion import DedupIndex
 from _02_Deduplicacion.inventory import DEFAULT_EXCLUDED_PATHS
 from _04_Nucleo_Operativo.code_contracts import CodeRouteSummary
@@ -75,6 +75,9 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
     root = tmp_path / "corpus"
     state = tmp_path / "state"
     root.mkdir()
+    transient_roots = (root / ".pytest-codex", root / ".test-tmp")
+    for transient in transient_roots:
+        transient.mkdir()
     policy = build_self_analysis_inventory_policy(root, state)
 
     assert policy.signature.startswith("inventory-exclusion-policy-v2:xxh3_128:")
@@ -82,6 +85,9 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
         str(state.resolve()),
         str((root / ".codex-lab").resolve()),
         str((root / "docs" / "audit_evidence").resolve()),
+        str((root / "Laboratory").resolve()),
+        str((root / "neocortex_framework.egg-info").resolve()),
+        *(str(path.resolve()) for path in transient_roots),
     }
     default_keys = {str(path.resolve()).casefold() for path in DEFAULT_EXCLUDED_PATHS}
     assert not default_keys.intersection(
@@ -234,6 +240,10 @@ def test_self_analysis_real_code_route_omits_common_work_and_publishes_manifest(
         root / ".git" / "config",
         root / "dist" / "generated.py",
         root / "docs" / "audit_evidence" / "report.py",
+        root / "Laboratory" / "candidate.py",
+        root / "neocortex_framework.egg-info" / "generated.py",
+        root / ".pytest-codex" / "temporary.py",
+        root / ".test-tmp" / "temporary.py",
     )
     for path in excluded:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -339,6 +349,66 @@ def test_self_analysis_real_code_route_omits_common_work_and_publishes_manifest(
         "run_actions": 0,
     }
     assert isinstance(manifest["commands"]["analyze"], list)
+
+
+def test_self_analysis_falls_back_to_full_scan_when_usn_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "corpus"
+    state = tmp_path / "state"
+    source = root / "source.py"
+    temporary = root / ".pytest-codex" / "temporary.py"
+    root.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    temporary.parent.mkdir()
+    temporary.write_text("temporary = True\n", encoding="utf-8")
+    original = source.read_bytes()
+    seen: list[tuple[str, ...]] = []
+    registry = {"code": _inventory_adapter(seen)}
+
+    def deny_volume(_volume: str) -> None:
+        raise VolumeAccessError("CreateFileW", "C:", 5, "Acceso denegado")
+
+    monkeypatch.setattr(orchestrator_module, "query_journal_cursor", deny_volume)
+
+    result = FrameworkOrchestrator(
+        _config(root, state),
+        route_registry=registry,
+    ).run()
+
+    assert isinstance(result, SelfAnalysisRunResult)
+    assert result.journal_before is None
+    assert result.journal_after is None
+    assert result.journal_usn_span is None
+    assert result.inventory_mode == "full"
+    assert result.inventory_attempts == 1
+    assert result.reconciliation_records == 0
+    assert seen == [(str(source),)]
+    assert source.read_bytes() == original
+    assert temporary.read_text(encoding="utf-8") == "temporary = True\n"
+
+    with sqlite3.connect(state / "framework.sqlite3") as connection:
+        row = connection.execute(
+            """SELECT journal_volume,journal_id,start_usn,end_usn,status
+            FROM initial_runs WHERE run_id=?""",
+            (result.run_id,),
+        ).fetchone()
+        manifest_raw = connection.execute(
+            """SELECT details_json FROM run_events
+            WHERE run_id=? AND phase=?""",
+            (result.run_id, SELF_ANALYSIS_MANIFEST_PHASE),
+        ).fetchone()[0]
+        gate = connection.execute(
+            """SELECT details_json FROM run_events
+            WHERE run_id=? AND phase='self-analysis-incremental-gate'""",
+            (result.run_id,),
+        ).fetchone()[0]
+    manifest = json.loads(manifest_raw)
+    assert row == (None, None, None, None, "completed")
+    assert manifest["schema"] == "neocortex.self-analysis-manifest/v2"
+    assert manifest["inventory"]["journal"] == {"status": "unavailable"}
+    assert json.loads(gate)["reason"] == "journal_unavailable_full_scan"
 
 
 def test_exception_after_manifest_commit_cannot_degrade_completed_run(
@@ -509,4 +579,6 @@ def test_failed_incremental_checkpoint_cannot_advance_past_durable_boundary(
     assert recovered.inventory_mode == "full"
     assert recovered.scan.scan_id != durable.scan.scan_id
     assert journal.raw_volume_open_attempts == 0
+
+
 # endregion [02]

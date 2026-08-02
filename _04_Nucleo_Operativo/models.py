@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -200,8 +199,8 @@ class InitialRunResult:
     run_id: int
     scan: ScanSummary
     dedup_plan: DedupPlan
-    journal_before: JournalCursor
-    journal_after: JournalCursor
+    journal_before: JournalCursor | None
+    journal_after: JournalCursor | None
     reconciliation_records: int
     inventory_attempts: int
     inventory_mode: Literal["full", "incremental"]
@@ -218,7 +217,9 @@ class InitialRunResult:
     organization_apply: OrganizationApplySummary | None = None
 
     @property
-    def journal_usn_span(self) -> int:
+    def journal_usn_span(self) -> int | None:
+        if self.journal_before is None or self.journal_after is None:
+            return None
         return self.journal_after.next_usn - self.journal_before.next_usn
 
 
@@ -228,8 +229,8 @@ class SelfAnalysisRunResult:
 
     run_id: int
     scan: ScanSummary
-    journal_before: JournalCursor
-    journal_after: JournalCursor
+    journal_before: JournalCursor | None
+    journal_after: JournalCursor | None
     reconciliation_records: int
     inventory_attempts: int
     inventory_mode: Literal["full", "incremental"]
@@ -241,7 +242,9 @@ class SelfAnalysisRunResult:
     route_candidate_count: int = 0
 
     @property
-    def journal_usn_span(self) -> int:
+    def journal_usn_span(self) -> int | None:
+        if self.journal_before is None or self.journal_after is None:
+            return None
         return self.journal_after.next_usn - self.journal_before.next_usn
 
 
@@ -285,4 +288,6 @@ class ActionSummary:
     empty_directories_trashed: int = 0
     empty_directory_skips: int = 0
     errors: int = 0
+
+
 # endregion [02]

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from .code_contracts import ReconstructionEntry, ReconstructionManifest
-from .code_schema import connect_code_state
+from .code_schema import readonly_code_database
 
 
 # region [01] Read models and project discovery
@@ -73,17 +73,20 @@ def _safe_relative(value: str) -> str:
     """Normalize a proposal without ever resolving or touching the filesystem."""
 
     normalized = value.replace("\\", "/").lstrip("/")
-    parts = tuple(part for part in PurePosixPath(normalized).parts if part not in {"", "."})
+    parts = tuple(
+        part for part in PurePosixPath(normalized).parts if part not in {"", "."}
+    )
     if not parts or any(part == ".." or ":" in part for part in parts):
         return PurePosixPath(Path(value).name).as_posix()
     return PurePosixPath(*parts).as_posix()
 
 
-def list_projects(path: Path, *, include_historical: bool = False) -> tuple[ProjectSummary, ...]:
+def list_projects(
+    path: Path, *, include_historical: bool = False
+) -> tuple[ProjectSummary, ...]:
     """List probable project instances with current and historical coverage."""
 
-    connection = connect_code_state(path, readonly=True)
-    try:
+    with readonly_code_database(path) as connection:
         predicate = "1=1" if include_historical else "p.status<>'historical'"
         rows = connection.execute(
             f"""SELECT p.project_id,p.name,p.ecosystem,p.probable_root,p.confidence,
@@ -107,8 +110,6 @@ def list_projects(path: Path, *, include_historical: bool = False) -> tuple[Proj
             )
             for row in rows
         )
-    finally:
-        connection.close()
 
 
 def resolve_project_id(path: Path, value: str | int) -> int:
@@ -116,15 +117,12 @@ def resolve_project_id(path: Path, value: str | int) -> int:
 
     if isinstance(value, int) or str(value).isdigit():
         return int(value)
-    connection = connect_code_state(path, readonly=True)
-    try:
+    with readonly_code_database(path) as connection:
         rows = connection.execute(
             """SELECT project_id FROM projects WHERE name=? COLLATE NOCASE
             AND status<>'historical' ORDER BY project_id""",
             (str(value),),
         ).fetchall()
-    finally:
-        connection.close()
     if not rows:
         raise LookupError(f"code project not found: {value}")
     if len(rows) > 1:
@@ -141,7 +139,9 @@ def resolve_project_id(path: Path, value: str | int) -> int:
 # region [02] Explicit reconstruction strategies
 
 
-def _load_variants(connection: sqlite3.Connection, project_id: int) -> tuple[_Variant, ...]:
+def _load_variants(
+    connection: sqlite3.Connection, project_id: int
+) -> tuple[_Variant, ...]:
     rows = connection.execute(
         """SELECT p.project_id,p.name,p.ecosystem,m.proposed_path,v.path_observed,
         v.version_id,v.raw_xxh3_128,v.text_xxh3_128,m.relation,m.confidence,
@@ -216,15 +216,10 @@ def reconstruct_project(
 
     strategy = strategy.casefold()
     if strategy not in RECONSTRUCTION_STRATEGIES:
-        raise ValueError(
-            "reconstruction strategy must be latest, coherent or branches"
-        )
+        raise ValueError("reconstruction strategy must be latest, coherent or branches")
     project_id = resolve_project_id(path, project)
-    connection = connect_code_state(path, readonly=True)
-    try:
+    with readonly_code_database(path) as connection:
         variants = _load_variants(connection, project_id)
-    finally:
-        connection.close()
 
     groups: defaultdict[str, list[_Variant]] = defaultdict(list)
     for variant in variants:
@@ -235,9 +230,7 @@ def reconstruct_project(
         for index, (key, values) in enumerate(sorted(groups.items()), start=1)
         if len(
             {
-                item.raw_xxh3_128
-                or item.text_xxh3_128
-                or f"version:{item.version_id}"
+                item.raw_xxh3_128 or item.text_xxh3_128 or f"version:{item.version_id}"
                 for item in values
             }
         )

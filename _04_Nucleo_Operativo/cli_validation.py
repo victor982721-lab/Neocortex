@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 
 from .cli_audio_surface import (
     validate_audio_arguments,
@@ -413,6 +414,7 @@ def _validate_watcher_operation(
         "watch_error_backoff_initial_seconds",
         "watch_error_backoff_max_seconds",
         "watch_error_backoff_multiplier",
+        "watch_portable_interval_seconds",
     }
     if not args.watch:
         if watcher_options.intersection(explicit):
@@ -436,6 +438,13 @@ def _validate_watcher_operation(
         )
     if args.watch_error_backoff_multiplier < 1:
         raise SystemExit("--watch-error-backoff-multiplier must be at least 1")
+    if (
+        not math.isfinite(args.watch_portable_interval_seconds)
+        or not 1 <= args.watch_portable_interval_seconds <= 86_400
+    ):
+        raise SystemExit(
+            "--watch-portable-interval-seconds must be between 1 and 86400"
+        )
     if args.apply:
         raise SystemExit("--watch cannot be combined with --apply")
     if args.route_only:

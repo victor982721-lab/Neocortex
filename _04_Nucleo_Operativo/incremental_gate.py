@@ -81,13 +81,13 @@ class InventoryCheckpointEvidence(Protocol):
     def scan_id(self) -> int: ...
 
     @property
-    def volume(self) -> str: ...
+    def volume(self) -> str | None: ...
 
     @property
-    def journal_id(self) -> int: ...
+    def journal_id(self) -> int | None: ...
 
     @property
-    def next_usn(self) -> int: ...
+    def next_usn(self) -> int | None: ...
 
     @property
     def valid(self) -> bool: ...
@@ -242,6 +242,12 @@ def _cursor_reason(
 ) -> IncrementalGateReason | None:
     if durable_cursor is None:
         return "durable_cursor_missing"
+    if (
+        checkpoint.volume is None
+        or checkpoint.journal_id is None
+        or checkpoint.next_usn is None
+    ):
+        return "checkpoint_not_at_durable_boundary"
     if (
         checkpoint.volume != durable_cursor.volume
         or checkpoint.journal_id != durable_cursor.journal_id

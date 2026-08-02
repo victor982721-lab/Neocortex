@@ -39,7 +39,7 @@ from .image_visual import DEFAULT_VISUAL_CLASSIFIER, VisualSemanticClassifier
 # region [01] Reusable score primitives
 
 
-DOCUMENT_CANDIDATE_VERSION = "document-candidate-v1"
+DOCUMENT_CANDIDATE_VERSION = "document-candidate-v2"
 
 
 def add(
@@ -119,6 +119,11 @@ def requires_document_verification(path: Path, root: Path, f: Features) -> bool:
     document_name = bool(
         phrase_matches(textual_context(path, root), NAME_HINTS["documento_pagina"])
     )
+    if not document_name and (
+        (f.has_transparency and f.alpha_fraction >= 0.20)
+        or min(f.width, f.height) < 192
+    ):
+        return False
     return bool(
         document_name
         or _document_pixel_score(f) >= 3.2
@@ -351,7 +356,7 @@ def _graphic_score(f: Features) -> float:
     score = 0.0
     if not f.has_camera_exif and f.quantized_colors <= 45:
         score += 1.8
-    if f.edge_fraction >= 0.045 and f.entropy <= 6.35:
+    if f.edge_fraction >= 0.045 and f.entropy <= 6.50:
         score += 1.6
     if f.format in {"PNG", "GIF", "WEBP"}:
         score += 1.0
@@ -412,6 +417,25 @@ def _page_surface(f: Features, long_lines: float) -> bool:
         (f.light_fraction >= 0.68 and f.neutral_fraction >= 0.68)
         or (f.white_fraction >= 0.38 and f.border_white_fraction >= 0.55)
         or (long_lines >= 0.05 and f.edge_fraction >= 0.06)
+    )
+
+
+def _credible_raster_page(
+    f: Features,
+    ratio: float,
+    evidence: DocumentTextEvidence | None,
+) -> bool:
+    strong_text = bool(
+        evidence is not None
+        and evidence.available
+        and (evidence.dense_text or evidence.document_terms)
+    )
+    if strong_text:
+        return True
+    return bool(
+        min(f.width, f.height) >= 320
+        and ratio >= 1.18
+        and (not f.has_transparency or f.alpha_fraction < 0.20)
     )
 
 
@@ -677,9 +701,15 @@ def _apply_primary_scores(
     scores: dict[str, float],
     reasons: dict[str, list[str]],
     primary: _PrimaryScores,
+    f: Features,
     ratio: float,
+    document_text: DocumentTextEvidence | None,
 ) -> None:
-    if ratio <= 1.82 and primary.document >= 4.0:
+    if (
+        ratio <= 1.82
+        and primary.document >= 4.0
+        and _credible_raster_page(f, ratio, document_text)
+    ):
         add(
             scores,
             reasons,
@@ -823,7 +853,7 @@ def classify(
         document_verifier,
         verifier,
     )
-    _apply_primary_scores(scores, reasons, primary, ratio)
+    _apply_primary_scores(scores, reasons, primary, f, ratio, document_text)
     winner, winner_score, runner_up, runner_score = _select_winner(
         scores,
         reasons,

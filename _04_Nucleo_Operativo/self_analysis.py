@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -15,7 +16,10 @@ from .models import FrameworkConfig
 
 
 SELF_ANALYSIS_PROFILE_VERSION = "neocortex.self-analysis-profile/v1"
-SELF_ANALYSIS_MANIFEST_SCHEMA = "neocortex.self-analysis-manifest/v1"
+SELF_ANALYSIS_MANIFEST_SCHEMA = "neocortex.self-analysis-manifest/v2"
+LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS = frozenset(
+    {"neocortex.self-analysis-manifest/v1"}
+)
 SELF_ANALYSIS_MANIFEST_PHASE = "self-analysis-manifest"
 SELF_ANALYSIS_MANIFEST_MESSAGE = "Manifest de autoanálisis publicado"
 MAX_SELF_ANALYSIS_MANIFEST_BYTES = 256 * 1024
@@ -82,6 +86,8 @@ _EXCLUDED_FILE_SUFFIXES = (
     ".tmp",
     ".wal",
 )
+_TRANSIENT_DIRECTORY_PREFIXES = (".pytest-", ".test-tmp")
+_MAX_TRANSIENT_DIRECTORY_ROOTS = 256
 
 
 # endregion [01]
@@ -90,18 +96,43 @@ _EXCLUDED_FILE_SUFFIXES = (
 # region [02] Inventory profile
 
 
+def _transient_project_directories(root: Path) -> tuple[Path, ...]:
+    """Discover bounded top-level test artifacts absent from stable name rules."""
+
+    matches: list[Path] = []
+    with os.scandir(root) as entries:
+        for entry in entries:
+            name_key = entry.name.casefold()
+            if not name_key.startswith(_TRANSIENT_DIRECTORY_PREFIXES):
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                continue
+            if not is_directory:
+                continue
+            matches.append(Path(entry.path))
+            if len(matches) > _MAX_TRANSIENT_DIRECTORY_ROOTS:
+                raise ValueError("too many transient self-analysis directories")
+    return tuple(sorted(matches, key=lambda path: os.path.normcase(str(path))))
+
+
 def build_self_analysis_inventory_policy(
     root: Path,
     state_directory: Path,
 ) -> InventoryExclusionPolicy:
     """Compile the exact project-local exclusions for protected analysis."""
 
+    explicit_roots = (
+        state_directory,
+        root / ".codex-lab",
+        root / "docs" / "audit_evidence",
+        root / "Laboratory",
+        root / "neocortex_framework.egg-info",
+        *_transient_project_directories(root),
+    )
     return InventoryExclusionPolicy.compile(
-        (
-            state_directory,
-            root / ".codex-lab",
-            root / "docs" / "audit_evidence",
-        ),
+        explicit_roots,
         directory_names=_EXCLUDED_DIRECTORY_NAMES,
         file_names=_EXCLUDED_FILE_NAMES,
         file_suffixes=_EXCLUDED_FILE_SUFFIXES,
@@ -276,6 +307,7 @@ def build_self_analysis_completion_manifest(
 
 __all__ = [
     "MAX_SELF_ANALYSIS_MANIFEST_BYTES",
+    "LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS",
     "SELF_ANALYSIS_MANIFEST_MESSAGE",
     "SELF_ANALYSIS_MANIFEST_PHASE",
     "SELF_ANALYSIS_MANIFEST_SCHEMA",

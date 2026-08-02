@@ -60,7 +60,7 @@ La topología reservada es
 aliases/reparses y protege también un hardlink del launcher. Una raíz normal
 situada dentro de un árbol propio se rechaza; los árboles propios descendientes
 de un corpus permitido se excluyen. El estado no puede ser igual ni ancestro
-del corpus. Dedup v8 conserva la firma cruda de exclusión y Framework v20 liga
+del corpus. Dedup v9 conserva la firma cruda de exclusión y Framework v20 liga
 la firma efectiva que también incorpora las rutas internas.
 
 ### Autoanálisis protegido
@@ -73,7 +73,7 @@ catálogo, organización y generated/vendored. El contenido se analiza como
 evidencia no confiable y no se ejecuta.
 
 La finalización no confía únicamente en la CLI: Framework v20 impide enlazar
-acciones a un run protegido, Dedup v8 exige el scan ligado a su firma y code v2
+acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y code v2
 conserva el run analítico. Los owners de mutación reciben
 `CorpusMutationGuard` y el commit exige ceros durables en candidatos, acciones
 y organización. Una identidad cambiada, un árbol intersectante o una frontera
@@ -290,8 +290,10 @@ otra revisión de privacidad y seguridad.
 
 ## Privilegios
 
-La lectura del volumen NTFS/USN puede requerir elevación. Eleve sólo la ejecución
-que realmente la necesita y confirme raíz y argumentos antes de aceptar UAC. Un
+La lectura del volumen NTFS/USN puede requerir elevación, pero es un acelerador
+opcional: la corrida cotidiana debe degradar al recorrido portable. No eleve el
+framework sólo para obtener USN. Si una prueba diagnóstica expresamente necesita
+esa frontera, limite la raíz y confirme los argumentos antes de aceptar UAC; un
 proceso elevado amplía el impacto de cualquier parser o ruta mal seleccionada.
 
 No ejecute de forma elevada doctors, ayuda, versión o búsquedas que no lo

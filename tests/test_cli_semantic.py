@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -614,6 +615,41 @@ def test_semantic_index_all_runs_text_then_image_offline_with_selected_profile(
     assert (tmp_path / "framework.lock").is_file()
 
 
+def test_semantic_index_reports_published_code_link_coverage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "code.sqlite3").touch()
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-index",
+            "text",
+            "--semantic-source",
+            "code",
+        ]
+    )
+    validate_arguments(args)
+    with (
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+            return_value=_index_result(tmp_path, ("code",)),
+        ),
+        patch(
+            "_04_Nucleo_Operativo.code_semantic_links."
+            "current_code_embedding_link_counts",
+            return_value=(4, 3),
+        ),
+    ):
+        assert dispatch_direct(args) == 0
+
+    output = capsys.readouterr().out
+    assert "SEMANTIC_CODE_LINKS generation=7" in output
+    assert "active=4 current=3 stale=1" in output
+    assert "calibration=uncalibrated_similarity" in output
+
+
 def test_semantic_index_reports_partial_generation_as_nonzero(
     tmp_path,
     capsys,
@@ -824,6 +860,41 @@ def test_semantic_search_incomplete_exact_scan_returns_two(tmp_path, capsys) -> 
     assert "complete=0" in output
     assert "reason=max_vectors_reached" in output
     assert "next_cursor=25" in output
+
+
+def test_semantic_search_reports_calibrated_abstention(tmp_path, capsys) -> None:
+    args = build_parser().parse_args(
+        [
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-search",
+            "tema ausente",
+            "--semantic-search-mode",
+            "text",
+        ]
+    )
+    validate_arguments(args)
+    result = _search_result()
+    ranking = replace(
+        result.rankings[0],
+        provenance={
+            "retrieval_abstention": {
+                "query_abstained": True,
+                "abstention_reason": "all_candidates_below_calibrated_source_floor",
+            }
+        },
+    )
+    result = replace(result, rankings=(ranking,), lexical_rankings=(), fused=())
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.search_semantic_index",
+        return_value=result,
+    ):
+        assert dispatch_direct(args) == 0
+
+    output = capsys.readouterr().out
+    assert "hits=0 abstained=1" in output
+    assert "abstention_reason=all_candidates_below_calibrated_source_floor" in output
+    assert "calibrated_abstentions=1 fused_hits=0" in output
 
 
 def test_semantic_search_escapes_unencodable_corpus_text_on_cp1252(

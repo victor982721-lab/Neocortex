@@ -23,11 +23,41 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   `analyze_only`, con raíz/estado disjuntos, entrada directa desde inventario y
   exclusión obligatoria de generated/vendored, catálogo, organización y rutas
   MIME.
-- Manifest `neocortex.self-analysis-manifest/v1` ligado transaccionalmente a la
-  finalización. Conserva policy/firma, identidad, scan/USN, evidencia code,
-  cuatro conteos cero y argv canónicos `analyze`/`status` como arrays acotados.
+- Manifest `neocortex.self-analysis-manifest/v2` ligado transaccionalmente a la
+  finalización, con lectura legacy v1. Conserva policy/firma, identidad,
+  scan/journal, evidencia code, cuatro conteos cero y argv canónicos
+  `analyze`/`status` como arrays acotados; si USN no está disponible registra el
+  fallback completo sin checkpoint ni cursor ficticio.
+- Inventario Dedup v9: la publicación generacional ya no depende de USN. Un
+  checkpoint conserva cursor completo o tres nulos; la corrida normal usa full
+  scan portable cuando USN falta y mantiene Code/rutas incrementales por caché.
+- Watcher portable en primer plano: USN queda como señal opcional; un checkpoint
+  sin cursor o un lector USN indisponible dispara corridas normales programadas
+  sobre Dedup v9, con intervalo explícito y sin otro índice.
+- Clon Semantic reanudable: una generación con cambios fija la base publicada y
+  persiste high-watermark, conteo y cursor por páginas bajo el deadline común.
+- Pisos de abstención para recuperación Jina/body, separados por PDF y Code y
+  aplicados sólo cuando modelo, pipeline, backend y owner coinciden exactamente.
+- Puente Code↔Semantic integrado sobre `code.embedding_links`: una publicación
+  textual completa sincroniza cobertura exacta por item, modelo, espacio,
+  generación y versión vigente; el replay es idempotente y conserva enlaces
+  históricos inactivos.
+- Publicación Code quiescente: al completar un run hace checkpoint y retira
+  sidecars reconstruibles con WAL vacío; un lector externo puede diferir la
+  limpieza sin revertir el estado ya publicado ni forzar el cierre de handles.
+- Búsqueda Code `semantic`/`hybrid` con canal de disponibilidad explícito,
+  procedencia `retrieval_evidence_only`, similitud no calibrada y abstención si
+  faltan head, cobertura o modelo local; el modo híbrido conserva las señales
+  léxicas y estructurales disponibles.
 - Proyección `self_analysis` en `--code-status --code-json`, con estados de
   manifest y frescura separada para raíz, framework/code, checkpoint y journal.
+- `--code-review` como consumidor read-only del autoanálisis publicado: top 10
+  determinista de hotspots Python confirmados, máximo dos por archivo, evidencia
+  de analyzer/callers, digest estable y abstención fail-closed. Los avisos
+  `probable_dead_symbol` quedan suprimidos hasta calibrar el grafo de llamadas.
+- Fixture reproducible de actionability para el primer top 10, con labels
+  provisionales `actionable`/`defer`, score recalculado y `Precision@10`
+  explícitamente no humana antes de modificar pesos o añadir detectores.
 - [Guía operativa del autoanálisis protegido](SELF_ANALYSIS.md), incluido un
   mini-root sintético reproducible.
 - Topología canónica por usuario: fuente en
@@ -50,10 +80,27 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   schemas de owners por imports eager al inspeccionar estado ausente ni al leer
   un owner `image` existente.
 - Full scan y USN comparten una `InventoryExclusionPolicy` con firma cruda
-  `inventory-exclusion-policy-v1:xxh3_128:...`; Framework y watcher ligan la
+  `inventory-exclusion-policy-v2:xxh3_128:...`; Framework y watcher ligan la
   firma efectiva que también incorpora `InternalPathsPolicy`. La puerta
   incremental exige último run durable, checkpoint/scan y raíz/cursor vivos.
   Un fallo fuerza full scan sin fallback histórico.
+- La puerta incremental normal conserva USN como acelerador cuando la frontera
+  durable coincide; ante plataforma no soportada o fallo de acceso publica un
+  snapshot portable en vez de abortar, sin fingir journal ni ampliar permisos.
+- Las lecturas operativas de Code ya no recrean sidecars en una base quiescente;
+  usan immutable con cercas, y ante un writer activo conservan read-only sin
+  borrar ni hacer checkpoint de auxiliares ajenos.
+- La recarga del dueño durable entre ciclos del watcher usa también una
+  instantánea immutable cercada; ya no recrea `framework.sqlite3-wal/-shm` al
+  consultar una publicación quiescente y se abstiene si existe actividad WAL.
+- La política de abstención Semantic permanece fuera del contrato durable del
+  encoder; añadir o ajustar pisos de recuperación no invalida modelos ni heads
+  ya publicados cuya firma vectorial sigue siendo idéntica. Los vectores
+  reutilizados recuperan backend/pipeline desde su `payload_provenance` exacto;
+  cualquier conflicto con el nivel superior queda sin calibrar.
+- La decisión de imagen v10 deja de promover iconos transparentes y composiciones
+  casi cuadradas a página documental sólo por píxeles claros; exige geometría
+  plausible o evidencia textual firme e invalida la decisión cacheada anterior.
 - Route-only/resume code acepta cero candidatos únicamente cuando todas las
   rutas seleccionadas consumen `inventory_snapshot`. Sin run explícito exige
   que el owner durable más reciente de la raíz exacta sea `normal`, sin fallback
@@ -61,6 +108,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 - `CodeState.finalize_graph()` consulta cancelación mediante un progress handler
   limitado a su transacción, hace rollback antes de propagar y retira el handler
   al salir. La publicación generacional del grafo sigue fuera de este cambio.
+- El analizador Python v5 conserva módulo/nivel relativo, binding léxico y
+  aliases; el resolver de grafo v7 enlaza qualified names únicos, un salto de
+  reexport confirmado y submódulos físicos únicos, absteniéndose ante shadowing,
+  imports externos o ambigüedad. Mantiene además la resolución privada por
+  módulo/clase sin confundir un alias con un homónimo del archivo llamador.
 - Knowledge Plan conserva como requeridas las modalidades semánticas solicitadas,
   liga cada ranking a su propietario y path SQLite exactos, respeta
   `candidate_limit` y no permite que otro ranking del mismo canal sustituya una
@@ -78,9 +130,10 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   de acción. Checks, triggers y `CorpusMutationGuard` impiden que un run
   `analyze_only` alcance owners de mutación. No existe downgrade; rollback
   requiere backup consistente y paquete compatible.
-- Dedup pasa de schema 7 a 8: añade
+- Dedup pasa de schema 7 a 8 y después a 9: añade
   `scans.inventory_policy_signature`, conserva scans, archivos y bytes, e
-  invalida checkpoints legacy sin firma en vez de inventar evidencia.
+  invalida checkpoints legacy sin firma en vez de inventar evidencia; v9 vuelve
+  opcional únicamente la terna USN completa y rechaza estados parciales.
 - La frontera normal rechaza un estado igual o ancestro del corpus y excluye
   los árboles internos descendientes; el autoanálisis mantiene disjunción
   completa entre raíz y estado.

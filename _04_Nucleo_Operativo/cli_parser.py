@@ -303,7 +303,10 @@ def build_parser() -> argparse.ArgumentParser:
     watcher.add_argument(
         "--watch",
         action="store_true",
-        help="observe durable NTFS changes in this foreground process until cancelled",
+        help=(
+            "observe durable filesystem changes with USN when available and "
+            "portable polling otherwise"
+        ),
     )
     watcher.add_argument(
         "--watch-bootstrap",
@@ -346,6 +349,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         metavar="FACTOR",
+    )
+    watcher.add_argument(
+        "--watch-portable-interval-seconds",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="interval between portable inventory passes when USN is unavailable",
     )
     selection = parser.add_argument_group("Explicit route selection")
     selection.add_argument(

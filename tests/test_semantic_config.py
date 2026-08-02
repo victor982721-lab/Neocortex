@@ -38,6 +38,12 @@ def test_production_fastembed_cache_contracts_remain_valid() -> None:
     assert all(contract.required_files for contract in contracts)
 
 
+def test_retrieval_policy_does_not_mutate_the_registered_model_contract() -> None:
+    model = multilingual_text_model()
+
+    assert "retrieval_abstention" not in model.provenance
+
+
 def test_quality_text_chunking_keeps_measured_jina_headroom() -> None:
     chunking = text_chunking_for_model(multilingual_text_model())
 

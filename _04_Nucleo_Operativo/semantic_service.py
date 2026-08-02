@@ -410,7 +410,7 @@ def index_text_embeddings(
 
     budget = work_budget or SemanticWorkBudget()
     try:
-        return _text_index.index_text_embeddings(
+        result = _text_index.index_text_embeddings(
             state_directory,
             source_kinds=source_kinds,
             model=model,
@@ -423,6 +423,20 @@ def index_text_embeddings(
             generation_runner=_run_generation,
             work_budget=budget,
         )
+        if "code" in result.sources and result.complete:
+            if len(result.generations) != 1:
+                raise RuntimeError(
+                    "Code Semantic linking requires exactly one text generation"
+                )
+            from .code_semantic_links import synchronize_code_embedding_links
+
+            summary = result.generations[0].summary
+            synchronize_code_embedding_links(
+                state_directory,
+                generation_id=summary.generation_id,
+                model_signature=summary.model_signature,
+            )
+        return result
     finally:
         budget.close_registered_resources()
 

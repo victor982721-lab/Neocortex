@@ -159,7 +159,7 @@ como identidad no criptográfica de datos propios; no prueban autenticidad.
 
 `duplicate` exige un `canonical_resource_id` distinto. La fusión excluye
 recursos marcados explícitamente como duplicados exactos, pero no convierte
-similitud ni una huella por sí sola en identidad. Inventory v8 no conserva si
+similitud ni una huella por sí sola en identidad. Inventory v9 no conserva si
 un plan se ejecutó con comparación byte a byte: sus miembros `redundant` se
 exponen como `inventory_planned_duplicate_unverified`, no se marcan
 `duplicate` ni se filtran. El resultado queda parcial y se abstiene de afirmar
@@ -192,7 +192,7 @@ control.
 | `audio` | `audio.sqlite3` | 1 | Conteo, último `updated_ns` y run; no generacional. | FTS de transcripción y segmentos semantic. |
 | `image` | `image.sqlite3` | 5 | Conteo, último `updated_ns` y run; no generacional. | Imagen y OCR retenido mediante semantic cuando están publicados. |
 | `semantic` | `semantic.sqlite3` | 6 | Head `ready` por firma de modelo. | Texto e imagen por espacio/modelo publicado, resueltos contra la revisión DB-local vigente. |
-| `code` | `code.sqlite3` | 2 | Archivos actuales, última versión y último run; `best_effort_non_generational`. | FTS, exact typed, estructura, símbolos, relaciones owner-local y chunks semantic. |
+| `code` | `code.sqlite3` | 2 | Archivos actuales, última versión y último run; `best_effort_non_generational`. | FTS, exact typed, estructura, símbolos, relaciones owner-local y enlaces exactos a chunks Semantic publicados. |
 
 Los watermarks no generacionales son detectores acotados de cambio, no una
 publicación equivalente a inventario, catálogo o semantic. En particular,
@@ -469,6 +469,15 @@ decimal canónico dentro del rango SQLite, exige `version_id`, identidad física
 versión actual y `chunk kind` exactos, y recupera ese `code_chunk`. Un ID
 inválido, chunk ausente o revisión cambiada se omite; nunca cae silenciosamente
 al primer chunk del archivo.
+
+La ruta Code directa añade el contrato persistente inverso: después de una
+publicación textual completa, `code.embedding_links` fija item, modelo, espacio
+y generación por chunk. Un hit de `search_code` sólo cruza el puente cuando esa
+fila está activa y coincide exactamente con el head Semantic y la versión Code
+vigente. Knowledge conserva su ranking `semantic_text` como owner Semantic y su
+ranking `code_structural` sin reentrar a Semantic; los enlaces permiten que la
+superficie Code híbrida sea útil sin confundir ni duplicar esos propietarios.
+Los scores siguen sin calibrar y sólo transportan evidencia de recuperación.
 
 ### Relaciones reales de código
 
@@ -748,10 +757,21 @@ Limitaciones abiertas:
 - Semantic es opcional. Sólo usa modelos locales ya preparados y heads
   publicados; si faltan, el ranking se declara indisponible. La búsqueda es
   exacta, comparte un presupuesto total `max_vectors` y no tiene ANN. Knowledge
-  `discovery` ya transporta `semantic_title` sin convertirlo en evidencia, pero
-  su calibración cross-owner sigue abierta: la muestra de 35 PDF mejoró recall
-  y `Hit@10`, aunque no sostuvo todas las barreras de MRR/FamilyRecall. El cuerpo
-  continúa siendo la única evidencia citable y clasificable.
+  `discovery` ya transporta `semantic_title` sin convertirlo en evidencia. El
+  contrato Jina/body exacto aplica pisos iniciales separados para PDF (`0.50`) y
+  Code (`0.46`) y reporta las exclusiones como abstención calibrada; títulos,
+  otros owners, modelos o backends no heredan esos cortes. Los vectores
+  reutilizados conservan el contrato en `payload_provenance`; un conflicto de
+  procedencia se mantiene explícitamente sin calibrar.
+  En el piloto combinado de 35 PDF y 30 archivos Code, 12 consultas/18 targets
+  obtuvieron `5/18` con FTS, `16/18` con cuerpo+FTS y `17/18` con
+  `discovery`+título; esta última variante logró 12/12 Hit@5, MRR `0.9167` y
+  cero títulos como evidencia. Tres consultas fuera de dominio sí se
+  abstuvieron con FTS; la campaña posterior añadió positivos, fuera de dominio y
+  negativos cercanos para fijar esos pisos sin perder los targets etiquetados.
+  Algunos negativos técnicamente cercanos permanecen por encima del piso, por
+  lo que el score sigue siendo similitud de recuperación, no probabilidad ni
+  certeza. El cuerpo continúa siendo la única evidencia citable y clasificable.
 - Los seriales exactos son `unsupported`. Las coincidencias exactas de Inventory
   y code se reportan `partial` porque no ofrecen una publicación as-of
   inmutable.
@@ -761,7 +781,7 @@ Limitaciones abiertas:
 - Las relaciones owner-local de código son productivas, pero el grafo
   transversal y la temporalidad uniforme sólo aparecen como planes no
   disponibles. No existe un knowledge graph transversal generacional.
-- Inventory v8 no persiste `verification_mode`: una relación
+- Inventory v9 no persiste `verification_mode`: una relación
   `planned_duplicate_of` no prueba duplicación exacta. El caso golden
   `exact_duplicate` prueba la política de fusión con una disposición scripted,
   no que el owner productivo pueda inferirla.

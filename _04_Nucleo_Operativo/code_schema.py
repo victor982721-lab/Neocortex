@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat as stat_module
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -433,11 +436,50 @@ def code_database(
     readonly: bool = False,
     create: bool = True,
 ):
+    if readonly:
+        with readonly_code_database(path) as connection:
+            yield connection
+        return
     connection = connect_code_state(path, readonly=readonly, create=create)
     try:
         yield connection
     finally:
         connection.close()
+
+
+@contextmanager
+def readonly_code_database(
+    path: Path,
+    *,
+    connect: Callable[..., sqlite3.Connection] = connect_code_state,
+    close_connection: bool = True,
+):
+    """Read Code without recreating sidecars when its main file is quiescent.
+
+    An already active WAL/SHM remains owned by SQLite and is read normally.
+    No read path checkpoints, removes, or treats a racing writer as quiescent.
+    """
+
+    if not callable(connect):
+        raise TypeError("Code read connector must be callable")
+    if not isinstance(close_connection, bool):
+        raise TypeError("close_connection must be a boolean")
+    selected = Path(path)
+    sidecars = (Path(f"{selected}-wal"), Path(f"{selected}-shm"))
+    if connect is connect_code_state and not any(
+        os.path.lexists(sidecar) for sidecar in sidecars
+    ):
+        from .self_analysis_status import quiescent_sqlite_database
+
+        with quiescent_sqlite_database(selected) as connection:
+            yield connection
+        return
+    connection = connect(selected, readonly=True, create=False)
+    try:
+        yield connection
+    finally:
+        if close_connection:
+            connection.close()
 
 
 def _execute(connection: sqlite3.Connection, statements: tuple[str, ...]) -> None:
@@ -591,14 +633,66 @@ def initialize_code_state(path: Path) -> None:
         connection.close()
 
 
+def checkpoint_code_wal(
+    connection: sqlite3.Connection,
+    *,
+    error_type: type[RuntimeError] = RuntimeError,
+) -> None:
+    """Checkpoint a completed Code publication before quiescent diagnostics."""
+
+    row = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if row is None or len(row) != 3:
+        raise error_type("Code WAL checkpoint returned no bounded result")
+    busy, remaining, checkpointed = (int(value) for value in row)
+    if busy or remaining != checkpointed:
+        raise error_type("Code WAL checkpoint could not make publication quiescent")
+
+
+def remove_checkpointed_code_sidecars(
+    code_path: Path,
+    *,
+    error_type: type[RuntimeError] = RuntimeError,
+    require_removal: bool = True,
+) -> bool:
+    """Remove only regular reconstructible sidecars after a verified empty WAL."""
+
+    sidecars = (Path(f"{code_path}-wal"), Path(f"{code_path}-shm"))
+    wal = sidecars[0]
+    if os.path.lexists(wal):
+        wal_metadata = os.lstat(wal)
+        if not stat_module.S_ISREG(wal_metadata.st_mode) or wal.is_symlink():
+            raise error_type("Code WAL sidecar is not a regular file")
+        if wal_metadata.st_size != 0:
+            raise error_type("Code WAL still contains frames after checkpoint")
+    removed = True
+    for sidecar in sidecars:
+        if not os.path.lexists(sidecar):
+            continue
+        metadata = os.lstat(sidecar)
+        if not stat_module.S_ISREG(metadata.st_mode) or sidecar.is_symlink():
+            raise error_type("Code SQLite sidecar is not a regular file")
+        try:
+            sidecar.unlink()
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            if require_removal:
+                raise
+            removed = False
+    return removed
+
+
 # endregion [03]
 
 
 __all__ = [
     "CODE_SCHEMA_VERSION",
+    "checkpoint_code_wal",
     "code_database",
     "code_schema_contract",
     "connect_code_state",
     "initialize_code_state",
+    "remove_checkpointed_code_sidecars",
+    "readonly_code_database",
     "validate_code_schema",
 ]

@@ -50,6 +50,7 @@ $Root = Join-Path $HOME 'Neocortex\Repository'
 $State = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\smokes\run-id'
 Neocortex --self-analysis --root $Root --state-directory $State
 Neocortex --state-directory $State --code-status --code-json
+Neocortex --state-directory $State --code-review
 ```
 
 El manifest no guarda una cadena para reinterpretar en un shell. Guarda dos
@@ -69,13 +70,15 @@ instalación canónica.
 
 Full scan y reconciliación USN consumen el mismo
 `InventoryExclusionPolicy`. El perfil excluye explícitamente el directorio de
-estado, `<ROOT>\.codex-lab` y `<ROOT>\docs\audit_evidence`; también excluye
-VCS, entornos, cachés, build/dist/target/out, cobertura, vendored, temporales,
-backups, bytecode, logs y bases SQLite mediante reglas acotadas que se guardan
-completas en el manifest.
+estado, `<ROOT>\.codex-lab`, `<ROOT>\docs\audit_evidence`,
+`<ROOT>\Laboratory`, el `*.egg-info` canónico y los directorios transitorios de
+pruebas detectados de forma acotada en la raíz (`.pytest-*` y `.test-tmp*`).
+También excluye VCS, entornos, cachés, build/dist/target/out, cobertura,
+vendored, temporales, backups, bytecode, logs y bases SQLite mediante reglas
+acotadas que se guardan completas en el manifest.
 
 La firma pública de esa política tiene la forma
-`inventory-exclusion-policy-v1:xxh3_128:<digest>`. XXH3 es una identidad de
+`inventory-exclusion-policy-v2:xxh3_128:<digest>`. XXH3 es una identidad de
 configuración no criptográfica; no es autenticación. Cambiar cualquier regla,
 raíz explícita o versión cambia la firma y bloquea la reutilización de estado
 incompatible.
@@ -89,7 +92,7 @@ propietarios:
    `analyze_only`, tiene la misma firma de política y conserva la misma
    identidad física; no se retrocede a un run histórico compatible si el más
    reciente no coincide;
-2. el checkpoint publicado por Dedup v8 es válido, referencia exactamente el
+2. el checkpoint publicado por Dedup v9 es válido, referencia exactamente el
    mismo `scan_id`, firma cruda de exclusión y cursor durable, y el scan
    completo conserva raíz, identidad y conteo de archivos coherentes;
 3. la raíz viva mantiene identidad y el cursor USN vivo es compatible con el
@@ -98,6 +101,17 @@ propietarios:
 Si una evidencia falta o discrepa, `allow_incremental=False` fuerza un scan
 completo sin invalidar el checkpoint existente. Por tanto, un checkpoint
 publicado por un run que después falló no basta para autorizar incremental.
+
+Si la consulta inicial del journal falla por acceso o indisponibilidad, el
+autoanálisis ejecuta un único recorrido completo portable sin reconciliación
+USN. En ese modo persiste nulos `journal_volume`, `journal_id`, `start_usn` y
+`end_usn`, no publica checkpoint y registra `journal.status=unavailable`. No es
+un snapshot atómico ni se presenta como inventario incremental. La ruta `code`
+sí conserva su caché por identidad/metadatos, de modo que un replay sin cambios
+relee el árbol pero no vuelve a extraer ni analizar contenido. La corrida normal
+usa la misma enumeración portable cuando USN no está disponible, pero sí publica
+un checkpoint Dedup v9 con cursor nulo para que sus consumidores comparen el
+snapshot contra sus caches; USN es sólo un acelerador opcional.
 
 ## Ceros durables y guards de mutación
 
@@ -119,12 +133,13 @@ permisivo. Las primitivas físicas mantienen sus preflights identity-bound y
 ## Manifest y status estrictamente read-only
 
 La finalización publica un único
-`neocortex.self-analysis-manifest/v1`, limitado a 256 KiB, en el evento
+`neocortex.self-analysis-manifest/v2`, limitado a 256 KiB, en el evento
 `self-analysis-manifest`. Run completado y manifest se confirman juntos. El
 documento liga:
 
 - run, modo, raíz, identidad y estado;
-- scan, modo de inventario, cursores USN, reglas y firma de política;
+- scan, modo de inventario, journal disponible con cursores o estado
+  `unavailable`, reglas y firma de política;
 - ruta `code`, `input_source=inventory_snapshot`, firma y summary efectivos;
 - los cuatro conteos de seguridad en cero;
 - los dos arrays argv canónicos.
@@ -137,12 +152,77 @@ raíz, vínculo code/framework, checkpoint de inventario y estado del journal
 (`unchanged`, `advanced`, `discontinuous` o `unavailable`); `current=true`
 requiere todas las cercas positivas y journal sin cambios.
 
+El decoder conserva lectura estricta del manifest histórico v1. Un manifest v2
+con journal no disponible puede ser válido como evidencia de una corrida
+completada, pero necesariamente expone
+`inventory_checkpoint_current=false`, `journal_status=unavailable` y
+`current=false`.
+
 Este status no crea, migra, repara ni hace checkpoint. Abre cada SQLite como
 `mode=ro&immutable=1`, activa `query_only`, y compara identidad, tamaño y mtime
 antes y después. La presencia de `-wal`, `-shm` o `-journal` junto a
 `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3` —incluso un auxiliar vacío
 o desacoplado— o una cerca inestable en cualquiera de ellas causa abstención
 total con código `2`. No emite una vista parcial ni crea sidecars.
+
+## Revisión determinista de la publicación
+
+`--code-review` es el primer consumidor de mantenimiento del autoanálisis. No
+se combina con `--self-analysis`: el productor debe completar y publicar
+primero; después, la consulta lee ese snapshot con las mismas cercas estrictas.
+No crea bases, no migra, no hace checkpoint y no modifica código ni estado.
+
+```powershell
+Neocortex --state-directory $State --code-review
+Neocortex --state-directory $State --code-review --code-json
+```
+
+El contrato `neocortex.code-review/v1` selecciona sólo diagnósticos Python
+confirmados `high_complexity` y `long_function`. Enumera hasta 10 000 hotspots,
+ordena con enteros deterministas y devuelve como máximo 10, primero uno por
+archivo y luego un segundo hasta completar. La puntuación es:
+
+```text
+max(complexity_bp, length_bp)
++ floor(min(complexity_bp, length_bp) / 4)
++ 250 * min(callers_estáticos_resueltos, 20)
+```
+
+Cada razón conserva rango, firma, fingerprints del archivo, versión del
+analizador, valor/umbral y hasta tres callers resueltos. El score prioriza
+inspección; no representa probabilidad, riesgo calibrado ni autorización para
+refactorizar. Cero hallazgos es una respuesta válida y exitosa.
+
+`probable_dead_symbol` se informa únicamente como conteo suprimido. La
+resolución estática no observa dispatch dinámico y todavía deja llamadas sin
+resolver; recomendar borrado con esa señal produciría falsos positivos. Debe
+calibrarse contra decisiones representativas antes de habilitarse como finding.
+
+El analizador Python conserva además el binding léxico de imports y aliases. El
+resolvedor sólo lo usa cuando no existe shadowing local: primero exige un
+qualified name único y, si el nombre procede de una fachada interna, permite un
+único salto confirmado por `import_binding` o por un submódulo físico único del
+paquete. Imports externos, aliases ambiguos, comprehensions y nombres
+redefinidos permanecen sin enlazar. El porcentaje global de calls resueltas es
+descriptivo —su denominador incluye builtins, APIs externas y dispatch
+dinámico— y no debe convertirse en objetivo aislado de calidad.
+
+La primera calibración de actionability vive en
+`tests/fixtures/code_review/rc6_top10_actionability_v1.json`. Fija exactamente
+los diez resultados y su score, con seis `actionable` y cuatro `defer`
+(`Precision@10` provisional de 0.60). Es revisión estática reproducible, no
+ground truth humano; sirve para impedir que pesos nuevos se acepten por
+intuición y para evidenciar que builders declarativos como `build_parser`
+pueden ser largos sin constituir el siguiente refactor prudente.
+
+La consulta exige manifest válido, último run Code completado e identidades de
+raíz/framework ligadas. Un snapshot full terminado con journal no disponible
+puede leerse como `freshness=publication_only`, `current=false` y limitación
+explícita: demuestra qué se publicó, no que el árbol vivo no cambió después.
+Journal `advanced`/`discontinuous`, vínculo incompatible, sidecars o schema no
+admitido causan abstención con código `2`. El digest excluye timestamps e IDs
+SQLite de corrida para que un replay sin cambios conserve identidad de
+contenido.
 
 ## Mini-root de laboratorio
 
@@ -156,6 +236,7 @@ $MiniState = Join-Path $Lab 'mini-state'
 
 Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState --code-max-count 100
 Neocortex --state-directory $MiniState --code-status --code-json
+Neocortex --state-directory $MiniState --code-review --code-json
 ```
 
 El ejemplo presupone que un fixture sintético ya creó `$MiniRoot`; no autoriza

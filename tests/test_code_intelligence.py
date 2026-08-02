@@ -34,7 +34,14 @@ from _04_Nucleo_Operativo.code_detection import classify_artifact, decode_text
 from _04_Nucleo_Operativo.code_generic import GenericAnalyzer
 from _04_Nucleo_Operativo.code_projects import list_projects, reconstruct_project
 from _04_Nucleo_Operativo.code_route import CodeRoute
-from _04_Nucleo_Operativo.code_schema import CODE_SCHEMA_VERSION, initialize_code_state
+from _04_Nucleo_Operativo.code_schema import (
+    CODE_SCHEMA_VERSION,
+    checkpoint_code_wal,
+    code_database,
+    connect_code_state,
+    initialize_code_state,
+    remove_checkpointed_code_sidecars,
+)
 from _04_Nucleo_Operativo.code_search import search_code
 from _04_Nucleo_Operativo.code_state import (
     CODE_GRAPH_RESOLVER_SIGNATURE,
@@ -45,6 +52,65 @@ from _04_Nucleo_Operativo.sqlite_cancellation import (
     CancellationCheck,
     SQLiteCancellationBridge,
 )
+
+
+def test_quiescent_code_reads_do_not_recreate_sqlite_sidecars(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "code.sqlite3"
+    initialize_code_state(database)
+    writer = connect_code_state(database, create=False)
+    try:
+        checkpoint_code_wal(writer)
+    finally:
+        writer.close()
+    remove_checkpointed_code_sidecars(database)
+    sidecars = tuple(Path(f"{database}{suffix}") for suffix in ("-wal", "-shm"))
+    assert not any(path.exists() for path in sidecars)
+
+    with code_database(database, readonly=True) as connection:
+        assert int(connection.execute("PRAGMA query_only").fetchone()[0]) == 1
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == (
+            CODE_SCHEMA_VERSION
+        )
+    assert (
+        search_code(
+            database,
+            CodeSearchQuery(text="absent", modes=("literal",), limit=5),
+        )
+        == ()
+    )
+    assert list_projects(database) == ()
+
+    assert not any(path.exists() for path in sidecars)
+
+
+def test_readonly_code_path_never_removes_active_writer_sidecars(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "code.sqlite3"
+    initialize_code_state(database)
+    writer = connect_code_state(database, create=False)
+    try:
+        writer.execute(
+            """INSERT INTO metadata(key,value) VALUES('reader-fixture','current')
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value"""
+        )
+        writer.commit()
+        sidecars = tuple(Path(f"{database}{suffix}") for suffix in ("-wal", "-shm"))
+        assert all(path.exists() for path in sidecars)
+
+        with code_database(database, readonly=True) as connection:
+            assert (
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key='reader-fixture'"
+                ).fetchone()[0]
+                == "current"
+            )
+
+        assert all(path.exists() for path in sidecars)
+    finally:
+        writer.close()
 
 
 # region [01] Deterministic collaborators
@@ -164,7 +230,12 @@ def _track_graph_finalization(
         ("Cargo.toml", "[package]\nname='x'\n", "toml", ArtifactKind.MANIFEST),
         ("settings.yaml", "enabled: true\n", "yaml", ArtifactKind.CONFIG),
         ("README.md", "```python\npass\n```\n", "markdown", ArtifactKind.DOCUMENTATION),
-        ("generated/client.ts", "// generated file\n", "typescript", ArtifactKind.GENERATED),
+        (
+            "generated/client.ts",
+            "// generated file\n",
+            "typescript",
+            ArtifactKind.GENERATED,
+        ),
         ("vendor/lib.go", "package lib\n", "go", ArtifactKind.VENDORED),
     ),
 )
@@ -210,7 +281,7 @@ def test_route_is_incremental_searchable_and_does_not_modify_sources(
         project / "db.py": (
             "import sqlite3\n\n"
             "def validate_sqlite_access(path: str) -> bool:\n"
-            "    \"\"\"Validate access to SQLite.\"\"\"\n"
+            '    """Validate access to SQLite."""\n'
             "    with sqlite3.connect(path) as connection:\n"
             "        return connection.execute('PRAGMA quick_check').fetchone()[0] == 'ok'\n"
         ),
@@ -232,7 +303,10 @@ def test_route_is_incremental_searchable_and_does_not_modify_sources(
     assert first.projects == 1
     assert second.cache_hits == 3
     assert second.processed == 0
+    assert second.diagnostics == first.diagnostics
     assert original == {path: path.read_bytes() for path in sources}
+    assert not Path(f"{config.state_path}-wal").exists()
+    assert not Path(f"{config.state_path}-shm").exists()
     assert framework_state.phases[-4:] == [
         ("analysis", "running"),
         ("analysis", "completed"),
@@ -246,9 +320,7 @@ def test_route_is_incremental_searchable_and_does_not_modify_sources(
     )
     definitions = search_code(
         config.state_path,
-        CodeSearchQuery(
-            text="validate_sqlite_access", modes=("definition",), limit=5
-        ),
+        CodeSearchQuery(text="validate_sqlite_access", modes=("definition",), limit=5),
     )
     diagnostics = search_code(
         config.state_path,
@@ -257,19 +329,317 @@ def test_route_is_incremental_searchable_and_does_not_modify_sources(
         ),
     )
 
-    assert any("fts" in hit.match_types and hit.path.endswith("db.py") for hit in hybrid)
+    assert any(
+        "fts" in hit.match_types and hit.path.endswith("db.py") for hit in hybrid
+    )
     assert definitions[0].symbol == "db.validate_sqlite_access"
     assert diagnostics[0].path.endswith("invalid.py")
     assert diagnostics[0].analysis_status == "partial"
-    semantic_records = tuple(
-        iter_text_source_records(config.state_path.parent, "code")
-    )
+    semantic_records = tuple(iter_text_source_records(config.state_path.parent, "code"))
     assert semantic_records
     assert all(record.item.source_kind == "code" for record in semantic_records)
     assert any(
         record.section.provenance.get("language") == "python"
         and "validate_sqlite_access" in record.section.text
         for record in semantic_records
+    )
+
+
+def test_relative_imports_resolve_by_package_path_without_basename_guessing(
+    tmp_path: Path,
+) -> None:
+    sources = {
+        tmp_path / "alpha" / "__init__.py": "",
+        tmp_path / "alpha" / "models.py": "VALUE = 'alpha'\n",
+        tmp_path / "alpha" / "helper.py": "def assist():\n    return True\n",
+        tmp_path / "alpha" / "consumer.py": (
+            "from .models import VALUE\n"
+            "from . import helper\n"
+            "\n"
+            "def consume():\n"
+            "    return VALUE, helper.assist()\n"
+        ),
+        tmp_path / "beta" / "__init__.py": "",
+        tmp_path / "beta" / "models.py": "VALUE = 'beta'\n",
+        tmp_path / "beta" / "consumer.py": "from .models import VALUE\n",
+        tmp_path / "nested" / "__init__.py": "",
+        tmp_path / "nested" / "shared.py": "VALUE = 'shared'\n",
+        tmp_path / "nested" / "pkg" / "__init__.py": "",
+        tmp_path / "nested" / "pkg" / "consumer.py": (
+            "from ..shared import VALUE\nfrom .absent import missing\n"
+        ),
+    }
+    for path, text in sources.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    config = _config(tmp_path)
+
+    summary = CodeRoute(
+        config,
+        _Inventory(sources),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    with sqlite3.connect(config.state_path) as connection:
+        rows = connection.execute(
+            """SELECT source.current_path,d.name,target.current_path
+            FROM dependencies d
+            JOIN file_versions v ON v.version_id=d.version_id
+            JOIN files source ON source.file_id=v.file_id
+            LEFT JOIN file_versions resolved
+                ON resolved.version_id=d.resolved_version_id
+            LEFT JOIN files target ON target.file_id=resolved.file_id
+            WHERE d.kind='python_relative_import'
+            ORDER BY source.current_path,d.name"""
+        ).fetchall()
+        unresolved = connection.execute(
+            """SELECT source.current_path FROM diagnostics diagnostic
+            JOIN file_versions v ON v.version_id=diagnostic.version_id
+            JOIN files source ON source.file_id=v.file_id
+            WHERE diagnostic.code='unresolved_relative_import'
+            ORDER BY source.current_path"""
+        ).fetchall()
+
+    by_source_and_name = {
+        (Path(str(source)).relative_to(tmp_path).as_posix(), str(name)): (
+            None
+            if target is None
+            else Path(str(target)).relative_to(tmp_path).as_posix()
+        )
+        for source, name, target in rows
+    }
+    assert summary.processed == summary.candidates == len(sources)
+    assert by_source_and_name == {
+        ("alpha/consumer.py", ".helper"): "alpha/helper.py",
+        ("alpha/consumer.py", ".models"): "alpha/models.py",
+        ("beta/consumer.py", ".models"): "beta/models.py",
+        ("nested/pkg/consumer.py", "..shared"): "nested/shared.py",
+        ("nested/pkg/consumer.py", ".absent"): None,
+    }
+    assert [
+        Path(str(row[0])).relative_to(tmp_path).as_posix() for row in unresolved
+    ] == ["nested/pkg/consumer.py"]
+
+
+def test_scoped_private_calls_resolve_before_global_name_union(tmp_path: Path) -> None:
+    source_text = (
+        "def _helper():\n"
+        "    return True\n"
+        "\n"
+        "class Worker:\n"
+        "    def _step(self):\n"
+        "        return _helper()\n"
+        "\n"
+        "    def run(self):\n"
+        "        return self._step()\n"
+    )
+    sources = (tmp_path / "alpha.py", tmp_path / "beta.py")
+    for path in sources:
+        path.write_text(source_text, encoding="utf-8")
+    config = _config(tmp_path)
+
+    CodeRoute(
+        config,
+        _Inventory(sources),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    with sqlite3.connect(config.state_path) as connection:
+        resolved = connection.execute(
+            """SELECT source.current_path,r.name,target.qualified_name
+            FROM code_references r
+            JOIN file_versions source_version
+                ON source_version.version_id=r.version_id
+            JOIN files source ON source.file_id=source_version.file_id
+            LEFT JOIN symbols target ON target.symbol_id=r.target_symbol_id
+            WHERE r.name IN ('_helper','self._step')
+            ORDER BY source.current_path,r.name"""
+        ).fetchall()
+        probable_dead = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM diagnostics
+                WHERE code='probable_dead_symbol'"""
+            ).fetchone()[0]
+        )
+
+    assert [
+        (
+            Path(str(source)).relative_to(tmp_path).as_posix(),
+            str(name),
+            str(target),
+        )
+        for source, name, target in resolved
+    ] == [
+        ("alpha.py", "_helper", "alpha._helper"),
+        ("alpha.py", "self._step", "alpha.Worker._step"),
+        ("beta.py", "_helper", "beta._helper"),
+        ("beta.py", "self._step", "beta.Worker._step"),
+    ]
+    assert probable_dead == 0
+
+
+def test_python_import_alias_calls_resolve_without_crossing_shadowed_names(
+    tmp_path: Path,
+) -> None:
+    helper = tmp_path / "helper.py"
+    helper.write_text(
+        "def direct():\n"
+        "    return True\n"
+        "\n"
+        "class Worker:\n"
+        "    @staticmethod\n"
+        "    def build():\n"
+        "        return True\n",
+        encoding="utf-8",
+    )
+    package = tmp_path / "pkg"
+    package.mkdir()
+    package_init = package / "__init__.py"
+    package_init.write_text(
+        "from helper import direct as exported\n",
+        encoding="utf-8",
+    )
+    package_helper = package / "helper.py"
+    package_helper.write_text(
+        "def package_direct():\n    return True\n",
+        encoding="utf-8",
+    )
+    facade = tmp_path / "facade.py"
+    facade.write_text(
+        "from helper import Worker as ExportedWorker\n",
+        encoding="utf-8",
+    )
+    consumer = tmp_path / "consumer.py"
+    consumer.write_text(
+        "from helper import direct as aliased_direct\n"
+        "import helper as helper_alias\n"
+        "from helper import Worker as AliasWorker\n"
+        "from helper import direct as shadowed\n"
+        "from helper import direct as rebound\n"
+        "from pkg import exported as package_alias\n"
+        "from pkg import helper as package_module\n"
+        "from facade import ExportedWorker as FacadeWorker\n"
+        "from external_pkg import direct as external_direct\n"
+        "rebound = lambda: False\n"
+        "\n"
+        "def direct():\n"
+        "    return False\n"
+        "\n"
+        "def via_from():\n"
+        "    return aliased_direct()\n"
+        "\n"
+        "def via_module():\n"
+        "    return helper_alias.direct()\n"
+        "\n"
+        "def via_class():\n"
+        "    return AliasWorker.build()\n"
+        "\n"
+        "def via_local_import():\n"
+        "    from helper import direct as inner\n"
+        "    return inner()\n"
+        "\n"
+        "def via_package_reexport():\n"
+        "    return package_alias()\n"
+        "\n"
+        "def via_module_reexport():\n"
+        "    return FacadeWorker.build()\n"
+        "\n"
+        "def via_package_submodule():\n"
+        "    return package_module.package_direct()\n"
+        "\n"
+        "def external_collision():\n"
+        "    return external_direct()\n"
+        "\n"
+        "def parameter_shadow(shadowed):\n"
+        "    return shadowed()\n"
+        "\n"
+        "def module_rebound():\n"
+        "    return rebound()\n",
+        encoding="utf-8",
+    )
+    config = _config(tmp_path)
+
+    CodeRoute(
+        config,
+        _Inventory((helper, package_init, package_helper, facade, consumer)),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    with sqlite3.connect(config.state_path) as connection:
+        rows = connection.execute(
+            """SELECT r.name,r.target_hint,r.evidence,target.qualified_name
+            FROM code_references r
+            JOIN file_versions source_version ON source_version.version_id=r.version_id
+            JOIN files source ON source.file_id=source_version.file_id
+            LEFT JOIN symbols target ON target.symbol_id=r.target_symbol_id
+            WHERE source.current_path=? AND r.kind='call'
+            ORDER BY r.start_line""",
+            (str(consumer),),
+        ).fetchall()
+
+    by_name = {
+        str(name): (
+            str(target_hint),
+            str(evidence),
+            None if target is None else str(target),
+        )
+        for name, target_hint, evidence, target in rows
+    }
+    assert by_name["aliased_direct"] == (
+        "helper.direct",
+        "python-ast:call-expression-import-bound",
+        "helper.direct",
+    )
+    assert by_name["helper_alias.direct"] == (
+        "helper.direct",
+        "python-ast:call-expression-import-bound",
+        "helper.direct",
+    )
+    assert by_name["AliasWorker.build"] == (
+        "helper.Worker.build",
+        "python-ast:call-expression-import-bound",
+        "helper.Worker.build",
+    )
+    assert by_name["inner"] == (
+        "helper.direct",
+        "python-ast:call-expression-import-bound",
+        "helper.direct",
+    )
+    assert by_name["package_alias"] == (
+        "pkg.exported",
+        "python-ast:call-expression-import-bound",
+        "helper.direct",
+    )
+    assert by_name["FacadeWorker.build"] == (
+        "facade.ExportedWorker.build",
+        "python-ast:call-expression-import-bound",
+        "helper.Worker.build",
+    )
+    assert by_name["package_module.package_direct"] == (
+        "pkg.helper.package_direct",
+        "python-ast:call-expression-import-bound",
+        "helper.package_direct",
+    )
+    assert by_name["external_direct"] == (
+        "external_pkg.direct",
+        "python-ast:call-expression-import-bound",
+        None,
+    )
+    assert by_name["shadowed"] == (
+        "shadowed",
+        "python-ast:call-expression",
+        None,
+    )
+    assert by_name["rebound"] != (
+        "helper.direct",
+        "python-ast:call-expression-import-bound",
+        "helper.direct",
     )
 
 
@@ -546,8 +916,7 @@ def test_cancelled_sqlite_graph_preserves_fence_and_rebuilds_later(
         marker_after_recovery = json.loads(
             str(
                 connection.execute(
-                    "SELECT value FROM metadata "
-                    "WHERE key='code_graph_completion_v3'"
+                    "SELECT value FROM metadata WHERE key='code_graph_completion_v3'"
                 ).fetchone()[0]
             )
         )
@@ -670,9 +1039,12 @@ def test_run_completion_compare_and_swap_rejects_non_running_owners(
                 partial=False,
                 graph_current=True,
             )
-        assert state.connection.execute(
-            "SELECT value FROM metadata WHERE key='code_graph_completion_v3'"
-        ).fetchone() is None
+        assert (
+            state.connection.execute(
+                "SELECT value FROM metadata WHERE key='code_graph_completion_v3'"
+            ).fetchone()
+            is None
+        )
 
         completed = state.begin_run(2, 2, "fixture-signature")
         state.complete_run(
@@ -1064,7 +1436,9 @@ def test_excluded_generated_and_vendored_files_remain_full_reconciliation(
     assert statuses == [("missing", 2)]
 
 
-def test_binary_and_oversized_candidates_are_bounded_and_versioned(tmp_path: Path) -> None:
+def test_binary_and_oversized_candidates_are_bounded_and_versioned(
+    tmp_path: Path,
+) -> None:
     binary = tmp_path / "binary.py"
     oversized = tmp_path / "huge.rs"
     binary.write_bytes(b"\x00\x01\x02not-source")
@@ -1331,9 +1705,7 @@ def test_manifest_name_change_relabels_cached_sources(tmp_path: Path) -> None:
     assert second.cache_hits == 1
     assert second.processed == second.invalidated_versions == 1
     assert projects == [("new-long-name", "current"), ("old-name", "historical")]
-    assert source_membership == [
-        ("new-long-name", "current", "under_manifest_root")
-    ]
+    assert source_membership == [("new-long-name", "current", "under_manifest_root")]
     assert source_fts == [("new-long-name",)]
 
 
@@ -1344,7 +1716,10 @@ def test_code_schema_is_versioned_and_exactly_initialized(tmp_path: Path) -> Non
     initialize_code_state(state_path)
 
     with sqlite3.connect(state_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == CODE_SCHEMA_VERSION
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CODE_SCHEMA_VERSION
+        )
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
         ).fetchone()[0] == str(CODE_SCHEMA_VERSION)

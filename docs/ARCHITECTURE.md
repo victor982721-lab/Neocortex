@@ -90,7 +90,7 @@ conocimiento se documentan en [KNOWLEDGE.md](KNOWLEDGE.md).
                      │
        ┌─────────────┴─────────────────────────────┐
        │                                           │
- enumeración NTFS/USN                       rutas de contenido
+ enumeración portable + USN opcional        rutas de contenido
        │                               ┌────┬────┬────┬────┬────┐
  inventario y deduplicación            PDF DOCX Office Audio Image Code
        │                               └────┴────┴────┴────┴────┘
@@ -204,15 +204,17 @@ un consumidor dentro de la corrida integrada actual.
 Propietario del inventario común:
 
 - scans e inventarios;
-- checkpoints por raíz/volumen/journal;
+- publicaciones por raíz con cursor USN opcional;
 - fingerprints no criptográficos de contenido propio;
 - grupos y planes de duplicados;
 - comparación exacta inmediatamente antes de una mutación autorizada.
 
-El esquema fuente actual es v8. Conserva la clave `(scan_id, path)` y los scans
+El esquema fuente actual es v9. Conserva la clave `(scan_id, path)` y los scans
 `building`, `complete` y `partial` introducidos por v7, liga cada scan nuevo a
 su `inventory_policy_signature` y publica un checkpoint que referencia una
-generación completa. La migración histórica v6→v7 y la migración v7→v8 tienen
+generación completa. El cursor USN del checkpoint es opcional y sólo acelera
+la siguiente enumeración; la publicación portable sigue siendo consumible por
+Knowledge y Semantic. Las migraciones históricas v6→v7, v7→v8 y v8→v9 tienen
 regresiones específicas; los diagnósticos no migran una base existente y la
 actualización debe seguir el procedimiento respaldado de
 [PERSISTENCE.md](PERSISTENCE.md).
@@ -350,7 +352,7 @@ Una corrida normal sigue este orden lógico:
 3. inicializar esquemas y marcar runs/acciones abandonados según la política
    vigente;
 4. abrir el run común y su heartbeat;
-5. capturar el cursor USN inicial;
+5. intentar capturar el cursor USN inicial, sin exigirlo;
 6. preparar inventario completo o incremental y su checkpoint;
 7. construir el plan de deduplicación;
 8. ejecutar sólo las acciones expresamente autorizadas;
@@ -382,7 +384,7 @@ física el repositorio, runtime, datos de aplicación, autoanálisis y launcher;
 detecta aliases/reparses y el hardlink del launcher. Los árboles internos que
 quedan bajo un corpus permitido se excluyen, pero una raíz situada dentro de
 ellos se rechaza. El estado tampoco puede ser igual ni ancestro del corpus. La
-firma cruda de `InventoryExclusionPolicy` se guarda en Dedup v8; Framework y
+firma cruda de `InventoryExclusionPolicy` se guarda en Dedup v9; Framework y
 watcher usan la firma efectiva versionada que combina esa firma con la de
 `InternalPathsPolicy`.
 
@@ -396,17 +398,25 @@ validarlas y repite la frontera en los fences de E/S. No instancia el planner
 de duplicados, `FrameworkActions`, catálogo ni organización.
 
 El inventario completo y USN comparten una policy concreta y su firma
-`inventory-exclusion-policy-v1:xxh3_128:...`. La reutilización incremental se
+`inventory-exclusion-policy-v2:xxh3_128:...`. La reutilización incremental se
 autoriza sólo por la conjunción del último binding durable del framework, el
 checkpoint Dedup del mismo scan/cursor y la identidad/cursor vivos. Un fallo en
 cualquiera fuerza full scan sin invalidar el checkpoint; no se recupera una
 firma histórica detrás de un run durable más reciente incompatible.
 
+El autoanálisis admite además un full scan portable cuando USN es inaccesible.
+Ese camino no publica checkpoint, conserva nulos los cursores y falla cerrado
+en frescura. La corrida normal usa la misma enumeración portable y publica un
+checkpoint Dedup v9 con cursor nulo; sus consumidores obtienen incrementalidad
+comparando el snapshot contra caches por identidad y metadatos. USN es una
+optimización durable, no un requisito de corrección ni una identidad ficticia
+del fallback.
+
 Code consume directamente el scan publicado con cero `route_candidates`. La
 finalización adquiere una transacción propia y exige exactamente una ruta code
 completada, identidad vigente y ceros en candidatos, `file_actions`,
 `run_actions` y organización. El cambio del run a `completed` y el único
-manifest `neocortex.self-analysis-manifest/v1` se confirman juntos. Framework
+manifest `neocortex.self-analysis-manifest/v2` se confirman juntos. Framework
 v20 conserva modo, identidad, estado y firma; sus triggers y
 `CorpusMutationGuard` forman una segunda defensa en los propietarios de mutación.
 
@@ -490,23 +500,38 @@ En una corrida completa sin límite ni selección, `mark_missing` precede al
 grafo. Una finalización real elimina y reconstruye las membresías derivadas y
 sincroniza en una sola sentencia las etiquetas FTS vigentes realmente distintas
 mediante un mapa temporal indexado; las etiquetas históricas permanecen
-inmutables. El resolver v3 materializa conjuntos temporales indexados de
-símbolos y dependencias vigentes y resuelve por nombre cualificado o nombre
-simple sólo cuando la coincidencia es única. Los empates y ausencias permanecen
-ambiguos o no resueltos; no se fabrican aristas. Sólo se omite si no cambió
+inmutables. El resolver v4 materializa conjuntos temporales indexados de
+símbolos y dependencias vigentes. Primero enlaza llamadas dentro del mismo
+módulo o clase y módulos relativos por su ruta léxica exacta; después aplica el
+fallback global por nombre cualificado o simple sólo cuando la coincidencia es
+única. Los empates y ausencias permanecen ambiguos o no resueltos; no se
+fabrican aristas. Sólo se omite si no cambió
 ninguna entrada,
 todos los candidatos fueron cache hits compatibles con el runtime y un fence
-tipado `code-graph-resolver-v3` identifica exactamente el run completo
+tipado `code-graph-resolver-v4` identifica exactamente el run completo
 inmediatamente anterior con la misma firma. El fence avanza atómicamente con la
 finalización de ese `analysis_run`; ausencia, corrupción, run intermedio o la
 primera corrida sobre una base existente sin fence fallan cerrados hacia
 `finalize_graph`.
 
-El analizador Python `neocortex-python-ast` versión 2 sólo publica símbolos de
+El analizador Python `neocortex-python-ast` versión 3 conserva además el nivel y
+módulo de imports relativos —incluido `from . import módulo`— para que paquetes
+con basenames repetidos no se mezclen. Sólo publica símbolos de
 asignación para nombres realmente enlazados por objetivos `Name`,
 `Tuple`/`List` y `Starred`. Atributos y subscripts no crean símbolos globales o
 de clase espurios, y un nombre repetido en la misma asignación se conserva una
 sola vez.
+
+El puente Code↔Semantic conserva los propietarios separados. Una publicación
+textual completa de `source_kind=code` termina primero el head Semantic v6 y,
+bajo el lock común del framework, proyecta en `code.embedding_links` un enlace
+por chunk vigente. Cada enlace fija item Semantic, modelo, espacio vectorial,
+generación y procedencia; no existe FK ni transacción distribuida entre las dos
+bases. La proyección se construye completa en TEMP y falla antes de mutar si un
+miembro no resuelve exactamente por identidad, versión, índice y clase de chunk.
+La búsqueda Code acepta un hit semántico sólo si ese enlace sigue activo y la
+versión continúa vigente. Los enlaces de generaciones anteriores se conservan
+inactivos como historia reconstruible; no son evidencia publicada actual.
 
 `RouteAdapter` recibe un `RouteExecutionContext` con configuración, raíz,
 `run_id`, `scan_id`, estado corto de framework, cancelación y coordinador global.
@@ -609,19 +634,23 @@ La Knowledge Plane no es otro owner persistente: lee esas diez bases, conserva
 su snapshot y resultados sólo en memoria y no introduce una migración en
 `0.7.0`.
 
-En Dedup v8, `DedupIndex.published_snapshots(root)` es el lector público para
+En Dedup v9, `DedupIndex.published_snapshots(root)` es el lector público para
 recorrer la generación vigente: checkpoint y filas se seleccionan en una sola
 sentencia SQL y conservan el snapshot del lector ante una publicación y poda
 concurrentes. Cada scan nuevo conserva su firma cruda de exclusión. La migración
 7→8 preserva scans, archivos y bytes, pero invalida checkpoints legacy sin firma
-en vez de inventar evidencia. No combine por cuenta propia
+en vez de inventar evidencia; 8→9 conserva publicaciones y vuelve opcional el
+cursor USN como una terna indivisible. No combine por cuenta propia
 `inventory_checkpoint(root)` con `snapshots(scan_id)`; entre ambas llamadas otro
 writer puede publicar y podar la generación elegida.
 
 En semantic v6, cada `model_signature` tiene un único
 `published_embedding_heads`. Una generación `building` clona de forma acotada
-los miembros de la publicada, adjunta resultados a revisiones inmutables y sólo
-un cierre completo cambia el head dentro de la transacción de finalización. Un
+los miembros de una base fijada. El clon confirma por páginas un cursor durable
+con high-watermark y conteo; comparte el deadline del productor y reanuda el
+prefijo confirmado. Adjunta resultados a revisiones inmutables y sólo un cierre
+completo, después de revalidar la base, cambia el head dentro de la transacción
+de finalización. Un
 cierre parcial queda `ready_partial` y no publica; un CAS perdido obliga a
 rebase. Las búsquedas oficiales fijan los heads al inicio y resuelven hits desde
 sus miembros/revisiones congelados. El contenido y la identidad publicados
@@ -785,7 +814,7 @@ Los siguientes límites deben permanecer visibles:
   poblada/abstencionista, aislamiento, publicación, scan parcial, lectura
   concurrente, poda y cursor USN ambiguo; la barrera integral se registra
   aparte;
-- la poda vigente de v8 conserva generaciones `building` y candidatos `complete` aún no
+- la poda vigente de v9 conserva generaciones `building` y candidatos `complete` aún no
   publicados para evitar carreras; el planner dry-run diagnostica candidatos,
   pero todavía no ejecuta expiración/conciliación de un build abandonado;
 - semántica v6 y catálogo v6 aíslan el staging y publican por puntero/CAS para

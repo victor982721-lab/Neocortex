@@ -1,7 +1,7 @@
 # Persistencia, esquemas y migraciones
 
 > **Estado del documento.** Contrato actualizado el 31 de julio de 2026. El
-> árbol fuente `0.7.2` declara inventario Dedup v8, framework v20,
+> árbol fuente `0.7.2` declara inventario Dedup v9, framework v20,
 > catálogo v6 y semántica v6; la barrera integral y el paquete final se registran
 > por separado. En una auditoría histórica, bases vivas se inspeccionaron sin
 > migrarlas: dedup permanecía
@@ -55,7 +55,7 @@ mezcle bases de dos directorios de estado ni restaure una sola base sin revisar
 la compatibilidad del conjunto.
 
 `InternalPathsPolicy` captura ruta e identidad física de repositorio, runtime,
-datos de aplicación, autoanálisis y launcher. En una corrida normal, Dedup v8
+datos de aplicación, autoanálisis y launcher. En una corrida normal, Dedup v9
 guarda en cada scan la firma cruda de `InventoryExclusionPolicy`; Framework
 guarda la firma efectiva que combina esa evidencia con la firma versionada de
 rutas internas. Un estado igual o ancestro del corpus se rechaza porque su
@@ -197,7 +197,7 @@ inmutables.
 ### Inventario común
 
 `dedup.sqlite3` conserva la observación común que consumen el plan de duplicados
-y las rutas. En la fuente v8, `files` usa la clave `(scan_id, path)`, cada fila
+y las rutas. En la fuente v9, `files` usa la clave `(scan_id, path)`, cada fila
 pertenece a una generación, el scan conserva su firma cruda de inventario y el
 checkpoint referencia el scan publicado de una raíz. La base viva continuaba
 en v6, donde `files.path` era global; no fue migrada durante esa auditoría.
@@ -242,16 +242,21 @@ acción a su owner, vuelven inmutable la frontera y rechazan acciones para
 Un autoanálisis persiste un run `self_analysis/analyze_only`, publica el scan
 con cero candidatos y ejecuta una única ruta `code` desde
 `inventory_snapshot`. `complete_self_analysis_run()` abre `BEGIN IMMEDIATE`,
-vuelve a verificar policy, identidad, scan, cursores, una ruta completada y
+vuelve a verificar policy, identidad, scan, journal disponible o explícitamente
+no disponible, una ruta completada y
 ceros exactos en candidatos, acciones y organización. En la misma transacción
 cambia el owner a `completed` e inserta un único evento con el manifest
-`neocortex.self-analysis-manifest/v1`, limitado a 256 KiB.
+`neocortex.self-analysis-manifest/v2`, limitado a 256 KiB. El decoder conserva
+compatibilidad de lectura estricta con v1.
 
 El manifest contiene policy y firma
-`inventory-exclusion-policy-v1:xxh3_128:...`, evidencia code, conteos cero y
+`inventory-exclusion-policy-v2:xxh3_128:...`, evidencia code, conteos cero y
 argv `analyze`/`status` como arrays acotados. No es una tabla paralela ni una
 fuente independiente. `--code-status --code-json` lo vincula al último run de
 code y calcula frescura contra framework, checkpoint Dedup, identidad y USN.
+Sin acceso USN, las cuatro columnas del cursor permanecen nulas, no existe
+checkpoint para ese scan y el manifest registra `journal.status=unavailable`;
+por contrato nunca resulta `current=true`.
 Para evitar la incidencia histórica de sidecars, cada owner exige
 `mode=ro&immutable=1`, `query_only`, fences pre/post y ausencia de `-wal`,
 `-shm` y `-journal`. Cualquier auxiliar —incluso vacío o desacoplado— o cerca
@@ -329,14 +334,17 @@ con `version_id` indexado sincroniza en un solo scan únicamente los labels FTS
 distintos; las membresías de manifest, versiones y labels históricos permanecen
 como evidencia.
 
-El resolver v3 carga símbolos y dependencias vigentes en conjuntos TEMP
-indexados y aplica joins set-oriented. Sólo publica una resolución cuando la
-coincidencia por nombre cualificado o nombre simple es única; conflictos y
-ausencias permanecen ambiguos o no resueltos, sin fabricar edges.
+El resolver v4 carga símbolos y dependencias vigentes en conjuntos TEMP
+indexados. Resuelve primero llamadas con ámbito demostrable dentro del mismo
+módulo o clase y dependencias Python relativas mediante candidatos léxicos
+`module.py`/`module\__init__.py`; si ambos candidatos existen se abstiene. El
+fallback global por nombre cualificado o simple sólo publica una resolución
+única. Conflictos y ausencias permanecen ambiguos o no resueltos, sin fabricar
+edges.
 
 `metadata['code_graph_completion_v3']` es un fence derivado tipado y versionado,
 no un head generacional. Registra schema, `analysis_run_id` y
-`code-graph-resolver-v3`, y avanza en la misma transacción que cambia su
+`code-graph-resolver-v4`, y avanza en la misma transacción que cambia su
 `analysis_run` de `running` a `completed`. El fastpath sólo acepta el run
 inmediatamente anterior, completo, con la misma firma, summary válido y
 todos los candidatos como cache hits compatibles con los analizadores del
@@ -357,6 +365,32 @@ revisiones y miembros por generación y selecciona una generación completa por
 modelo mediante `published_embedding_heads`. La búsqueda oficial sólo consulta
 esos heads; `ready_partial` y `building` no son visibles.
 
+`code.embedding_links` sigue perteneciendo al esquema Code v2 y ahora tiene un
+productor y un consumidor integrados. Tras publicar por completo texto de
+`source_kind=code`, `code-semantic-link-v1` prepara en una tabla TEMP la
+cobertura exacta del head y exige que cada chunk vigente no vacío resuelva por
+identidad física, `version_id`, índice y clase. Sólo entonces desactiva enlaces
+anteriores del modelo y hace UPSERT de item, modelo, espacio, generación y
+procedencia. El replay exacto no ejecuta DML sobre enlaces; una nueva generación
+conserva las filas anteriores inactivas. No hay FK cross-database ni atomicidad
+distribuida: el lector vuelve a validar ambos heads y la versión Code vigente,
+por lo que una interrupción entre publicaciones se convierte en abstención, no
+en evidencia cruzada fabricada. Después del commit, el productor hace checkpoint
+del WAL de Code y sólo retira sidecars reconstruibles cuando el WAL está vacío,
+para que los diagnósticos quiescentes puedan leer el estado publicado.
+Si un lector externo retiene sus handles, la limpieza es best-effort: no se
+revierte el run completado ni se fuerza el cierre ajeno, y el status estricto
+continúa absteniéndose hasta una corrida posterior sin ese lector.
+Los lectores operativos de Code evitan crear esos auxiliares: si la base está
+quiescente usan URI immutable y verifican identidad, tamaño, mtime y ausencia de
+sidecars antes y después; si ya hay sidecars usan read-only convencional y los
+dejan intactos. El status estricto conserva su contrato más fuerte.
+El lector del owner durable que usa el watcher es aún más estricto: sólo abre
+Framework como snapshot immutable cuando el archivo está cercado y sin
+sidecars. Así puede recargar el checkpoint entre corridas sin volver a crear un
+WAL vacío o SHM; ante actividad concurrente se abstiene y el watcher aplica su
+backoff, sin ignorar frames ni limpiar archivos ajenos.
+
 ## Política de conexión y PRAGMAs
 
 Los valores son los observados en factories/initializers del árbol. SQLite
@@ -366,7 +400,7 @@ a una conexión auxiliar.
 | Propietario | Timeout/busy | Escritura | Caché y WAL | FK / lector |
 |---|---|---|---|---|
 | Path index | 60 s | WAL, `synchronous=NORMAL` | `cache_size=-32768`, autocheckpoint 4096 páginas, journal limit 256 MiB | FK/query-only verificados según reader/writer; el esquema no declara relaciones FK |
-| Dedup v8 | 60 s | WAL, `synchronous=NORMAL` | `cache_size=-32768`, autocheckpoint 4096 páginas, journal limit 256 MiB | FK de files/checkpoint a scans; `foreign_keys=ON` y verificado por la factory |
+| Dedup v9 | 60 s | WAL, `synchronous=NORMAL` | `cache_size=-32768`, autocheckpoint 4096 páginas, journal limit 256 MiB | FK de files/checkpoint a scans; cursor USN opcional todo-o-nada; `foreign_keys=ON` y verificado por la factory |
 | Framework writer | 60 s | WAL, NORMAL | -32768, 4096, 256 MiB | FK local de eventos de acción; otras relaciones lógicas |
 | Framework route / heartbeat | 60 s / 10 s | base existente `mode=rw`; hereda journal del propietario | busy timeout explícito | FK verificado; reader diagnóstico usa `mode=ro` + `query_only` |
 | PDF | 60 s / 60 000 ms | WAL, NORMAL | -32768, 4096, 256 MiB | `foreign_keys=ON`; lector URI ro + query_only |
@@ -485,6 +519,17 @@ v7 porque carecen de una firma demostrable. Los scans nuevos guardan la firma
 cruda de exclusión; la firma efectiva normal continúa perteneciendo al binding
 de Framework. No hay downgrade: el rollback restaura base y paquete compatibles.
 
+### Migración Dedup v8→v9
+
+La migración desacopla la publicación generacional del acelerador USN. Conserva
+sin cambios scans, archivos y checkpoints v8, reconstruye únicamente
+`inventory_checkpoints` y permite que `volume`, `journal_id` y `next_usn` sean
+los tres `NULL` o los tres no nulos. Un checkpoint portable válido sigue
+publicando su `scan_id` para Knowledge, Semantic y los lectores atómicos, pero
+no autoriza reconciliación incremental USN. La migración valida exactamente la
+fuente v8, compara conteos, ejecuta `foreign_key_check` y se revierte completa
+ante una estructura desconocida o una excepción.
+
 ### Migración histórica del catálogo v1→v2
 
 `NC-AUD-018` reprodujo dos pérdidas silenciosas en la antigua migración v1→v2
@@ -502,11 +547,11 @@ Las regresiones para columna, trigger y tabla reservada viven en
 respaldarse y migrarse primero sobre una copia; el informe técnico fechado
 registra la barrera ejecutada.
 
-## Publicación generacional de inventario: Dedup v8
+## Publicación generacional de inventario: Dedup v9
 
 ### Estado de fuente y estado vivo
 
-La fuente `0.7.2` declara esquema v8. La base viva inspeccionada históricamente conservaba
+La fuente `0.7.2` declara esquema v9. La base viva inspeccionada históricamente conservaba
 `metadata.schema_version='6'`; se abrió sólo para checks y no se permitió que el
 initializer la migrara. Antes de usar esa base con `0.7.2` debe aplicarse el
 procedimiento de backup y actualización de este documento.
@@ -517,7 +562,7 @@ entrega pertenece al informe técnico fechado.
 
 ### Esquema y estados
 
-V8 conserva los estados generacionales introducidos por v7 y liga cada scan
+V9 conserva los estados generacionales introducidos por v7 y liga cada scan
 nuevo a `inventory_policy_signature`:
 
 | Estado | Significado | Visible mediante el lector publicado | Puede recibir checkpoint válido |
@@ -552,14 +597,17 @@ anterior.
 - cuyos `bytes_seen` coinciden con `SUM(size)`.
 
 Después de validar, el reemplazo de `inventory_checkpoints` ocurre dentro de una
-transacción SQLite. El checkpoint contiene raíz, `scan_id`, volumen,
-`journal_id`, `next_usn`, validez y timestamp, y resuelve la firma cruda desde
-su scan. Hasta ese cambio, la generación complete es sólo candidata y no visible
-por la API publicada.
+transacción SQLite. El checkpoint contiene raíz, `scan_id`, validez y timestamp,
+y resuelve la firma cruda desde su scan. `volume`, `journal_id` y `next_usn`
+están presentes juntos cuando USN acota la generación o permanecen juntos en
+`NULL` para una publicación portable. Hasta ese cambio, la generación complete
+es sólo candidata y no visible por la API publicada.
 
 Una excepción antes del commit conserva el checkpoint anterior. Una
 discontinuidad del journal invalida su reutilización incremental y exige una
-reconciliación/full scan acorde con el orquestador.
+reconciliación/full scan acorde con el orquestador. Si USN no está disponible,
+el coordinador ejecuta un full scan portable, publica cursor nulo y las rutas
+reutilizan sus caches sobre el nuevo snapshot.
 
 ### Lector público atómico
 
@@ -675,9 +723,13 @@ barrera final del informe técnico, no a este contrato de persistencia.
 ### NC-AUD-012 — semántica v6
 
 Cada `model_signature` publica exactamente un head. Un build `building` conserva
-su `base_generation_id`, clona por lotes los miembros publicados y agrega jobs y
+su `base_generation_id`, fija ID, estado, modelo, high-watermark y conteo de esa
+base, y clona por lotes los miembros publicados. Tras cada página confirma en
+`cursor_json.base_clone` el último `member_id`, el número recorrido y la marca de
+completitud; un deadline conserva ese prefijo para reanudarlo. Agrega jobs y
 revisiones inmutables sin cambiar la vista del lector. La finalización completa
-verifica jobs, miembros, clon y base; marca la generación `ready` y cambia
+verifica jobs, miembros, clon y que la base fijada no cambió; marca la generación
+`ready` y cambia
 `published_embedding_heads` por CAS dentro de `BEGIN IMMEDIATE`. Fallos, leases
 pendientes, cancelación o `ready_partial` no publican. Un worker tardío no puede
 adjuntar resultados a una generación que ya no esté `building`.
@@ -710,6 +762,14 @@ puede actualizar la ruta sin reescribir evidencia; una reasignación de identida
 se abstiene con error en vez de apuntar un hit histórico a otro objeto. Espacio
 vectorial y modalidad también deben coincidir con `embedding_models`; un hit
 fabricado no puede cambiar por sí mismo el contrato del modelo.
+
+Para Code, la resolución añade una segunda cerca: `search_code` sólo traduce un
+hit Semantic a un `code_chunk` si existe un `embedding_links` activo con el mismo
+item, modelo, espacio vectorial y generación publicada, y si ese chunk pertenece
+a la versión actual. La procedencia lo marca como
+`authority=retrieval_evidence_only` y `calibration=uncalibrated_similarity`.
+Ausencia del modelo en cache, cobertura incompleta o deriva de cualquiera de las
+dos bases deja el canal indisponible; no provoca descarga ni fallback permisivo.
 
 La migración exacta v5→v6 conserva las tablas legacy e importa, por modelo, sólo
 la vista v5 que los lectores podían observar: items/chunks activos cuyos hashes
@@ -754,7 +814,7 @@ pero la conservación histórica indefinida no sustituye un backup consistente.
   a acciones y añade policy/identidad protegidas; catálogo
   v6 declara las relaciones de run/base/publicación con sus generaciones. Las
   demás asociaciones de ambos dominios continúan siendo lógicas.
-- Dedup v8 declara FK restrictivas desde `files` y `inventory_checkpoints` a
+- Dedup v9 declara FK restrictivas desde `files` y `inventory_checkpoints` a
   `scans` y activa su enforcement en la factory.
 - PDF, DOCX y audio declaran algunas relaciones locales.
 - Code y semantic declaran relaciones extensas.
@@ -830,7 +890,7 @@ Resultado lógico: 8/8 `integrity_check=['ok']`, 8/8 sin filas de
 `foreign_key_check`, ningún timeout; suma de los subprocesos, aproximadamente
 98.625 s. Un FK check vacío no valida relaciones lógicas no declaradas.
 
-La fuente soporta framework v20, Dedup v8, catálogo v6 y semántica v6, mientras
+La fuente soporta framework v20, Dedup v9, catálogo v6 y semántica v6, mientras
 las bases vivas seguían en framework v16, dedup v6 y catálogo v5; semantic no
 existía. Esa diferencia es esperable antes de actualizar, pero demuestra que
 leer el árbol no sustituye consultar la instalación. No se migraron para cerrar
@@ -997,7 +1057,7 @@ actual sí permite inventariar una página protegida/elegible sin borrar.
 ### Planificador dry-run actual
 
 `Neocortex --retention-status` abre únicamente bases existentes y reconoce los
-contratos exactos de framework v20, inventario v8, catálogo v6 y semántica v6.
+contratos exactos de framework v20, inventario v9, catálogo v6 y semántica v6.
 No crea ni migra estado. `--retention-store` acota propietarios,
 `--retention-batch-size` limita 1..1000 y los cursores
 `--retention-<store>-after` avanzan por keyset, nunca por `OFFSET`.

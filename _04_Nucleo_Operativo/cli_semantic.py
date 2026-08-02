@@ -331,6 +331,7 @@ def run_semantic_index(args: argparse.Namespace) -> int:
         time_budget_seconds=args.semantic_time_budget_seconds,
     )
     results = []
+    code_link_statuses: list[tuple[int, str, int, int]] = []
     try:
         _validate_semantic_state_write(
             args.state_directory,
@@ -342,20 +343,35 @@ def run_semantic_index(args: argparse.Namespace) -> int:
                     raise FileNotFoundError(
                         "no durable PDF, DOCX, Office, audio or code text cache is available"
                     )
-                results.append(
-                    (
-                        "text",
-                        index_text_embeddings(
-                            args.state_directory,
-                            source_kinds=selected_sources,
-                            model=text_model,
-                            model_cache=args.semantic_model_cache,
-                            local_files_only=True,
-                            threads=args.semantic_threads,
-                            work_budget=work_budget,
-                        ),
-                    )
+                text_result = index_text_embeddings(
+                    args.state_directory,
+                    source_kinds=selected_sources,
+                    model=text_model,
+                    model_cache=args.semantic_model_cache,
+                    local_files_only=True,
+                    threads=args.semantic_threads,
+                    work_budget=work_budget,
                 )
+                results.append(("text", text_result))
+                if "code" in text_result.sources and text_result.complete:
+                    from .code_semantic_links import (
+                        current_code_embedding_link_counts,
+                    )
+
+                    summary = text_result.generations[0].summary
+                    active_links, current_links = current_code_embedding_link_counts(
+                        args.state_directory,
+                        generation_id=summary.generation_id,
+                        model_signature=summary.model_signature,
+                    )
+                    code_link_statuses.append(
+                        (
+                            summary.generation_id,
+                            summary.model_signature,
+                            active_links,
+                            current_links,
+                        )
+                    )
             if args.semantic_index in {"image", "all"} and not work_budget.truncated:
                 results.append(
                     (
@@ -379,6 +395,19 @@ def run_semantic_index(args: argparse.Namespace) -> int:
     for scope, result in results:
         _print_semantic_index_result(scope, result)
         failed = failed or not result.complete
+    for (
+        generation_id,
+        model_signature,
+        active_links,
+        current_links,
+    ) in code_link_statuses:
+        print(
+            f"SEMANTIC_CODE_LINKS generation={generation_id} "
+            f"model={model_signature} active={active_links} "
+            f"current={current_links} stale={active_links - current_links} "
+            "authority=retrieval_evidence_only "
+            "calibration=uncalibrated_similarity"
+        )
     return 2 if failed else 0
 
 
@@ -406,8 +435,19 @@ def run_semantic_search(args: argparse.Namespace) -> int:
         return _semantic_failure("semantic-search", exc, offline=mode != "lexical")
 
     available_rankings = 0
+    calibrated_abstentions = 0
     for semantic_ranking in result.rankings:
         available_rankings += int(semantic_ranking.available)
+        calibration = semantic_ranking.provenance.get("retrieval_abstention")
+        calibrated_abstained = bool(
+            isinstance(calibration, dict) and calibration.get("query_abstained") is True
+        )
+        calibrated_abstentions += int(calibrated_abstained)
+        abstention_reason = (
+            calibration.get("abstention_reason")
+            if isinstance(calibration, dict) and calibrated_abstained
+            else None
+        )
         reason = (
             semantic_ranking.unavailable_reason or semantic_ranking.cutoff_reason or "-"
         )
@@ -423,6 +463,8 @@ def run_semantic_search(args: argparse.Namespace) -> int:
             f"complete={int(semantic_ranking.complete)} "
             f"scanned={semantic_ranking.scanned} "
             f"hits={len(semantic_ranking.hits)} "
+            f"abstained={int(calibrated_abstained)} "
+            f"abstention_reason={abstention_reason or '-'} "
             f"weight={semantic_ranking.fusion_weight:.6f} "
             f"reason={reason} cutoff_score={cutoff_score} "
             f"next_cursor={next_cursor} "
@@ -440,6 +482,7 @@ def run_semantic_search(args: argparse.Namespace) -> int:
     _print_console_line(
         f"SEMANTIC_SEARCH query={json.dumps(result.query, ensure_ascii=False)} "
         f"complete={int(result.complete)} available_rankings={available_rankings} "
+        f"calibrated_abstentions={calibrated_abstentions} "
         f"fused_hits={len(result.fused)}"
     )
     for rank, hit in enumerate(result.fused, start=1):

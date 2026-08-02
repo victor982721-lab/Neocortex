@@ -30,9 +30,9 @@ class SelfAnalysisRunEvidence:
     state_directory: str
     inventory_policy_signature: str
     scan_id: int
-    journal_volume: str
-    journal_id: str
-    start_usn: int
+    journal_volume: str | None
+    journal_id: str | None
+    start_usn: int | None
     reconciliation_records: int
     inventory_attempts: int
     inventory_mode: str
@@ -80,15 +80,25 @@ class SelfAnalysisRunEvidence:
             state_directory,
             policy_signature,
             scan_id,
-            journal_volume,
-            journal_id,
-            start_usn,
             reconciliation_records,
             inventory_attempts,
             inventory_mode,
         )
         if any(value is None for value in required):
             raise ValueError(f"self-analysis run {run_id} has incomplete evidence")
+        journal_values = (journal_volume, journal_id, start_usn)
+        if any(value is None for value in journal_values) and not all(
+            value is None for value in journal_values
+        ):
+            raise ValueError(f"self-analysis run {run_id} has partial journal evidence")
+        if all(value is None for value in journal_values) and (
+            inventory_mode != "full"
+            or int(cast(int, reconciliation_records)) != 0
+            or int(cast(int, inventory_attempts)) != 1
+        ):
+            raise ValueError(
+                f"self-analysis run {run_id} has invalid journal-free inventory"
+            )
         return cls(
             run_id=run_id,
             root=str(root),
@@ -99,9 +109,9 @@ class SelfAnalysisRunEvidence:
             state_directory=str(state_directory),
             inventory_policy_signature=str(policy_signature),
             scan_id=int(cast(int, scan_id)),
-            journal_volume=str(journal_volume),
-            journal_id=str(journal_id),
-            start_usn=int(cast(int, start_usn)),
+            journal_volume=(None if journal_volume is None else str(journal_volume)),
+            journal_id=None if journal_id is None else str(journal_id),
+            start_usn=None if start_usn is None else int(cast(int, start_usn)),
             reconciliation_records=int(cast(int, reconciliation_records)),
             inventory_attempts=int(cast(int, inventory_attempts)),
             inventory_mode=str(inventory_mode),
@@ -109,13 +119,19 @@ class SelfAnalysisRunEvidence:
 
     def validate_inventory_boundary(
         self,
-        cursor: JournalCursor,
+        cursor: JournalCursor | None,
         inventory_policy: InventoryExclusionPolicy,
     ) -> None:
         """Validate policy and journal continuity at the completion boundary."""
 
         if self.inventory_policy_signature != inventory_policy.signature:
             raise ValueError("self-analysis inventory policy signature changed")
+        if self.journal_volume is None:
+            if cursor is not None:
+                raise ValueError("journal-free self-analysis received a cursor")
+            return
+        if cursor is None or self.journal_id is None or self.start_usn is None:
+            raise ValueError("self-analysis completion cursor is missing")
         if (
             self.journal_volume != cursor.volume
             or self.journal_id != str(cursor.journal_id)
@@ -162,20 +178,26 @@ class SelfAnalysisRunEvidence:
             "state_directory": self.state_directory,
         }
 
-    def manifest_inventory(self, cursor: JournalCursor) -> dict[str, object]:
+    def manifest_inventory(self, cursor: JournalCursor | None) -> dict[str, object]:
         """Build the bounded inventory section at the supplied end cursor."""
 
+        journal: dict[str, object]
+        if cursor is None:
+            journal = {"status": "unavailable"}
+        else:
+            journal = {
+                "status": "available",
+                "volume": self.journal_volume,
+                "journal_id": self.journal_id,
+                "start_usn": self.start_usn,
+                "end_usn": cursor.next_usn,
+            }
         return {
             "scan_id": self.scan_id,
             "mode": self.inventory_mode,
             "attempts": self.inventory_attempts,
             "reconciliation_records": self.reconciliation_records,
-            "journal": {
-                "volume": self.journal_volume,
-                "journal_id": self.journal_id,
-                "start_usn": self.start_usn,
-                "end_usn": cursor.next_usn,
-            },
+            "journal": journal,
         }
 
 
@@ -287,7 +309,7 @@ class SelfAnalysisCompletionEvidence:
     """Pure aggregate used to construct one canonical completion manifest."""
 
     run: SelfAnalysisRunEvidence
-    cursor: JournalCursor
+    cursor: JournalCursor | None
     code: CompletedCodeRoute
     safety: SelfAnalysisSafetyCounts
 

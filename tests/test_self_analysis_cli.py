@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -57,6 +56,7 @@ def test_self_analysis_requires_explicit_paths(
         (("--route", "pdf"), "permits only --route code"),
         (("--semantic-index", "text"), "cannot be combined with direct operations"),
         (("--organization-apply",), "cannot be combined with direct operations"),
+        (("--code-review",), "cannot be combined with direct operations"),
         (("--pdf-workers", "1"), "is not consumed by --self-analysis"),
         (("--code-generated",), "rejects --code-generated"),
         (("--code-vendored",), "rejects --code-vendored"),
@@ -158,4 +158,6 @@ def test_self_analysis_rejects_non_directory_root(tmp_path: Path) -> None:
             "--state-directory",
             str(tmp_path / "state"),
         )
+
+
 # endregion [02]

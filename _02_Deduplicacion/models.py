@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -42,15 +41,23 @@ class ScanSummary:
 
 @dataclass(frozen=True, slots=True)
 class InventoryCheckpoint:
-    """Durable USN boundary associated with one policy-bound inventory."""
+    """Policy-bound publication with an optional durable USN accelerator."""
 
     root: str
     scan_id: int
-    volume: str
-    journal_id: int
-    next_usn: int
+    volume: str | None
+    journal_id: int | None
+    next_usn: int | None
     valid: bool = True
     inventory_policy_signature: str | None = None
+
+    @property
+    def journal_available(self) -> bool:
+        """Return whether this publication carries one complete USN cursor."""
+
+        return all(
+            value is not None for value in (self.volume, self.journal_id, self.next_usn)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,4 +110,6 @@ class DedupPlan:
         if self.total_reclaimable_bytes is not None:
             return self.total_reclaimable_bytes
         return sum(group.reclaimable_bytes for group in self.groups)
+
+
 # endregion [02]

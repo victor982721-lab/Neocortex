@@ -150,7 +150,7 @@ BUILTIN_ANALYZERS = (
         frozenset({"python"}),
         ".code_python",
         "PythonAnalyzer",
-        f"2|python-{sys.version_info.major}.{sys.version_info.minor}",
+        f"5|python-{sys.version_info.major}.{sys.version_info.minor}",
         priority=10,
     ),
     AnalyzerSpec(

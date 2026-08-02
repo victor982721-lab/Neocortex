@@ -1,0 +1,461 @@
+"""Deterministic, read-only acceptance coverage for published code review."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+from pathlib import Path
+
+import pytest
+
+import _04_Nucleo_Operativo.code_review as code_review_module
+from _02_Deduplicacion import FileSnapshot
+from _04_Nucleo_Operativo.code_contracts import (
+    AnalysisStatus,
+    ArtifactClassification,
+    ArtifactKind,
+    CodeAnalysis,
+    CodeFileInput,
+    DiagnosticRecord,
+    DiagnosticSeverity,
+    ReferenceRecord,
+    SourceRange,
+    SymbolRecord,
+)
+from _04_Nucleo_Operativo.code_review import review_code_state
+from _04_Nucleo_Operativo.code_schema import (
+    checkpoint_code_wal,
+    remove_checkpointed_code_sidecars,
+)
+from _04_Nucleo_Operativo.code_state import CodeState
+from _04_Nucleo_Operativo.self_analysis_freshness import SelfAnalysisFreshness
+from _04_Nucleo_Operativo.self_analysis_status import SelfAnalysisStatus
+from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes, fingerprint_text
+
+
+PROCESSING_SIGNATURE = "code-review-fixture-v1"
+ACTIONABILITY_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "code_review"
+    / "rc6_top10_actionability_v1.json"
+)
+
+
+def _fixture_score(label: dict[str, object]) -> int:
+    complexity = label["complexity"]
+    function_lines = label["function_lines"]
+    complexity_bp = (
+        0
+        if complexity is None
+        else (10_000 * int(complexity["value"])) // int(complexity["threshold"])
+    )
+    length_bp = (
+        0
+        if function_lines is None
+        else (10_000 * int(function_lines["value"])) // int(function_lines["threshold"])
+    )
+    impact_bp = 250 * min(int(label["resolved_static_callers"]), 20)
+    return (
+        max(complexity_bp, length_bp) + min(complexity_bp, length_bp) // 4 + impact_bp
+    )
+
+
+def test_rc6_top10_actionability_fixture_is_reproducible() -> None:
+    payload = json.loads(ACTIONABILITY_FIXTURE.read_text(encoding="utf-8"))
+    labels = payload["labels"]
+
+    assert payload["schema"] == "neocortex-code-review-actionability-fixture-v1"
+    assert payload["source"]["ground_truth_status"] == (
+        "provisional_not_human_validated"
+    )
+    assert [label["rank"] for label in labels] == list(range(1, 11))
+    assert len({(label["path"], label["symbol"]) for label in labels}) == 10
+    assert all(_fixture_score(label) == label["score_basis_points"] for label in labels)
+    assert sum(label["label"] == "actionable" for label in labels) == 6
+    assert sum(label["label"] == "defer" for label in labels) == 4
+    assert payload["review_summary"] == {
+        "actionable_ranks": [1, 4, 5, 6, 7, 9],
+        "abstention_ranks": [2, 3, 8, 10],
+        "duplicate_groups": [],
+    }
+
+
+def _source_range(index: int, function_lines: int) -> SourceRange:
+    start_line = 1 + index * 400
+    start_byte = index * 1_000
+    return SourceRange(
+        start_line,
+        0,
+        start_line + function_lines - 1,
+        0,
+        start_byte,
+        start_byte + 100,
+    )
+
+
+def _analysis(
+    path: Path,
+    identity: int,
+    *,
+    symbols: tuple[SymbolRecord, ...],
+    diagnostics: tuple[DiagnosticRecord, ...] = (),
+    references: tuple[ReferenceRecord, ...] = (),
+) -> CodeAnalysis:
+    text = "x\n" * 5_000
+    raw = text.encode("utf-8")
+    raw_fingerprint = fingerprint_bytes(raw)
+    text_fingerprint = fingerprint_text(text)
+    snapshot = FileSnapshot(str(path), 1, identity, len(raw), 100 + identity, 50)
+    source = CodeFileInput(
+        snapshot,
+        text,
+        raw,
+        "utf-8",
+        ArtifactClassification(
+            "python",
+            ArtifactKind.SOURCE,
+            1.0,
+            ("code-review-fixture",),
+        ),
+        PROCESSING_SIGNATURE,
+    )
+    return CodeAnalysis(
+        input=source,
+        status=AnalysisStatus.COMPLETE,
+        analyzer_id="fixture-python-analyzer",
+        analyzer_version="1",
+        parser_kind="fixture-parser",
+        text_xxh3_128=text_fingerprint.xxh3_128,
+        text_xxh3_64_guard=text_fingerprint.xxh3_64_guard,
+        normalized_xxh3_128=text_fingerprint.xxh3_128,
+        token_xxh3_128=None,
+        structure_xxh3_128=None,
+        raw_xxh3_128=raw_fingerprint.xxh3_128,
+        raw_xxh3_64_guard=raw_fingerprint.xxh3_64_guard,
+        symbols=symbols,
+        references=references,
+        diagnostics=diagnostics,
+        provenance={"fixture": True},
+    )
+
+
+def _hotspot(
+    qualified_name: str,
+    index: int,
+    complexity: int,
+    function_lines: int,
+) -> tuple[SymbolRecord, tuple[DiagnosticRecord, DiagnosticRecord]]:
+    source_range = _source_range(index, function_lines)
+    name = qualified_name.rsplit(".", 1)[-1]
+    symbol = SymbolRecord(
+        "function",
+        name,
+        qualified_name,
+        f"{name}()",
+        source_range,
+        visibility="private",
+        complexity=complexity,
+    )
+    diagnostics = (
+        DiagnosticRecord(
+            "neocortex-python",
+            "high_complexity",
+            DiagnosticSeverity.WARNING,
+            "confirmed complexity hotspot",
+            source_range,
+            tool_name="fixture-python-analyzer",
+            tool_version="1",
+            metadata={"value": complexity, "threshold": 15},
+        ),
+        DiagnosticRecord(
+            "neocortex-python",
+            "long_function",
+            DiagnosticSeverity.WARNING,
+            "confirmed long function",
+            source_range,
+            tool_name="fixture-python-analyzer",
+            tool_version="1",
+            metadata={"value": function_lines, "threshold": 200},
+        ),
+    )
+    return symbol, diagnostics
+
+
+def _store_hotspot_file(
+    state: CodeState,
+    root: Path,
+    *,
+    filename: str,
+    identity: int,
+    prefix: str,
+    complexities: tuple[int, ...],
+) -> None:
+    symbols: list[SymbolRecord] = []
+    diagnostics: list[DiagnosticRecord] = []
+    for index, complexity in enumerate(complexities):
+        symbol, evidence = _hotspot(
+            f"pkg.{prefix}_{index}",
+            index,
+            complexity,
+            300 - index * 5,
+        )
+        symbols.append(symbol)
+        diagnostics.extend(evidence)
+    state.store_analysis(
+        _analysis(
+            root / filename,
+            identity,
+            symbols=tuple(symbols),
+            diagnostics=tuple(diagnostics),
+        ),
+        1,
+    )
+
+
+def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
+    state_directory.mkdir(parents=True)
+    database = state_directory / "code.sqlite3"
+    with CodeState(database) as state:
+        analysis_run_id = state.begin_run(1, 1, PROCESSING_SIGNATURE)
+        if hotspots:
+            _store_hotspot_file(
+                state,
+                state_directory,
+                filename="dominant.py",
+                identity=100,
+                prefix="dominant",
+                complexities=(60, 59, 58, 57, 56),
+            )
+            _store_hotspot_file(
+                state,
+                state_directory,
+                filename="secondary.py",
+                identity=101,
+                prefix="secondary",
+                complexities=(50, 49, 48),
+            )
+            for offset in range(7):
+                _store_hotspot_file(
+                    state,
+                    state_directory,
+                    filename=f"single_{offset}.py",
+                    identity=110 + offset,
+                    prefix=f"single_{offset}",
+                    complexities=(45 - offset,),
+                )
+            for offset in range(3):
+                caller_name = f"pkg.caller_{offset}"
+                caller_range = _source_range(0, 3)
+                state.store_analysis(
+                    _analysis(
+                        state_directory / f"caller_{offset}.py",
+                        130 + offset,
+                        symbols=(
+                            SymbolRecord(
+                                "function",
+                                f"caller_{offset}",
+                                caller_name,
+                                f"caller_{offset}()",
+                                caller_range,
+                                visibility="public",
+                                complexity=1,
+                            ),
+                        ),
+                        references=(
+                            ReferenceRecord(
+                                "call",
+                                "dominant_0",
+                                caller_range,
+                                source_qualified_name=caller_name,
+                                target_hint="pkg.dominant_0",
+                                confirmed=True,
+                                confidence=1.0,
+                                evidence="fixture-resolved-static-call",
+                            ),
+                        ),
+                    ),
+                    1,
+                )
+            state.finalize_graph(1)
+            candidates = 12
+        else:
+            symbol = SymbolRecord(
+                "function",
+                "small",
+                "pkg.small",
+                "small()",
+                _source_range(0, 3),
+                visibility="private",
+                complexity=1,
+            )
+            state.store_analysis(
+                _analysis(
+                    state_directory / "small.py",
+                    200,
+                    symbols=(symbol,),
+                ),
+                1,
+            )
+            state.finalize_graph(1)
+            candidates = 1
+        state.complete_run(
+            analysis_run_id,
+            {
+                "candidates": candidates,
+                "processed": candidates,
+                "cache_hits": 0,
+                "errors": 0,
+            },
+            partial=False,
+            graph_current=True,
+        )
+        checkpoint_code_wal(state.connection)
+    remove_checkpointed_code_sidecars(database)
+    return database
+
+
+def _status(
+    root: Path,
+    *,
+    journal_status: str = "unchanged",
+    current: bool = True,
+) -> SelfAnalysisStatus:
+    inventory_journal = "unavailable" if journal_status == "unavailable" else "ok"
+    return SelfAnalysisStatus(
+        "valid",
+        {
+            "run": {"root": str(root)},
+            "inventory": {
+                "mode": "full",
+                "journal": {"status": inventory_journal},
+            },
+        },
+        SelfAnalysisFreshness(
+            True,
+            True,
+            current,
+            journal_status,  # type: ignore[arg-type]
+            current,
+        ),
+    )
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    _build_state(state_directory)
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(tmp_path),
+    )
+
+    first = review_code_state(state_directory)
+    second = review_code_state(state_directory)
+    first_json = json.dumps(first.as_payload(), ensure_ascii=True, sort_keys=True)
+    second_json = json.dumps(second.as_payload(), ensure_ascii=True, sort_keys=True)
+
+    assert first.status == "ready"
+    assert first_json == second_json
+    assert len(first.findings) == 10
+    assert max(Counter(finding.path for finding in first.findings).values()) == 2
+    assert len({finding.path for finding in first.findings}) == 9
+    assert first.findings[0].symbol == "pkg.dominant_0"
+    assert first.findings[0].resolved_static_callers == 3
+    assert len(first.findings[0].callers) == 3
+    assert {diagnostic.code for diagnostic in first.findings[0].diagnostics} == {
+        "high_complexity",
+        "long_function",
+    }
+    for finding in first.findings:
+        expected_score = (
+            max(
+                finding.complexity_ratio_basis_points,
+                finding.length_ratio_basis_points,
+            )
+            + min(
+                finding.complexity_ratio_basis_points,
+                finding.length_ratio_basis_points,
+            )
+            // 4
+            + 250 * min(finding.resolved_static_callers, 20)
+        )
+        assert finding.score_basis_points == expected_score
+        assert "dead" not in finding.category
+    assert first.coverage is not None
+    assert first.coverage.probable_dead_suppressed > 0
+    assert first.digest is not None
+
+
+def test_review_freshness_is_fail_closed_with_portable_full_snapshot_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    _build_state(state_directory)
+
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(
+            tmp_path,
+            journal_status="advanced",
+            current=False,
+        ),
+    )
+    advanced = review_code_state(state_directory)
+    assert advanced.status == "abstained"
+    assert advanced.reason == "self_analysis_journal_advanced"
+
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(
+            tmp_path,
+            journal_status="unavailable",
+            current=False,
+        ),
+    )
+    portable = review_code_state(state_directory)
+    assert portable.status == "ready"
+    assert portable.snapshot is not None
+    assert portable.snapshot.freshness == "publication_only"
+    assert portable.snapshot.current is False
+    assert "live_tree_freshness_not_proven_without_journal" in portable.limitations
+
+
+def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    database = _build_state(state_directory, hotspots=False)
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(tmp_path),
+    )
+    before_files = tuple(sorted(path.name for path in state_directory.iterdir()))
+    before_digest = _digest(database)
+
+    result = review_code_state(state_directory)
+
+    assert result.status == "ready"
+    assert result.findings == ()
+    assert result.coverage is not None
+    assert result.coverage.candidate_hotspots == 0
+    assert result.digest is not None
+    assert (
+        tuple(sorted(path.name for path in state_directory.iterdir())) == before_files
+    )
+    assert _digest(database) == before_digest
+    assert not Path(f"{database}-wal").exists()
+    assert not Path(f"{database}-shm").exists()

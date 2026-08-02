@@ -722,6 +722,10 @@ def _semantic_result_report(
     duration_ns: DurationNanoseconds,
     channel: str = "semantic",
 ) -> RankingExecution:
+    calibration = ranking.provenance.get("retrieval_abstention")
+    calibrated_abstained = bool(
+        isinstance(calibration, Mapping) and calibration.get("query_abstained") is True
+    )
     vector_cutoff = ranking.cutoff_reason in {
         "max_vectors",
         "max_vectors_reached",
@@ -754,7 +758,19 @@ def _semantic_result_report(
             or (
                 "semantic_vector_limit_reached"
                 if vector_cutoff
-                else ("semantic_candidate_limit_reached" if candidate_cutoff else None)
+                else (
+                    "semantic_candidate_limit_reached_after_calibrated_abstention"
+                    if candidate_cutoff and calibrated_abstained
+                    else (
+                        "semantic_candidate_limit_reached"
+                        if candidate_cutoff
+                        else (
+                            "semantic_retrieval_abstained_below_calibrated_floor"
+                            if calibrated_abstained
+                            else None
+                        )
+                    )
+                )
             )
         ),
         owner="semantic",

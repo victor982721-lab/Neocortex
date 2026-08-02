@@ -3,28 +3,33 @@
 Orquestador durable de los componentes compartidos, no destructivo salvo
 cuando el usuario solicita explícitamente `--apply`. Actualmente:
 
-1. captura un cursor USN anterior;
-2. inventaría el perfil seleccionado, excluyendo exactamente
+1. intenta capturar un cursor USN anterior cuando Windows/NTFS lo ofrece;
+2. inventaría de forma portable el perfil seleccionado, excluyendo exactamente
    `<home>\AppData`, `<home>\.codex`, el directorio de estado efectivo y
    directorios que tengan el atributo oculto;
 3. reduce candidatos de duplicado con `_02_Deduplicacion` y exige comparación
    exacta antes de cualquier acción destructiva;
-4. consume y aplica al inventario todos los cambios USN de esa ventana;
+4. si USN está disponible, consume su ventana; si no, publica el recorrido
+   completo con cursor nulo;
 5. repite el inventario, hasta tres veces, si detecta un movimiento estructural
    de directorio que no puede representarse con seguridad mediante eventos
    individuales;
 6. valida por firma de contenido las extensiones de formatos conocidos;
-7. conserva el cursor reconciliado, cada acción y el estado en SQLite.
+7. conserva el checkpoint reconciliado, el cursor opcional, cada acción y el
+   estado en SQLite.
 
-El recorrido completo se usa para crear la primera generación válida o para
-recuperarse de una discontinuidad del journal y de movimientos estructurales
-que no puedan representarse con seguridad. Las ejecuciones posteriores
-reutilizan el mismo inventario y aplican únicamente la ventana USN pendiente.
-Cada lote seguro, sus agregados y su nuevo checkpoint se confirman en la misma
-transacción SQLite. Si una identidad o ruta USN no puede resolverse, el lote
-ambiguo no se aplica y el cursor durable permanece en el último límite seguro;
-la ejecución cae a un recorrido completo. Un proceso interrumpido puede
-continuar desde el último lote confirmado.
+El recorrido completo se usa para crear la primera generación válida, cuando
+USN no existe o no está accesible, y para recuperarse de una discontinuidad o
+de movimientos estructurales que no puedan representarse con seguridad. Con
+un cursor compatible, las ejecuciones posteriores aplican únicamente la
+ventana USN pendiente. Sin él, vuelven a enumerar la raíz y las rutas comparan
+el snapshot publicado contra sus caches por identidad y metadatos; USN acelera
+la enumeración, pero no determina la corrección. Cada lote seguro, sus
+agregados y su nuevo checkpoint se confirman en la misma transacción SQLite.
+Si una identidad o ruta USN no puede resolverse, el lote ambiguo no se aplica y
+el cursor durable permanece en el último límite seguro; la ejecución cae a un
+recorrido completo. Un proceso interrumpido puede continuar desde el último
+lote confirmado.
 
 Las exploraciones completas se publican por generación. Una misma ruta puede
 coexistir en una generación anterior y otra en construcción; el checkpoint de
@@ -246,8 +251,17 @@ transacción en `code.sqlite3`:
 Neocortex --root C:\Codigo --route code
 Neocortex --root C:\Codigo --route code --code-cache-validation full
 Neocortex --code-status
+Neocortex --code-review
 Neocortex --code-doctor
 ```
+
+Sobre un autoanálisis publicado, `--code-review` devuelve un top 10
+determinista de hotspots Python confirmados (`high_complexity` y/o
+`long_function`), como máximo dos por archivo. El score entero en basis points
+combina severidad relativa a los umbrales e impacto por callers estáticos
+resueltos; es prioridad de revisión, no riesgo ni confianza calibrada. La
+consulta conserva archivos y SQLite byte por byte y suprime deliberadamente
+`probable_dead_symbol` mientras la resolución de llamadas siga incompleta.
 
 La transacción global se conserva deliberadamente en el esquema 2. Pruebas con
 lectores concurrentes y fault injection confirmaron snapshot precommit y
@@ -266,10 +280,11 @@ analizadores nativos, Tree-sitter, LSP o herramientas externas sin volverlos
 dependencias obligatorias. Si un analizador no está disponible, la degradación
 mantiene texto y FTS.
 
-El analizador Python `neocortex-python-ast` versión 2 interpreta asignaciones
-como enlaces, no como nombres arbitrarios de expresiones: sólo emite símbolos
-para `Name`, destructuring `Tuple`/`List` y `Starred`, omite atributos y
-subscripts y deduplica un mismo nombre dentro de la asignación.
+El analizador Python `neocortex-python-ast` versión 3 conserva módulo y nivel de
+imports relativos. También interpreta asignaciones como enlaces, no como
+nombres arbitrarios de expresiones: sólo emite símbolos para `Name`,
+destructuring `Tuple`/`List` y `Starred`, omite atributos y subscripts y
+deduplica un mismo nombre dentro de la asignación.
 
 Un cache hit con la misma ruta actualiza `last_seen_run_id` y
 `last_observed_run_id` con cero DML sobre `code_fts`. Si la misma identidad
@@ -287,15 +302,17 @@ vigentes; al final sincroniza las etiquetas FTS distintas con un mapa temporal
 indexado y un único scan, sin tocar labels históricos. Manifests e historia no
 se convierten en staging mutable.
 
-El resolver v3 materializa símbolos y dependencias vigentes en conjuntos
-temporales indexados y resuelve por nombre cualificado o nombre simple sólo
-cuando la coincidencia es única. Los empates y ausencias permanecen ambiguos o
-no resueltos; no se fabrican relaciones para forzar conectividad.
+El resolver v4 materializa símbolos y dependencias vigentes en conjuntos
+temporales indexados. Prioriza llamadas demostrables dentro del mismo módulo o
+clase y módulos relativos por ruta léxica exacta; después resuelve por nombre
+cualificado o simple sólo cuando la coincidencia global es única. Los empates y
+ausencias permanecen ambiguos o no resueltos; no se fabrican relaciones para
+forzar conectividad.
 
 El grafo sólo se omite cuando no hubo cambios ni invalidaciones, todos los
 candidatos fueron cache hits compatibles con el runtime y el run inmediatamente
 anterior está `completed`, conserva la misma firma/summary y coincide con el
-fence tipado `code-graph-resolver-v3`. Ese fence avanza atómicamente con la
+fence tipado `code-graph-resolver-v4`. Ese fence avanza atómicamente con la
 finalización del `analysis_run`. Un fence ausente, malformado o stale, un run
 intermedio o la primera corrida sobre una base existente sin fence fuerzan
 reconstrucción completa. Los cache hits retienen los contadores `partial`,
@@ -305,6 +322,16 @@ El esquema continúa no generacional en versión 2: la cancelación sólo tiene
 checkpoints alrededor de la transacción global, no dentro de una sentencia
 SQLite; los empates se conservan ambiguos y la firma global del registro puede
 invalidar lenguajes cuyo analizador no cambió.
+
+Después de publicar el run, la ruta hace checkpoint del WAL y retira `-wal` y
+`-shm` únicamente cuando el WAL está vacío y los auxiliares son reconstruibles.
+Un lector externo puede impedir esa limpieza sin revertir el run ya completado;
+en tal caso el diagnóstico quiescente se abstiene hasta que los handles se
+liberen y una corrida posterior complete la limpieza.
+Las búsquedas y listados operativos no dependen de esa limpieza: ante una base
+sin sidecars abren una instantánea immutable con cercas de archivo antes y
+después, y ante un writer activo usan SQLite read-only sin borrar, checkpoint o
+crear auxiliares de forma oportunista.
 
 Las consultas exactas, textuales y estructurales se pueden ejecutar por separado
 o fusionar mediante reciprocal rank fusion. Cada resultado conserva archivo,
@@ -384,7 +411,9 @@ para reconciliar su estado, pero no recalcula embeddings sin cambios. Un replay
 exacto no crea jobs ni consume `max_items` o `max_new_jobs`; la reexploración y
 la reconciliación de la fuente siguen siendo O(n), pero el replay sin cambios
 reutiliza directamente el head publicado y no vuelve a clonarlo. Una generación
-con altas, bajas o cambios todavía materializa su base en O(n).
+con altas, bajas o cambios todavía materializa su base en O(n), ahora por páginas
+con cursor durable y el mismo deadline de la invocación: una interrupción
+reanuda el prefijo fijado en vez de repetir el clon completo.
 
 El staging textual confirma como máximo 128 items o chunks por transacción.
 Error, cancelación o deadline revierten el lote activo; el prefijo confirmado
@@ -405,8 +434,9 @@ transiciones de resultado permanecen N+1 por job.
 
 Semantic v6 separa construcción y publicación. Cada modelo tiene un
 `published_embedding_heads`; una generación `building` clona por lotes los
-miembros de la publicada y los nuevos resultados se ligan a revisiones
-inmutables. Sólo una finalización completa cambia el head por CAS en la misma
+miembros de una base fijada —ID, high-watermark y conteo— y persiste el cursor
+del último miembro confirmado. Los nuevos resultados se ligan a revisiones
+inmutables. Sólo una finalización completa y una base todavía idéntica cambia el head por CAS en la misma
 transacción. `ready_partial`, fallos y cancelación conservan la generación
 anterior, y las búsquedas oficiales fijan los heads del snapshot antes de
 resolver hits. El contenido sigue congelado, mientras el localizador de ruta se
@@ -431,6 +461,14 @@ título `0.5`; ambos reutilizan una sola vectorización de la consulta y el hit
 fusionado prefiere el snippet corporal. El backend vectorial actual es una
 búsqueda exacta con un límite explícito de vectores; informa cuando el recorrido
 queda incompleto. No existe todavía un índice ANN.
+
+Para el contrato exacto Jina/body ya evaluado, PDF y Code aplican pisos de
+recuperación separados (`0.50` y `0.46`). Un vecino inferior se informa como
+`abstained`, no como hit. Esos pisos sólo filtran evidencia débil dentro de esa
+firma exacta: no son probabilidades, no se extrapolan a títulos, otros owners,
+modelos o backends y no autorizan clasificación ni mutación. La reutilización
+exacta conserva el contrato dentro de `payload_provenance`; un conflicto entre
+ese payload y el miembro evita aplicar el piso.
 
 La clasificación compara embeddings activos con prototipos versionados de la
 ontología industrial compartida y materializa evidencia trazable por elemento,
@@ -850,6 +888,10 @@ Una recuperación útil queda versionada y limita la confianza a 0,72; píxeles
 uniformes sin contenido o una corrupción PNG demostrada mediante estructura y
 CRC32 quedan como candidatos de eliminación para revisión, nunca como acciones
 automáticas.
+La decisión v10 no trata el fondo compuesto de un recurso transparente ni una
+composición casi cuadrada como página por sí solos: exige geometría plausible o
+texto/terminología documental firme. El cambio de firma fuerza reclasificación
+sin perder la caché compatible de características.
 
 Los hallazgos PDF, DOCX, Office, audio e imagen convergen en
 `review_candidates` dentro de `framework.sqlite3`. Cada registro conserva
@@ -1179,19 +1221,25 @@ acción; la siguiente reconciliación actualiza el inventario persistente.
 
 El watcher incremental se ejecuta exclusivamente en primer plano dentro del
 proceso de `Neocortex`; no instala servicios, tareas ni procesos en segundo
-plano. Usa los cambios USN solo como señales y delega cada reconciliación a una
-corrida integrada nueva que conserva el checkpoint durable:
+plano. Usa USN sólo como señal opcional en Windows. Cuando el checkpoint no
+incluye cursor —o el lector USN deja de estar disponible— programa una corrida
+normal portable sobre Dedup v9 y vuelve a cargar la publicación durable:
 
 ```powershell
 Neocortex --root C:\Corpus\Entrada --watch --all
 Neocortex --root C:\Datos --watch --route pdf,image --watch-bootstrap if-needed
 Neocortex --watch --watch-poll-timeout-seconds 2 --watch-debounce-seconds 1 --watch-max-debounce-seconds 15
+Neocortex --watch --watch-portable-interval-seconds 300
 ```
 
 `--watch-bootstrap` admite `always`, `if-needed` y `never`. También se pueden
 acotar el backoff inicial/máximo y su multiplicador con las opciones
-`--watch-error-backoff-*`. Los eventos, cada corrida y el resumen final se
+`--watch-error-backoff-*`. El intervalo portable predeterminado es 300 segundos
+y admite de 1 a 86 400. Los eventos, cada corrida y el resumen final se
 imprimen con contadores explícitos. `Ctrl+C` solicita cancelación cooperativa.
+La recarga del owner durable usa una instantánea immutable con cercas y no
+recrea `framework.sqlite3-wal/-shm`; si la publicación está activa, falla
+cerrada y entra al backoff normal del watcher.
 Por seguridad, `--watch` rechaza `--apply`, `--route-only`, `--resume-run` y
 `--candidate-run`.
 

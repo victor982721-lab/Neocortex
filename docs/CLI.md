@@ -123,6 +123,7 @@ $MiniRoot = Join-Path $Lab 'mini-root'
 $MiniState = Join-Path $Lab 'mini-state'
 Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
+Neocortex --state-directory $MiniState --code-review
 ```
 
 La corrida usa el inventario como entrada directa de code, no crea candidatos
@@ -130,11 +131,26 @@ MIME y sólo completa si candidatos, acciones y organización conservan conteos
 exactos de cero. Su manifest guarda policy/firma, identidades, frescura y los
 argv canónicos `analyze`/`status` como arrays, no como texto de shell.
 
+Si USN no está disponible, el preset hace un full scan portable sin checkpoint
+y publica `journal.status=unavailable`; code puede reutilizar caché, pero el
+status no afirma frescura actual. En una corrida normal, el mismo caso publica
+un checkpoint portable de Dedup sin cursor y reporta
+`journal_usn_span=unavailable`; USN sólo acelera la enumeración incremental.
+
 `--code-status --code-json` consulta ese manifest sin crear ni migrar estado.
 Cada propietario exige un snapshot SQLite immutable y sidecar-free. Cualquier
 `-wal`, `-shm` o `-journal` —incluso vacío o desacoplado— junto a
 `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`, o una cerca inestable en
 cualquiera de ellas, causa abstención total con código `2` sin tocar el estado.
+
+`--code-review` consume esa publicación sin volver a analizar la raíz. Emite
+como máximo 10 hotspots Python confirmados, con un máximo de 2 por archivo, y
+explica métricas, umbrales, analyzer, callers estáticos, limitaciones y digest.
+No admite `--apply`, `--route` ni otra operación directa. Use `--code-json` para
+el envelope `neocortex.code-review/v1`. Un snapshot full completado con USN
+indisponible sigue siendo consultable como `freshness=publication_only` y
+`current=false`; journal avanzado/discontinuo, manifest inválido o vínculo de
+raíz/framework incompatible devuelve `2` sin crear estado.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -207,6 +223,7 @@ Neocortex --pdf-doctor
 Neocortex --pdf-verify
 Neocortex --audio-doctor
 Neocortex --code-status
+Neocortex --code-review
 Neocortex --code-doctor
 Neocortex --semantic-status
 Neocortex --action-recovery-status --action-recovery-limit 100
@@ -242,6 +259,37 @@ no autoriza una descarga implícita. Ejecute primero `--semantic-status`:
 `--semantic-search` sólo lee embeddings y modelos publicados. Cero heads o cero
 embeddings significa que esa señal está indisponible, no que Semantic haya sido
 entregado.
+En el contrato exacto Jina/body de PDF y Code, resultados por debajo de sus
+pisos medidos (`0.50` y `0.46`) aparecen como abstenciones y la salida agrega
+`calibrated_abstentions`. Son filtros de recuperación por owner, no confianza ni
+probabilidad; otros contratos conservan su etiqueta no calibrada. Si un vector
+fue reutilizado por contenido exacto, el contrato se toma de su
+`payload_provenance`; valores contradictorios no reciben el piso.
+
+Code integra el canal Semantic mediante enlaces persistidos exactos, no por una
+coincidencia posterior de rutas:
+
+```powershell
+Neocortex --semantic-index text --semantic-source code
+Neocortex --code-search 'dónde se enlazan chunks con la generación publicada' --code-search-mode hybrid
+Neocortex --code-search 'validación de la versión vigente' --code-search-mode semantic --code-json
+```
+
+La indexación publica primero el head Semantic y luego sincroniza un enlace por
+chunk vigente de Code, con modelo, espacio y generación. Su salida añade
+`SEMANTIC_CODE_LINKS`; `--code-status --code-json` informa enlaces
+`active/current/stale`. La búsqueda emite `CODE_SEARCH_CHANNEL` o el objeto JSON
+`code-search-channel`. El modo `semantic` devuelve `2` cuando ese canal no puede
+demostrar head, cobertura y modelo local; `hybrid` continúa con las señales
+léxicas o estructurales. `--semantic-model-cache` y `--semantic-threads` también
+se admiten con una búsqueda Code `semantic`/`hybrid`; el override de cache es
+para laboratorios o instalaciones no canónicas y nunca descarga modelos.
+
+Los hits semánticos sólo se materializan cuando el enlace activo coincide con la
+versión actual, item Semantic, firma de modelo, espacio vectorial y generación
+publicada. Su `raw_score` permanece como similitud no calibrada y autoridad
+`retrieval_evidence_only`; no es confianza de clasificación ni permiso para
+renombrar, mover o eliminar.
 
 En modo `text`, la salida separa los rankings `semantic_text` y
 `semantic_title`. El primero busca contenido con peso RRF `1.0`; el segundo usa
@@ -270,6 +318,12 @@ una corrida completa ni autoriza escalar. Un replay exacto sigue enumerando y
 reconciliando O(n) miembros para detectar cambios, aunque no cree jobs, clone el
 head ni haga inferencia. Si existen altas, bajas o cambios, el sucesor todavía
 materializa la base en O(n).
+
+Cuando `--semantic-source code` termina una publicación textual completa, el
+servicio sincroniza el puente Code↔Semantic antes de devolver éxito. Una
+incompatibilidad, un chunk sin correspondencia exacta o un head distinto falla
+cerrado y no deja una cobertura parcial activa. Un replay exacto revalida el
+puente sin clonar el head ni crear jobs.
 
 ### Knowledge Plane de sólo lectura (`0.7.2`)
 
@@ -449,7 +503,7 @@ por familia:
 |---|---|
 | `--status-json` | `--status`; exige `--status`. |
 | `--review-json` | Candidatos, decisiones y evidencia de revisión; emite JSON Lines determinista. |
-| `--code-json` | Estado, manifest/frescura de autoanálisis, búsquedas, proyectos o reconstrucción conceptual de código. |
+| `--code-json` | Estado, manifest/frescura de autoanálisis, revisión top-10, búsquedas, proyectos o reconstrucción conceptual de código. |
 | `--action-recovery-json` | JSON determinista por acción o evento; exige `--action-recovery-status` o `--action-recovery-record`. |
 | `--retention-json` | Un documento JSON del plan dry-run; exige `--retention-status`. |
 | `--knowledge-json` | Snapshot, resultado de búsqueda o contexto Knowledge; exige exactamente una acción `--knowledge-*`. |
@@ -464,7 +518,7 @@ y compruebe siempre el código de salida.
 |---:|---|
 | `0` | Ayuda/versión o ejecución/consulta completada según su contrato. |
 | `1` | Excepción fatal no normalizada o fallo interno del worker de GUI. No es el código de una validación ordinaria de argumentos. |
-| `2` | Error de argumentos detectado por `argparse` o por la validación posterior, como una combinación incompatible; estado requerido ausente o incompatible; diagnóstico fallido —incluida abstención total de `--code-status` ante cualquier sidecar o cerca inestable en code/framework/Dedup—; generación Semantic incompleta, truncada o no publicada; error de acciones u organización; conciliación con efecto ambiguo/imposible —incluso si su evento fue registrado—; plan de retención bloqueado; o, con `--strict-exit-codes`, errores/parciales retenidos por una ruta. El watcher también devuelve `2` si conserva corridas fallidas o errores de fuente. |
+| `2` | Error de argumentos detectado por `argparse` o por la validación posterior, como una combinación incompatible; estado requerido ausente o incompatible; diagnóstico fallido —incluida abstención total de `--code-status`/`--code-review` ante sidecars, cerca inestable o publicación no elegible—; generación Semantic incompleta, truncada o no publicada; error de acciones u organización; conciliación con efecto ambiguo/imposible —incluso si su evento fue registrado—; plan de retención bloqueado; o, con `--strict-exit-codes`, errores/parciales retenidos por una ruta. El watcher también devuelve `2` si conserva corridas fallidas o errores de fuente. |
 | `3` | Knowledge terminó con snapshot estable y cobertura completa, pero search/context no obtuvo evidencia. |
 | `4` | Knowledge produjo una respuesta parcial o no soportada; incluye propietarios necesarios ausentes. |
 | `5` | El snapshot Knowledge volvió a cambiar durante el único reintento global acotado. |
@@ -534,7 +588,8 @@ y los planes. El watcher y `--route-only` rechazan `--apply`.
 - Semántica y catálogo construyen staging invisible y sólo cambian su
   generación publicada mediante una transacción CAS completa.
 - `--watch` permanece en primer plano hasta cancelarse y genera nuevas corridas
-  integradas.
+  integradas. Usa USN como señal cuando existe; de otro modo ejecuta inventario
+  normal portable cada `--watch-portable-interval-seconds` (300 por defecto).
 
 Consulte [OPERATIONS.md](OPERATIONS.md) antes de usar watcher, reanudación,
 límites de recursos o mantenimiento.

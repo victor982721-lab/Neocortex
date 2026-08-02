@@ -10,6 +10,7 @@ from typing import Literal
 from _01_Enumeracion import (
     JournalCursor,
     JournalDiscontinuityError,
+    NtfsUsnError,
     query_journal_cursor,
 )
 from _02_Deduplicacion import (
@@ -33,8 +34,8 @@ MAX_INVENTORY_ATTEMPTS = 3
 @dataclass(frozen=True, slots=True)
 class PreparedInventory:
     scan: ScanSummary
-    journal_before: JournalCursor
-    reconciliation: ReconcileResult
+    journal_before: JournalCursor | None
+    reconciliation: ReconcileResult | None
     reconciliation_records: int
     inventory_attempts: int
     inventory_mode: Literal["full", "incremental"]
@@ -58,9 +59,17 @@ def _checkpoint_cursor(
         checkpoint is not None
         and checkpoint.valid
         and checkpoint.inventory_policy_signature == inventory_policy_signature
+        and checkpoint.journal_available
         and checkpoint.volume == journal_before.volume
         and checkpoint.journal_id == journal_before.journal_id
+        and checkpoint.next_usn is not None
         and checkpoint.next_usn <= journal_before.next_usn
+    ):
+        return checkpoint, None
+    if (
+        checkpoint.volume is None
+        or checkpoint.journal_id is None
+        or checkpoint.next_usn is None
     ):
         return checkpoint, None
     return checkpoint, JournalCursor(
@@ -128,6 +137,50 @@ def _try_incremental_inventory(
 
 
 # region [03] Full inventory with finite USN reconciliation
+
+
+def _full_inventory_without_journal(
+    index: DedupIndex,
+    root: Path,
+    *,
+    progress: ProgressCallback,
+    exclusion_policy: InventoryExclusionPolicy,
+    publish_checkpoint: bool,
+) -> PreparedInventory:
+    """Capture one honest portable snapshot without inventing a USN cursor."""
+
+    scan = index.scan(
+        root,
+        exclusion_policy=exclusion_policy,
+        progress=progress,
+    )
+    if scan.errors:
+        raise InventoryError(
+            f"inventory scan {scan.scan_id} was partial with "
+            f"{scan.errors} traversal errors; no checkpoint was published"
+        )
+    index.refresh_scan_aggregates(scan.scan_id)
+    if publish_checkpoint:
+        index.bind_inventory_checkpoint(
+            InventoryCheckpoint(
+                str(root),
+                scan.scan_id,
+                None,
+                None,
+                None,
+                True,
+                exclusion_policy.signature,
+            )
+        )
+    return PreparedInventory(
+        scan=index.scan_summary(scan.scan_id),
+        journal_before=None,
+        reconciliation=None,
+        reconciliation_records=0,
+        inventory_attempts=1,
+        inventory_mode="full",
+        inventory_policy_signature=exclusion_policy.signature,
+    )
 
 
 def _full_inventory(
@@ -213,29 +266,58 @@ def prepare_inventory(
     state: FrameworkState,
     run_id: int,
     root: Path,
-    journal_before: JournalCursor,
+    journal_before: JournalCursor | None,
     *,
     progress: ProgressCallback,
     exclusion_policy: InventoryExclusionPolicy,
     allow_incremental: bool = True,
+    publish_portable_checkpoint: bool = False,
 ) -> PreparedInventory:
     started = time.perf_counter_ns()
     prepared = None
-    if allow_incremental:
-        prepared = _try_incremental_inventory(
-            index,
-            root,
-            journal_before,
-            progress=progress,
-            exclusion_policy=exclusion_policy,
-        )
-    if prepared is None:
-        prepared = _full_inventory(
+    if journal_before is None:
+        prepared = _full_inventory_without_journal(
             index,
             root,
             progress=progress,
             exclusion_policy=exclusion_policy,
+            publish_checkpoint=publish_portable_checkpoint,
         )
+    else:
+        try:
+            if allow_incremental:
+                prepared = _try_incremental_inventory(
+                    index,
+                    root,
+                    journal_before,
+                    progress=progress,
+                    exclusion_policy=exclusion_policy,
+                )
+            if prepared is None:
+                prepared = _full_inventory(
+                    index,
+                    root,
+                    progress=progress,
+                    exclusion_policy=exclusion_policy,
+                )
+        except (NtfsUsnError, OSError) as exc:
+            state.record_event(
+                run_id,
+                "warning",
+                "inventory-journal",
+                "USN no disponible; usando snapshot portable",
+                {
+                    "error_type": type(exc).__name__,
+                    "detail": str(exc),
+                },
+            )
+            prepared = _full_inventory_without_journal(
+                index,
+                root,
+                progress=progress,
+                exclusion_policy=exclusion_policy,
+                publish_checkpoint=publish_portable_checkpoint,
+            )
 
     removed_state = index.prune_obsolete_state(
         protected_scan_ids=state.referenced_inventory_scan_ids()
@@ -249,6 +331,9 @@ def prepare_inventory(
         {
             "schema": "neocortex.inventory-prepared/v1",
             "mode": prepared.inventory_mode,
+            "journal_status": (
+                "available" if prepared.journal_before is not None else "unavailable"
+            ),
             "scan_id": prepared.scan.scan_id,
             "inventory_policy_signature": prepared.inventory_policy_signature,
             "files": prepared.scan.files_seen,

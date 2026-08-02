@@ -197,10 +197,11 @@ def _print_global_resource_report(result) -> None:
 
 def _print_dedup_report(result) -> None:
     plan = result.dedup_plan
+    journal_span = result.journal_usn_span
     print(
         f"duplicate_groups={plan.group_count} "
         f"reclaimable_bytes={plan.reclaimable_bytes} "
-        f"journal_usn_span={result.journal_usn_span} "
+        f"journal_usn_span={journal_span if journal_span is not None else 'unavailable'} "
         f"reconciliation_records={result.reconciliation_records} "
         f"inventory_attempts={result.inventory_attempts} "
         f"inventory_mode={result.inventory_mode}"
@@ -273,6 +274,8 @@ def _print_code_report(result) -> None:
         f"code_persist_ms={summary.persist_milliseconds} "
         f"code_graph_ms={summary.graph_milliseconds}"
     )
+
+
 def has_organization_errors(result) -> bool:
     """Return whether an authorized organization action remained unresolved."""
 
@@ -384,6 +387,7 @@ def print_watcher_summary(summary: WatcherSummary) -> None:
         f"WATCH_SUMMARY cancelled={int(summary.cancelled)} "
         f"bootstrap_runs={summary.bootstrap_runs} change_runs={summary.change_runs} "
         f"discontinuity_runs={summary.discontinuity_runs} "
+        f"portable_runs={summary.portable_runs} "
         f"successful_runs={summary.successful_runs} failed_runs={summary.failed_runs} "
         f"signal_batches={summary.signal_batches} "
         f"signal_records={summary.signal_records} idle_polls={summary.idle_polls} "

@@ -20,6 +20,8 @@ from _04_Nucleo_Operativo.corpus_access import CorpusAccessPolicy
 from _04_Nucleo_Operativo.framework_state_writer import (
     DurableInventoryBinding,
     DurableInventoryOwner,
+    FrameworkState,
+    read_latest_durable_inventory_owner,
 )
 from _04_Nucleo_Operativo.models import FrameworkConfig
 from _04_Nucleo_Operativo.orchestrator import (
@@ -109,6 +111,16 @@ def checkpoint(next_usn: int = 100) -> InventoryCheckpoint:
     )
 
 
+def portable_checkpoint() -> InventoryCheckpoint:
+    return InventoryCheckpoint(
+        root=str(Path("C:/corpus")),
+        scan_id=7,
+        volume=None,
+        journal_id=None,
+        next_usn=None,
+    )
+
+
 def batch(before: int, after: int, records: int = 1) -> UsnChangeBatch:
     return UsnChangeBatch(
         JournalCursor("C:", 41, before),
@@ -124,6 +136,22 @@ def framework_config(tmp_path: Path) -> FrameworkConfig:
         root=corpus,
         state_directory=tmp_path / "state",
     )
+
+
+def test_durable_owner_reader_does_not_recreate_framework_sidecars(
+    tmp_path: Path,
+) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    database = tmp_path / "framework.sqlite3"
+    with FrameworkState(database):
+        pass
+
+    sidecars = (Path(f"{database}-wal"), Path(f"{database}-shm"))
+    assert not any(path.exists() for path in sidecars)
+
+    assert read_latest_durable_inventory_owner(database, corpus) is None
+    assert not any(path.exists() for path in sidecars)
 
 
 def durable_loaders(
@@ -158,17 +186,22 @@ def durable_loaders(
         observed = loader(root)
         if observed is None:
             return None
+        end_cursor = (
+            JournalCursor(
+                observed.volume,
+                observed.journal_id,
+                observed.next_usn,
+            )
+            if observed.journal_available
+            else None
+        )
         return DurableInventoryOwner(
             DurableInventoryBinding(
                 run_id=17,
                 scan_id=observed.scan_id,
                 corpus_access_mode="normal",
                 inventory_policy_signature=boundary.effective_signature,
-                end_cursor=JournalCursor(
-                    observed.volume,
-                    observed.journal_id,
-                    observed.next_usn,
-                ),
+                end_cursor=end_cursor,
             ),
             boundary.access_policy,
         )
@@ -297,6 +330,83 @@ def test_no_changes_does_not_start_an_integrated_run(tmp_path: Path) -> None:
     assert summary.successful_runs == 0
     assert summary.failed_runs == 0
     assert source.closed == 1
+
+
+def test_portable_checkpoint_schedules_integrated_runs_without_a_usn_source(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    durable = portable_checkpoint()
+    reasons: list[str] = []
+    watcher: IncrementalWatcher
+
+    def run_once() -> object:
+        watcher.request_cancellation()
+        return SimpleNamespace(run_id=23, inventory_mode="full")
+
+    app_config = framework_config(tmp_path)
+    checkpoint_loader, owner_loader = durable_loaders(
+        app_config,
+        lambda _root: durable,
+    )
+    watcher = IncrementalWatcher(
+        app_config,
+        IncrementalWatcherConfig(portable_interval_seconds=15),
+        checkpoint_loader=checkpoint_loader,
+        durable_owner_loader=owner_loader,
+        journal_source_factory=lambda *_args: pytest.fail(
+            "portable watcher attempted to open USN"
+        ),
+        run_factory=lambda: FakeRun(run_once),
+        run_callback=lambda summary: reasons.append(summary.reason),
+        monotonic=clock.monotonic,
+        time_ns=clock.time_ns,
+        waiter=clock.wait,
+    )
+
+    summary = watcher.run_foreground()
+
+    assert reasons == ["portable-poll"]
+    assert clock.waits == [15]
+    assert summary.portable_runs == 1
+    assert summary.change_runs == summary.discontinuity_runs == 0
+    assert summary.source_restarts == summary.signal_batches == 0
+    assert summary.successful_runs == 1
+
+
+def test_unavailable_usn_falls_back_to_one_portable_integrated_run(
+    tmp_path: Path,
+) -> None:
+    durable = checkpoint()
+    reasons: list[str] = []
+    watcher: IncrementalWatcher
+
+    def run_once() -> object:
+        watcher.request_cancellation()
+        return SimpleNamespace(run_id=24, inventory_mode="full")
+
+    app_config = framework_config(tmp_path)
+    checkpoint_loader, owner_loader = durable_loaders(
+        app_config,
+        lambda _root: durable,
+    )
+    watcher = IncrementalWatcher(
+        app_config,
+        checkpoint_loader=checkpoint_loader,
+        durable_owner_loader=owner_loader,
+        journal_source_factory=lambda *_args: (_ for _ in ()).throw(
+            OSError("raw journal unavailable")
+        ),
+        run_factory=lambda: FakeRun(run_once),
+        run_callback=lambda summary: reasons.append(summary.reason),
+    )
+
+    summary = watcher.run_foreground()
+
+    assert reasons == ["portable-fallback"]
+    assert summary.portable_runs == 1
+    assert summary.source_errors == 1
+    assert summary.successful_runs == 1
 
 
 def test_failed_run_backs_off_and_restarts_from_unchanged_checkpoint(
@@ -522,7 +632,7 @@ def test_observation_errors_use_bounded_exponential_backoff(tmp_path: Path) -> N
         nonlocal attempts
         attempts += 1
         if attempts <= 3:
-            raise OSError(f"temporary failure {attempts}")
+            raise RuntimeError(f"temporary failure {attempts}")
 
         def stop() -> None:
             watcher.request_cancellation()

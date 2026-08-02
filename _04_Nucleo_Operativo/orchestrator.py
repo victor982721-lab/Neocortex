@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -16,7 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, cast
 
-from _01_Enumeracion import JournalCursor, query_journal_cursor
+from _01_Enumeracion import JournalCursor, NtfsUsnError, query_journal_cursor
 from _02_Deduplicacion import (
     DedupIndex,
     DedupPlanner,
@@ -677,7 +676,12 @@ class FrameworkOrchestrator:
                 "fase",
             ),
         )
-        journal_before = query_journal_cursor(root.drive)
+        journal_error: str | None = None
+        try:
+            journal_before: JournalCursor | None = query_journal_cursor(root.drive)
+        except (NtfsUsnError, OSError) as exc:
+            journal_before = None
+            journal_error = f"{type(exc).__name__}: {exc}"
         emit_progress(
             self.progress,
             ProgressEvent(
@@ -728,22 +732,31 @@ class FrameworkOrchestrator:
                         "state_directory": str(self.config.state_directory),
                         "corpus_access_mode": "analyze_only",
                         "inventory_policy_signature": inventory_policy.signature,
+                        "journal_status": (
+                            "available" if journal_before is not None else "unavailable"
+                        ),
+                        "journal_error": journal_error,
                         "internal_paths_policy": internal_paths_policy.manifest(),
                         "selected_routes": ["code"],
                     },
                 )
                 state.set_run_phase(run_id, "inventory")
                 with DedupIndex(self.config.dedup_database) as dedup_index:
-                    allow_incremental, gate_reason, source_run_id = (
-                        self._self_analysis_incremental_gate(
-                            state=state,
-                            dedup_index=dedup_index,
-                            root=root,
-                            access_policy=access_policy,
-                            inventory_policy=inventory_policy,
-                            journal_before=journal_before,
+                    if journal_before is None:
+                        allow_incremental = False
+                        gate_reason = "journal_unavailable_full_scan"
+                        source_run_id = None
+                    else:
+                        allow_incremental, gate_reason, source_run_id = (
+                            self._self_analysis_incremental_gate(
+                                state=state,
+                                dedup_index=dedup_index,
+                                root=root,
+                                access_policy=access_policy,
+                                inventory_policy=inventory_policy,
+                                journal_before=journal_before,
+                            )
                         )
-                    )
                     state.record_event(
                         run_id,
                         "info" if allow_incremental else "warning",
@@ -805,8 +818,19 @@ class FrameworkOrchestrator:
                     raise RuntimeError(
                         "self-analysis code route returned no effective signature"
                     )
-                journal_after = inventory.reconciliation.cursor
-                if journal_after.journal_id != journal_before.journal_id:
+                reconciliation = inventory.reconciliation
+                journal_after = (
+                    None if reconciliation is None else reconciliation.cursor
+                )
+                if (journal_after is None) != (journal_before is None):
+                    raise RuntimeError(
+                        "self-analysis inventory returned partial journal evidence"
+                    )
+                if (
+                    journal_after is not None
+                    and journal_before is not None
+                    and journal_after.journal_id != journal_before.journal_id
+                ):
                     raise RuntimeError(
                         "the USN journal changed during protected self-analysis"
                     )
@@ -947,7 +971,12 @@ class FrameworkOrchestrator:
             self.progress,
             ProgressEvent("framework", "prepare", "Preparando ejecución", 0, 1, "fase"),
         )
-        journal_before = query_journal_cursor(root.drive)
+        journal_error: str | None = None
+        try:
+            journal_before: JournalCursor | None = query_journal_cursor(root.drive)
+        except (NtfsUsnError, OSError) as exc:
+            journal_before = None
+            journal_error = f"{type(exc).__name__}: {exc}"
         boundary.verify()
         emit_progress(
             self.progress,
@@ -977,6 +1006,10 @@ class FrameworkOrchestrator:
                 {
                     "root": str(root),
                     "apply_actions": self.config.apply_actions,
+                    "journal_status": (
+                        "available" if journal_before is not None else "unavailable"
+                    ),
+                    "journal_error": journal_error,
                     "inventory_exclusion_signature": inventory_policy.signature,
                     "internal_paths_policy": boundary.internal_paths_policy.manifest(),
                     "inventory_policy_signature": boundary.effective_signature,
@@ -1094,14 +1127,19 @@ class FrameworkOrchestrator:
             try:
                 state.set_run_phase(run_id, "inventory")
                 with DedupIndex(self.config.dedup_database) as dedup_index:
-                    allow_incremental, gate_reason, source_run_id = (
-                        self._normal_incremental_gate(
-                            state=state,
-                            dedup_index=dedup_index,
-                            boundary=boundary,
-                            journal_before=journal_before,
+                    if journal_before is None:
+                        allow_incremental = False
+                        gate_reason = "journal_unavailable_portable_full_scan"
+                        source_run_id = None
+                    else:
+                        allow_incremental, gate_reason, source_run_id = (
+                            self._normal_incremental_gate(
+                                state=state,
+                                dedup_index=dedup_index,
+                                boundary=boundary,
+                                journal_before=journal_before,
+                            )
                         )
-                    )
                     state.record_event(
                         run_id,
                         "info" if allow_incremental else "warning",
@@ -1124,6 +1162,7 @@ class FrameworkOrchestrator:
                         progress=self.progress,
                         exclusion_policy=inventory_policy,
                         allow_incremental=allow_incremental,
+                        publish_portable_checkpoint=True,
                     )
                     boundary.verify()
                     if (
@@ -1226,8 +1265,18 @@ class FrameworkOrchestrator:
                     )
                     if self.selected_routes:
                         actions = action_runner.cleanup_empty_directories(plan, actions)
-                journal_after = reconciliation.cursor
-                if journal_after.journal_id != journal_before.journal_id:
+                journal_after = (
+                    None if reconciliation is None else reconciliation.cursor
+                )
+                if (journal_after is None) != (journal_before is None):
+                    raise RuntimeError(
+                        "normal inventory returned partial journal evidence"
+                    )
+                if (
+                    journal_after is not None
+                    and journal_before is not None
+                    and journal_after.journal_id != journal_before.journal_id
+                ):
                     raise RuntimeError(
                         "the USN journal changed during the initial framework run"
                     )
@@ -1615,4 +1664,6 @@ class FrameworkOrchestrator:
             route_results=route_results,
             global_resources=global_resource_summary,
         )
+
+
 # endregion [02]
