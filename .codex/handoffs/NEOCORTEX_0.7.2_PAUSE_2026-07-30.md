@@ -81,10 +81,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Base publicada al iniciar este corte: `main` en
   `a61567df91cd7bd6cb4e30a47bb519804a27dd72`, idéntico a `origin/main` tras
   fusionar el PR #9.
-- El checkout fuente es `0.7.2`. El cierre rc19 se prepara en la rama
-  `codex/neocortex-knowledge-exact-hotspot`; la igualdad final entre `main` y
-  `origin/main` se verifica después del merge porque el commit no puede
-  autorreferenciar su propio hash desde este handoff.
+- El checkout fuente es `0.7.2`. El cierre rc19 se rastrea en el PR #10; su
+  implementación base es `944986674a2b038196698327799fcd09310de7cd`. La
+  igualdad final entre `main` y `origin/main` se verifica después del merge
+  porque el commit no puede autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
