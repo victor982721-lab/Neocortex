@@ -66,9 +66,11 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Base publicada al iniciar este corte: `main` en
   `f0096ab31089d250f8a00cf01e7fc67f1f71f2fa`, idéntico a `origin/main` tras
   fusionar el PR #6.
-- El checkout fuente es `0.7.2`; el cierre del hotspot Semantic se prepara en
-  `codex/neocortex-semantic-queue-hotspot`. Su publicación final debe
-  verificarse en Git porque este handoff forma parte del mismo corte.
+- El checkout fuente es `0.7.2`. El cierre del hotspot Semantic se rastrea en
+  el PR #7; su implementación base es
+  `67dc0c3aa51e70db33f862404390ed9d8c63a3cc`. La igualdad final entre `main` y
+  `origin/main` se verifica después del merge porque el commit no puede
+  autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
