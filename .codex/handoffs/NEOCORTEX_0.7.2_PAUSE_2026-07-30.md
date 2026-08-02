@@ -15,14 +15,23 @@ quiescencia; decisión de imagen v10 validada con OCR; y watcher portable que us
 USN sólo como acelerador. Conserva además inventario Dedup v9, enlace exacto
 Code↔Semantic y analizador Python v3/resolver v4.
 
-El corte de autoanálisis portable quedó fusionado mediante el PR #3 en el merge
-commit `2c5a046177ce3a1f2fdb5e882d847a8fbf136405`. El candidato focal `rc12`
-añade `Neocortex --code-publication-diff`, amplía la calibración del ranking a
-41 símbolos y cambia a `python-confirmed-hotspots-v2`: la `Precision@10`
+El autoanálisis portable quedó fusionado mediante el PR #3 en
+`2c5a046177ce3a1f2fdb5e882d847a8fbf136405`. El corte focal `rc12` quedó
+fusionado mediante el PR #4 en
+`147a500cc659b859e9eb997d261f9912b97ef847`: añade
+`Neocortex --code-publication-diff`, amplía la calibración del ranking a 41
+símbolos y cambia a `python-confirmed-hotspots-v2`. La `Precision@10`
 provisional sube de 0.60 a 0.70 sin degradar P@20/30/40 y `build_parser` baja
 del rango 2 al 39. Una muestra portable de 40 `probable_dead_symbol` encontró
 36 usos demostrables, un contrato externo y tres candidatos de revisión; la
 señal falla el gate de 0.90 y permanece suprimida.
+
+El siguiente corte rc14 cierra el primer hotspot accionable producido por ese
+ranking. `knowledge_search.execute_knowledge_search` pasa de 416 líneas y
+complejidad 75 a un orquestador de 26 líneas; las fases conservan seams, orden,
+cancelación, telemetría y completitud. El diff rc12→rc14 retira exactamente ese
+hotspot, no añade ninguno y conserva cero resoluciones nuevas, corregidas o
+perdidas sobre las calls comunes.
 
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
@@ -39,10 +48,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
 - Base publicada de esta continuación: `main` en
-  `2c5a046177ce3a1f2fdb5e882d847a8fbf136405`, idéntico a `origin/main` tras
-  fusionar el PR #3.
-- El checkout fuente es `0.7.2`; el corte de calibración y diff se prepara en
-  `codex/neocortex-autoanalysis-calibration`. Su commit/merge final debe
+  `147a500cc659b859e9eb997d261f9912b97ef847`, idéntico a `origin/main` tras
+  fusionar el PR #4.
+- El checkout fuente es `0.7.2`; el cierre del hotspot Knowledge se prepara en
+  `codex/neocortex-knowledge-search-hotspot`. Su commit/merge final debe
   verificarse en Git porque este handoff forma parte de ese mismo corte.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
@@ -203,6 +212,21 @@ ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
 
+### Candidato focal `rc14` — cierre de hotspot Knowledge
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc14\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `1A2836C9B718E85F47BBB2691453BC0CDDA6C421E78706C54E545431FDEB4F54`;
+- 1 322 579 bytes, 269 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e import de `knowledge_search.py`
+  confirmado desde el `site-packages` del propio venv;
+- `execute_knowledge_search` instalado conserva su firma pública y ocupa 26
+  líneas;
+- el launcher rc14 reprodujo el diff rc12→rc14 sin modificar el SHA-256 de
+  ninguna SQLite. Este runtime no se promovió al launcher estable.
+
 ### Candidato focal `rc12` — calibración y diff de publicaciones
 
 Wheel:
@@ -294,7 +318,7 @@ decoder conserva lectura estricta de v1. Un status journal-free puede validar
 la evidencia terminada, pero devuelve `current=false` porque una consulta
 read-only no puede demostrar frescura posterior sin volver a recorrer la raíz.
 
-Publicación actual rc12:
+Baseline calibrado rc12:
 `C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc12-state`.
 
 - piloto inicial acotado: inventario 517 archivos, 509 candidatos, 509
@@ -320,6 +344,26 @@ Publicación actual rc12:
   corregidas o perdidas y hotspots 185→185. Los sitios exclusivos reflejan
   desplazamientos de rango y tres Python nuevos, como declara la limitación del
   contrato.
+
+Publicación del refactor rc14:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc14-state`.
+
+- 517 archivos inventariados, 509 candidatos, 509 procesados, 8 894 324 bytes,
+  14 679 símbolos, 80 993 referencias, 199 diagnósticos del analizador y cero
+  errores/acciones en 18.260 s;
+- 464/464 Python completos, 18 518/58 747 calls resueltas y 246 dead
+  suprimidos;
+- `--code-review` publica 184 hotspots y digest
+  `e7e45591ab39c850d5049adacabedde3`;
+- el diff rc12→rc14, digest `acc663603c843d26e8591433c64cecb3`,
+  retira sólo `knowledge_search.execute_knowledge_search`, añade cero hotspots
+  y conserva cero resoluciones nuevas, corregidas o perdidas;
+- replay final mediante el launcher instalado rc14: 0 procesados/509 cache
+  hits en 3.706 s, cero bytes y cero ms de lectura, análisis, persistencia y
+  grafo; los digests de review/diff permanecieron estables;
+- rc13 fue un piloto intermedio detenido: retiró el hotspot objetivo pero creó
+  dos auxiliares y empeoró 185→186. La segunda partición eliminó ambos y cerró
+  185→184; no se publicó ese wheel como resultado final.
 
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
@@ -462,6 +506,10 @@ ausentes y su candidate limit, no evidencia inventada.
   `279 passed`, `2 subtests`; la barrera focal previa aprobó `80 passed`.
   Ruff/format limpios en 11 archivos y Mypy sin errores en los cinco módulos
   fuente del corte.
+- Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
+  amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
+  separado los dos límites estructurales preexistentes de 907/910 líneas frente
+  a 900, fuera del archivo modificado.
 - Resolver imports/aliases/reexports y refactor del hotspot: `137 passed`; Ruff
   0.15 y Mypy 2.1 limpios en los tres módulos fuente modificados. El piloto de
   30 archivos tuvo 30/30 cache hits en replay y la publicación completa 504/504.
@@ -480,13 +528,13 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar el siguiente hotspot accionable.** Empezar por
-   `knowledge_search.execute_knowledge_search`, preservar orden de owners,
-   retries, telemetría, abstención y contratos de error con pruebas de
-   comportamiento; refactorizar sólo la primera frontera que reduzca su
-   complejidad sin cambiar resultados.
-2. **Demostrar la mejora con rc13.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc12; exigir caída de score/hotspot, cero
+1. **Cerrar el siguiente resultado accionable, no el primer score bruto.** El
+   rango 1 actual, `GoldenCase._validate_required_feature`, está etiquetado
+   `defer/validator`; continuar con el rango 2 accionable
+   `semantic_generation_repository._queue_job_rows_bounded`, preservando
+   transacción, high-watermark, deadline y reanudación.
+2. **Demostrar la mejora con rc15.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc14; exigir caída neta de hotspots, cero
    pérdidas de resolución y replay 100 % cache hit.
 3. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
    callbacks, registries y contratos que ya explican los 37 falsos positivos;
