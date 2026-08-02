@@ -121,15 +121,23 @@ def test_code_review_abstains_without_initializing_absent_state(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     args = _validated(
-        "--state-directory", str(tmp_path), "--code-review", "--code-json"
+        "--state-directory",
+        str(tmp_path),
+        "--code-review",
+        "--code-review-limit",
+        "50",
+        "--code-json",
     )
 
+    assert args.code_review_limit == 50
     assert dispatch_direct(args) == 2
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
+    assert payload["actionability_version"] == "python-maintenance-actionability-v1"
+    assert payload["recommendation_status"] == "not_evaluated"
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()

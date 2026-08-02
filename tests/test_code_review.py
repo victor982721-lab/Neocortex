@@ -24,6 +24,11 @@ from _04_Nucleo_Operativo.code_contracts import (
     SymbolRecord,
 )
 from _04_Nucleo_Operativo.code_review import review_code_state
+from _04_Nucleo_Operativo.code_review_actionability import (
+    CodeReviewActionabilityInput,
+    assess_code_review_actionability,
+    classify_source_role,
+)
 from _04_Nucleo_Operativo.code_schema import (
     checkpoint_code_wal,
     remove_checkpointed_code_sidecars,
@@ -180,6 +185,112 @@ def test_rc11_top40_actionability_fixture_measures_ranking_v2() -> None:
     assert summary["duplicate_groups"] == []
 
 
+def _fixture_actionability_input(
+    label: dict[str, object],
+) -> CodeReviewActionabilityInput:
+    signals = label["signals"]
+    assert isinstance(signals, dict)
+    complexity = signals["complexity"]
+    function_lines = signals["function_lines"]
+    callers = int(signals["resolved_static_callers"])
+    return CodeReviewActionabilityInput(
+        path=str(label["path"]),
+        symbol=str(label["symbol"]),
+        root=None,
+        complexity_ratio_basis_points=(
+            0
+            if complexity is None
+            else (10_000 * int(complexity[0])) // int(complexity[1])
+        ),
+        length_ratio_basis_points=(
+            0
+            if function_lines is None
+            else (10_000 * int(function_lines[0])) // int(function_lines[1])
+        ),
+        production_callers=callers,
+        test_callers=0,
+        fixture_callers=0,
+        tool_callers=0,
+        compatibility_callers=0,
+        consumer_modules=callers,
+    )
+
+
+def test_actionability_gate_preserves_provisional_rc11_labels() -> None:
+    payload = json.loads(
+        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
+    )
+    labels = payload["labels"]
+    assessed = [
+        (label, assess_code_review_actionability(_fixture_actionability_input(label)))
+        for label in labels
+    ]
+
+    assert all(
+        assessment.construction == label["construction"]
+        for label, assessment in assessed
+    )
+    assert all(
+        (assessment.actionability == "act_now") == (label["label"] == "actionable")
+        for label, assessment in assessed
+    )
+    assert not any(
+        assessment.actionability == "act_now"
+        for label, assessment in assessed
+        if label["construction"] in {"builder", "initializer", "rule", "validator"}
+    )
+
+
+def test_actionability_gate_selects_rc14_first_prudent_candidate() -> None:
+    payload = json.loads(
+        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
+    )
+    rc14_top_10 = sorted(
+        (
+            label
+            for label in payload["labels"]
+            if isinstance(label["candidate"], dict)
+            and label["candidate"]["rank"] is not None
+            and 2 <= int(label["candidate"]["rank"]) <= 11
+        ),
+        key=lambda label: int(label["candidate"]["rank"]),
+    )
+    assessed = [
+        (label, assess_code_review_actionability(_fixture_actionability_input(label)))
+        for label in rc14_top_10
+    ]
+    recommendations = [
+        label for label, assessment in assessed if assessment.actionability == "act_now"
+    ]
+
+    assert rc14_top_10[0]["symbol"] == (
+        "knowledge_evaluation.GoldenCase._validate_required_feature"
+    )
+    assert assessed[0][1].actionability == "characterize_first"
+    assert recommendations[0]["symbol"] == (
+        "semantic_generation_repository._queue_job_rows_bounded"
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "root", "expected"),
+    (
+        (r"C:\repo\package\service.py", None, "production"),
+        (r"C:\repo\tests\test_service.py", None, "test"),
+        ("/repo/tests/fixtures/sample.py", None, "fixture"),
+        ("/repo/tools/inspect_state.py", None, "tool"),
+        ("/repo/compatibility/legacy_reader.py", None, "compatibility"),
+        ("/tools/repository/package/service.py", "/tools/repository", "production"),
+    ),
+)
+def test_source_roles_are_portable(
+    path: str,
+    root: str | None,
+    expected: str,
+) -> None:
+    assert classify_source_role(path, root) == expected
+
+
 def _source_range(index: int, function_lines: int) -> SourceRange:
     start_line = 1 + index * 400
     start_byte = index * 1_000
@@ -323,7 +434,7 @@ def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
                 state_directory,
                 filename="dominant.py",
                 identity=100,
-                prefix="dominant",
+                prefix="compute_dominant",
                 complexities=(60, 59, 58, 57, 56),
             )
             _store_hotspot_file(
@@ -346,9 +457,14 @@ def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
             for offset in range(3):
                 caller_name = f"pkg.caller_{offset}"
                 caller_range = _source_range(0, 3)
+                caller_paths = (
+                    Path("caller_0.py"),
+                    Path("tests") / "caller_1.py",
+                    Path("tests") / "fixtures" / "caller_2.py",
+                )
                 state.store_analysis(
                     _analysis(
-                        state_directory / f"caller_{offset}.py",
+                        state_directory / caller_paths[offset],
                         130 + offset,
                         symbols=(
                             SymbolRecord(
@@ -364,10 +480,10 @@ def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
                         references=(
                             ReferenceRecord(
                                 "call",
-                                "dominant_0",
+                                "compute_dominant_0",
                                 caller_range,
                                 source_qualified_name=caller_name,
-                                target_hint="pkg.dominant_0",
+                                target_hint="pkg.compute_dominant_0",
                                 confirmed=True,
                                 confidence=1.0,
                                 evidence="fixture-resolved-static-call",
@@ -469,9 +585,20 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert expanded.findings[:10] == first.findings
     assert max(Counter(finding.path for finding in first.findings).values()) == 2
     assert len({finding.path for finding in first.findings}) == 9
-    assert first.findings[0].symbol == "pkg.dominant_0"
+    assert first.findings[0].symbol == "pkg.compute_dominant_0"
     assert first.findings[0].resolved_static_callers == 3
+    assert first.findings[0].impact.production_callers == 1
+    assert first.findings[0].impact.test_callers == 1
+    assert first.findings[0].impact.fixture_callers == 1
+    assert first.findings[0].construction == "algorithm"
+    assert first.findings[0].actionability == "act_now"
+    assert first.recommendations[0].hotspot_rank == 1
     assert len(first.findings[0].callers) == 3
+    assert {caller.source_role for caller in first.findings[0].callers} == {
+        "production",
+        "test",
+        "fixture",
+    }
     assert {diagnostic.code for diagnostic in first.findings[0].diagnostics} == {
         "high_complexity",
         "long_function",
@@ -487,6 +614,19 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert first.coverage is not None
     assert first.coverage.probable_dead_suppressed > 0
     assert first.digest is not None
+
+    monkeypatch.setattr(
+        code_review_module,
+        "CODE_REVIEW_RANKING",
+        "fixture-ranking-next",
+    )
+    reinterpreted = review_code_state(state_directory)
+    assert [finding.hotspot_id for finding in reinterpreted.findings] == [
+        finding.hotspot_id for finding in first.findings
+    ]
+    assert [finding.finding_id for finding in reinterpreted.findings] != [
+        finding.finding_id for finding in first.findings
+    ]
 
 
 @pytest.mark.parametrize("limit", (0, 51, True))
@@ -556,6 +696,11 @@ def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
 
     assert result.status == "ready"
     assert result.findings == ()
+    assert result.recommendation_status == "abstained"
+    assert result.recommendation_reason == (
+        "no_act_now_candidate_within_bounded_findings"
+    )
+    assert result.recommendations == ()
     assert result.coverage is not None
     assert result.coverage.candidate_hotspots == 0
     assert result.digest is not None

@@ -8,6 +8,29 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .code_review_actionability import (
+    CODE_REVIEW_ACTIONABILITY,
+    CodeReviewActionabilityInput,
+    SourceRole,
+    assess_code_review_actionability,
+    classify_source_role,
+)
+from .code_review_models import (
+    CODE_REVIEW_SCHEMA,
+    CodeReviewCaller,
+    CodeReviewCoverage,
+    CodeReviewDigest,
+    CodeReviewDiagnostic,
+    CodeReviewFinding,
+    CodeReviewImpact,
+    CodeReviewRecommendation,
+    CodeReviewResult,
+    CodeReviewSnapshot,
+    FindingCategory,
+    RecommendationStatus,
+    ReviewFreshness,
+    build_code_review_recommendations,
+)
 from .code_schema import (
     CODE_SCHEMA_VERSION,
     readonly_code_database,
@@ -22,150 +45,15 @@ from .self_analysis_status import (
 from .semantic_models import canonical_json, fingerprint_text
 
 
-# region [01] Public review contract
-
-
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v1"
 CODE_REVIEW_RANKING = "python-confirmed-hotspots-v2"
 CODE_REVIEW_LIMIT = 10
 CODE_REVIEW_MAX_LIMIT = 50
 CODE_REVIEW_MAX_PER_FILE = 2
 CODE_REVIEW_MAX_CANDIDATES = 10_000
 CODE_REVIEW_CALLER_EXAMPLES = 3
-
-ReviewStatus = Literal["ready", "abstained"]
-ReviewFreshness = Literal["current", "publication_only"]
-FindingCategory = Literal[
-    "complex_and_long_hotspot",
-    "high_complexity_hotspot",
-    "long_function_hotspot",
-]
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewDiagnostic:
-    """One exact analyzer diagnostic supporting a symbol hotspot."""
-
-    code: Literal["high_complexity", "long_function"]
-    value: int
-    threshold: int | None
-    source: str
-    tool_name: str
-    tool_version: str
-    confirmed: bool
-    confidence: float
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewCaller:
-    """One bounded, resolved static call site used as impact evidence."""
-
-    path: str
-    symbol: str | None
-    start_line: int
-    end_line: int
-    confidence: float
-    provenance: str
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewFinding:
-    """One symbol-level review candidate; rank is advisory, not calibrated risk."""
-
-    finding_id: str
-    rank: int
-    category: FindingCategory
-    path: str
-    symbol: str
-    symbol_kind: str
-    signature: str | None
-    start_line: int
-    end_line: int
-    start_column: int
-    end_column: int
-    start_byte: int
-    end_byte: int
-    complexity: int
-    function_lines: int
-    complexity_ratio_basis_points: int
-    length_ratio_basis_points: int
-    score_basis_points: int
-    incoming_references: int
-    incoming_calls: int
-    resolved_static_callers: int
-    analyzer_id: str
-    analyzer_version: str
-    file_xxh3_128: str | None
-    file_xxh3_64_guard: str | None
-    diagnostics: tuple[CodeReviewDiagnostic, ...]
-    callers: tuple[CodeReviewCaller, ...]
-    reasons: tuple[str, ...]
-    confidence: Literal["confirmed_static_evidence"] = "confirmed_static_evidence"
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewSnapshot:
-    """Published self-analysis snapshot that authorized this review."""
-
-    analysis_run_id: int
-    framework_run_id: int
-    scan_id: int
-    processing_signature: str
-    root: str
-    freshness: ReviewFreshness
-    current: bool
-    journal_status: str
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewCoverage:
-    """Bounded coverage and deliberately suppressed evidence."""
-
-    current_python_files: int
-    complete_python_files: int
-    incomplete_python_files: int
-    candidate_hotspots: int
-    enumerated_hotspots: int
-    probable_dead_suppressed: int
-    call_edges: int
-    resolved_call_edges: int
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewDigest:
-    """Collision-guarded deterministic identity of review evidence."""
-
-    xxh3_128: str
-    xxh3_64_guard: str
-    byte_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class CodeReviewResult:
-    """One JSON-ready review result with a deterministic content digest."""
-
-    database: str
-    status: ReviewStatus
-    reason: str | None
-    ranking: str
-    snapshot: CodeReviewSnapshot | None
-    coverage: CodeReviewCoverage | None
-    findings: tuple[CodeReviewFinding, ...]
-    limitations: tuple[str, ...]
-    digest: CodeReviewDigest | None
-
-    def as_payload(self) -> dict[str, object]:
-        return {
-            "kind": "code-review",
-            "schema": CODE_REVIEW_SCHEMA,
-            **asdict(self),
-        }
-
-
-# endregion [01]
-
-
-# region [02] Immutable Code snapshot and ranking inputs
+CODE_REVIEW_CONSUMER_MODULE_EXAMPLES = 5
+CODE_REVIEW_OUTGOING_CALL_LIMIT = 256
+CODE_REVIEW_RECOMMENDATION_LIMIT = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +61,7 @@ class _Candidate:
     file_id: int
     volume_id: str
     physical_file_id: str
+    project_root: str | None
     version_id: int
     symbol_id: int
     path: str
@@ -246,7 +135,14 @@ WITH current_references AS (
       AND d.code IN ('high_complexity','long_function')
     GROUP BY d.version_id,d.start_byte,d.end_byte
 )
-SELECT f.file_id,f.volume_id,f.physical_file_id,v.version_id,s.symbol_id,
+SELECT f.file_id,f.volume_id,f.physical_file_id,
+       (SELECT p.probable_root FROM project_memberships pm
+        JOIN projects p ON p.project_id=pm.project_id
+        WHERE pm.version_id=v.version_id AND pm.selected=1 AND p.status='current'
+          AND p.probable_root IS NOT NULL
+        ORDER BY pm.confidence DESC,LENGTH(p.probable_root) DESC,p.project_id
+        LIMIT 1) AS project_root,
+       v.version_id,s.symbol_id,
        f.current_path,s.qualified_name,s.kind,s.signature,s.start_line,s.end_line,
        s.start_column,s.end_column,s.start_byte,s.end_byte,
        COALESCE(s.complexity,0) AS complexity,
@@ -325,6 +221,9 @@ def _candidate(row: sqlite3.Row) -> _Candidate:
         file_id=int(row["file_id"]),
         volume_id=str(row["volume_id"]),
         physical_file_id=str(row["physical_file_id"]),
+        project_root=(
+            None if row["project_root"] is None else str(row["project_root"])
+        ),
         version_id=int(row["version_id"]),
         symbol_id=int(row["symbol_id"]),
         path=str(row["current_path"]),
@@ -491,6 +390,7 @@ def _diagnostics(
 def _callers(
     connection: sqlite3.Connection,
     symbol_id: int,
+    project_root: str | None,
 ) -> tuple[CodeReviewCaller, ...]:
     rows = connection.execute(
         """SELECT source_file.current_path,source_symbol.qualified_name,
@@ -520,9 +420,103 @@ def _callers(
             end_line=int(row["end_line"]),
             confidence=float(row["confidence"]),
             provenance=str(row["evidence"]),
+            source_role=classify_source_role(
+                str(row["current_path"]),
+                project_root,
+            ),
         )
         for row in rows
     )
+
+
+def _impact(
+    connection: sqlite3.Connection,
+    candidate: _Candidate,
+) -> CodeReviewImpact:
+    rows = connection.execute(
+        """SELECT source_file.current_path,
+        COUNT(*) AS call_sites
+        FROM code_references r
+        JOIN file_versions source_version ON source_version.version_id=r.version_id
+        JOIN files source_file
+          ON source_file.current_version_id=source_version.version_id
+         AND source_file.status='current'
+        WHERE r.target_symbol_id=? AND r.kind='call' AND r.confirmed=1
+          AND source_version.invalidated_ns IS NULL
+        GROUP BY source_version.version_id,COALESCE(r.source_symbol_id,0),
+                 source_file.current_path
+        ORDER BY source_file.current_path COLLATE NOCASE,
+                 COALESCE(r.source_symbol_id,0)""",
+        (candidate.symbol_id,),
+    ).fetchall()
+    caller_counts: dict[SourceRole, int] = {
+        "production": 0,
+        "test": 0,
+        "fixture": 0,
+        "tool": 0,
+        "compatibility": 0,
+    }
+    modules_by_role: dict[SourceRole, set[str]] = {
+        "production": set(),
+        "test": set(),
+        "fixture": set(),
+        "tool": set(),
+        "compatibility": set(),
+    }
+    call_sites = 0
+    for row in rows:
+        path = str(row["current_path"])
+        role = classify_source_role(path, candidate.project_root)
+        caller_counts[role] += 1
+        modules_by_role[role].add(path)
+        call_sites += int(row["call_sites"])
+    if len(rows) != candidate.resolved_static_callers:
+        raise ValueError("separated caller evidence disagrees with ranked caller count")
+    if call_sites != candidate.incoming_calls:
+        raise ValueError("separated call sites disagree with ranked incoming calls")
+    consumer_modules = set().union(*modules_by_role.values())
+    test_modules = modules_by_role["test"] | modules_by_role["fixture"]
+    return CodeReviewImpact(
+        call_sites=call_sites,
+        production_callers=caller_counts["production"],
+        test_callers=caller_counts["test"],
+        fixture_callers=caller_counts["fixture"],
+        tool_callers=caller_counts["tool"],
+        compatibility_callers=caller_counts["compatibility"],
+        consumer_modules=len(consumer_modules),
+        production_consumer_modules=len(modules_by_role["production"]),
+        test_consumer_modules=len(test_modules),
+        consumer_module_examples=tuple(
+            sorted(consumer_modules, key=lambda value: (value.casefold(), value))[
+                :CODE_REVIEW_CONSUMER_MODULE_EXAMPLES
+            ]
+        ),
+    )
+
+
+def _outgoing_calls(
+    connection: sqlite3.Connection,
+    candidate: _Candidate,
+) -> tuple[tuple[str, ...], bool]:
+    rows = connection.execute(
+        """SELECT DISTINCT r.name,r.target_hint
+        FROM code_references r
+        WHERE r.version_id=? AND r.source_symbol_id=? AND r.kind='call'
+        ORDER BY r.name COLLATE NOCASE,COALESCE(r.target_hint,'') COLLATE NOCASE
+        LIMIT ?""",
+        (
+            candidate.version_id,
+            candidate.symbol_id,
+            CODE_REVIEW_OUTGOING_CALL_LIMIT + 1,
+        ),
+    ).fetchall()
+    truncated = len(rows) > CODE_REVIEW_OUTGOING_CALL_LIMIT
+    values: set[str] = set()
+    for row in rows[:CODE_REVIEW_OUTGOING_CALL_LIMIT]:
+        values.add(str(row["name"]))
+        if row["target_hint"] is not None:
+            values.add(str(row["target_hint"]))
+    return tuple(sorted(values, key=lambda value: (value.casefold(), value))), truncated
 
 
 def _category(candidate: _Candidate) -> FindingCategory:
@@ -533,17 +527,27 @@ def _category(candidate: _Candidate) -> FindingCategory:
     return "long_function_hotspot"
 
 
-def _finding_id(candidate: _Candidate) -> str:
+def _hotspot_id(candidate: _Candidate) -> str:
     payload = canonical_json(
         {
-            "detector": CODE_REVIEW_RANKING,
             "volume_id": candidate.volume_id,
             "physical_file_id": candidate.physical_file_id,
             "symbol": candidate.symbol,
             "symbol_kind": candidate.symbol_kind,
         }
     )
-    return "code-review-finding-v1:xxh3_128:" + fingerprint_text(payload).xxh3_128
+    return "code-hotspot-v1:xxh3_128:" + fingerprint_text(payload).xxh3_128
+
+
+def _finding_id(candidate: _Candidate) -> str:
+    payload = canonical_json(
+        {
+            "hotspot_id": _hotspot_id(candidate),
+            "ranking": CODE_REVIEW_RANKING,
+            "actionability": CODE_REVIEW_ACTIONABILITY,
+        }
+    )
+    return "code-review-finding-v2:xxh3_128:" + fingerprint_text(payload).xxh3_128
 
 
 def _finding(
@@ -551,6 +555,25 @@ def _finding(
     candidate: _Candidate,
     rank: int,
 ) -> CodeReviewFinding:
+    impact = _impact(connection, candidate)
+    outgoing_calls, outgoing_calls_truncated = _outgoing_calls(connection, candidate)
+    assessment = assess_code_review_actionability(
+        CodeReviewActionabilityInput(
+            path=candidate.path,
+            symbol=candidate.symbol,
+            root=candidate.project_root,
+            complexity_ratio_basis_points=candidate.complexity_ratio_basis_points,
+            length_ratio_basis_points=candidate.length_ratio_basis_points,
+            production_callers=impact.production_callers,
+            test_callers=impact.test_callers,
+            fixture_callers=impact.fixture_callers,
+            tool_callers=impact.tool_callers,
+            compatibility_callers=impact.compatibility_callers,
+            consumer_modules=impact.consumer_modules,
+            outgoing_calls=outgoing_calls,
+            outgoing_calls_truncated=outgoing_calls_truncated,
+        )
+    )
     reasons: list[str] = []
     if candidate.high_complexity:
         reasons.append(f"confirmed_cyclomatic_complexity:{candidate.complexity}")
@@ -559,6 +582,7 @@ def _finding(
     reasons.append(f"resolved_static_callers:{candidate.resolved_static_callers}")
     return CodeReviewFinding(
         finding_id=_finding_id(candidate),
+        hotspot_id=_hotspot_id(candidate),
         rank=rank,
         category=_category(candidate),
         path=candidate.path,
@@ -579,12 +603,21 @@ def _finding(
         incoming_references=candidate.incoming_references,
         incoming_calls=candidate.incoming_calls,
         resolved_static_callers=candidate.resolved_static_callers,
+        impact=impact,
+        source_role=assessment.source_role,
+        construction=assessment.construction,
+        actionability=assessment.actionability,
+        change_risk=assessment.change_risk,
+        recommended_change=assessment.recommended_change,
+        actionability_evidence=assessment.evidence,
+        contracts_to_preserve=assessment.contracts_to_preserve,
+        recommended_validation=assessment.recommended_validation,
         analyzer_id=candidate.analyzer_id,
         analyzer_version=candidate.analyzer_version,
         file_xxh3_128=candidate.file_xxh3_128,
         file_xxh3_64_guard=candidate.file_xxh3_64_guard,
         diagnostics=_diagnostics(connection, candidate),
-        callers=_callers(connection, candidate.symbol_id),
+        callers=_callers(connection, candidate.symbol_id, candidate.project_root),
         reasons=tuple(reasons),
     )
 
@@ -651,21 +684,19 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
     )
 
 
-# endregion [02]
-
-
-# region [03] Self-analysis eligibility and public service
-
-
 def _abstained(path: Path, reason: str) -> CodeReviewResult:
     return CodeReviewResult(
         database=str(path),
         status="abstained",
         reason=reason,
         ranking=CODE_REVIEW_RANKING,
+        actionability_version=CODE_REVIEW_ACTIONABILITY,
+        recommendation_status="not_evaluated",
+        recommendation_reason=reason,
         snapshot=None,
         coverage=None,
         findings=(),
+        recommendations=(),
         limitations=(),
         digest=None,
     )
@@ -725,12 +756,18 @@ def _digest(
     snapshot: CodeReviewSnapshot,
     coverage: CodeReviewCoverage,
     findings: tuple[CodeReviewFinding, ...],
+    recommendation_status: RecommendationStatus,
+    recommendation_reason: str | None,
+    recommendations: tuple[CodeReviewRecommendation, ...],
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     payload = canonical_json(
         {
             "schema": CODE_REVIEW_SCHEMA,
             "ranking": CODE_REVIEW_RANKING,
+            "actionability_version": CODE_REVIEW_ACTIONABILITY,
+            "recommendation_status": recommendation_status,
+            "recommendation_reason": recommendation_reason,
             "snapshot": {
                 "processing_signature": snapshot.processing_signature,
                 "freshness": snapshot.freshness,
@@ -739,6 +776,9 @@ def _digest(
             },
             "coverage": asdict(coverage),
             "findings": [asdict(finding) for finding in findings],
+            "recommendations": [
+                asdict(recommendation) for recommendation in recommendations
+            ],
             "limitations": list(limitations),
         }
     )
@@ -778,7 +818,9 @@ def review_code_state(
     if status is None or freshness is None:
         raise AssertionError("eligible code review requires self-analysis status")
     limitations = [
-        "ranking_score_is_not_calibrated_risk",
+        "raw_ranking_score_is_not_calibrated_risk",
+        "actionability_is_deterministic_advice_not_human_ground_truth",
+        "intentional_complexity_requires_human_confirmation",
         "static_call_resolution_is_partial",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_symbol_is_suppressed_uncalibrated_evidence",
@@ -797,17 +839,39 @@ def review_code_state(
         current=status.freshness.current,
         journal_status=status.freshness.journal_status,
     )
+    recommendations = build_code_review_recommendations(
+        read.findings,
+        limit=CODE_REVIEW_RECOMMENDATION_LIMIT,
+    )
+    recommendation_status: RecommendationStatus = (
+        "ready" if recommendations else "abstained"
+    )
+    recommendation_reason = (
+        None if recommendations else "no_act_now_candidate_within_bounded_findings"
+    )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
         database=str(path),
         status="ready",
         reason=None,
         ranking=CODE_REVIEW_RANKING,
+        actionability_version=CODE_REVIEW_ACTIONABILITY,
+        recommendation_status=recommendation_status,
+        recommendation_reason=recommendation_reason,
         snapshot=snapshot,
         coverage=read.coverage,
         findings=read.findings,
+        recommendations=recommendations,
         limitations=limitation_tuple,
-        digest=_digest(snapshot, read.coverage, read.findings, limitation_tuple),
+        digest=_digest(
+            snapshot,
+            read.coverage,
+            read.findings,
+            recommendation_status,
+            recommendation_reason,
+            recommendations,
+            limitation_tuple,
+        ),
     )
 
 
@@ -816,16 +880,16 @@ __all__ = [
     "CODE_REVIEW_MAX_LIMIT",
     "CODE_REVIEW_MAX_PER_FILE",
     "CODE_REVIEW_RANKING",
+    "CODE_REVIEW_RECOMMENDATION_LIMIT",
     "CODE_REVIEW_SCHEMA",
     "CodeReviewCaller",
     "CodeReviewCoverage",
     "CodeReviewDigest",
     "CodeReviewDiagnostic",
     "CodeReviewFinding",
+    "CodeReviewImpact",
+    "CodeReviewRecommendation",
     "CodeReviewResult",
     "CodeReviewSnapshot",
     "review_code_state",
 ]
-
-
-# endregion [03]

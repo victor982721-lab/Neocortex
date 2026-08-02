@@ -51,10 +51,12 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   léxicas y estructurales disponibles.
 - Proyección `self_analysis` en `--code-status --code-json`, con estados de
   manifest y frescura separada para raíz, framework/code, checkpoint y journal.
-- `--code-review` como consumidor read-only del autoanálisis publicado: top 10
-  determinista de hotspots Python confirmados, máximo dos por archivo, evidencia
-  de analyzer/callers, digest estable y abstención fail-closed. Los avisos
-  `probable_dead_symbol` quedan suprimidos hasta calibrar el grafo de llamadas.
+- `--code-review` v2 como consumidor read-only del autoanálisis publicado:
+  conserva el ranking bruto, separa callers de producción/pruebas, clasifica la
+  construcción y antepone hasta tres recomendaciones `act_now` con riesgo,
+  contratos y validación. `--code-review-limit` expone de 1 a 50 resultados en
+  JSON; builders, validators, reglas y evidencia desconocida no se promueven
+  por score. Los avisos `probable_dead_symbol` permanecen suprimidos.
 - Fixture reproducible de actionability para el primer top 10, con labels
   provisionales `actionable`/`defer`, score recalculado y `Precision@10`
   explícitamente no humana antes de modificar pesos o añadir detectores.
