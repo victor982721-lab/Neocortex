@@ -49,6 +49,13 @@ hacen commit y conservan orden, límite de jobs nuevos, reutilización lazy de l
 base, rebind de metadata y reanudación. El diff rc16→rc17 retira sólo ese
 hotspot, añade cero y conserva cero resoluciones corregidas o perdidas.
 
+El corte rc18 cierra la recomendación siguiente.
+`knowledge_context._derive_context_graph` pasa de 279 líneas/complejidad 43 a
+un coordinador de nueve líneas. Validación, acumulación y materialización quedan
+separadas sin cambiar orden, IDs estables ni rechazo atómico de evidencia
+inconsistente. El diff rc17→rc18 retira sólo ese hotspot, añade cero y conserva
+cero resoluciones nuevas, corregidas o perdidas.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -64,11 +71,11 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
 - Base publicada al iniciar este corte: `main` en
-  `f0096ab31089d250f8a00cf01e7fc67f1f71f2fa`, idéntico a `origin/main` tras
-  fusionar el PR #6.
-- El checkout fuente es `0.7.2`. El cierre del hotspot Semantic se rastrea en
-  el PR #7; su implementación base es
-  `67dc0c3aa51e70db33f862404390ed9d8c63a3cc`. La igualdad final entre `main` y
+  `6cd127984acbeeb8a88905ea308295913df5cf53`, idéntico a `origin/main` tras
+  fusionar el PR #7.
+- El checkout fuente es `0.7.2`. El cierre del hotspot Knowledge context se
+  rastrea en el PR #8; su implementación base es
+  `aef3513e799f156b3bb49192bce2f024b3d7e997`. La igualdad final entre `main` y
   `origin/main` se verifica después del merge porque el commit no puede
   autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
@@ -229,6 +236,27 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc18` — cierre de hotspot Knowledge context
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc18-knowledge-context\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `6A4826238775A3DFCEBFE0D909172C40FBE5F788B7F726EADFF47C436008C8C8`;
+- 1 331 108 bytes, 271 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e import de
+  `knowledge_context.py` confirmado desde el `site-packages` del venv rc18;
+  fuente e instalación comparten SHA-256
+  `EC0C946EE4F3DCF5FE8506989434D8BA21222763EAAB12D4C750543477CB2BB5` y
+  el coordinador instalado ocupa nueve líneas;
+- una comparación diferencial rc17/rc18 de 19 399 bytes sobre relación Code
+  válida, duplicado planeado y evidencia inválida produjo JSON exactamente
+  idéntico, SHA-256
+  `A1695E6856AF0E9C3876EDDD40C02A5721BF341BABD86F30536D3C1B20F1403E`;
+- el launcher instalado reprodujo 515/515 cache hits con cero lectura,
+  análisis, persistencia o grafo, y reprodujo review/diff sin cambiar ninguna
+  SQLite ni crear sidecars. Este runtime no se promovió al launcher estable.
 
 ### Candidato focal `rc17` — cierre de hotspot Semantic queue
 
@@ -456,6 +484,28 @@ Publicación del refactor Semantic rc17:
 - las consultas review/diff conservaron idénticos todos los SHA-256 SQLite y
   dejaron cero sidecars.
 
+Publicación del refactor Knowledge context rc18:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc18-knowledge-context-state`.
+
+- piloto con límite explícito: 525 archivos, 46 directorios excluidos, 515
+  candidatos, 8 948 192 bytes, 14 851 símbolos, 81 301 referencias, 197
+  diagnósticos, un proyecto y cero errores/acciones; el run Code permaneció
+  `partial` por contrato;
+- la finalización reutilizó 515/515 entradas y el replay desde el wheel rc18
+  repitió 515/515 cache hits con cero bytes y cero ms de lectura, análisis,
+  persistencia y grafo;
+- review de 50 findings: digest
+  `a80573e88f52814bdc4349776846daec`; el objetivo desaparece y la primera
+  recomendación pasa a `knowledge_exact._lookup_catalog`;
+- diff rc17→rc18, digest `21053e149aff5292f448a747b6e4044b`:
+  hotspots 183→182, 182 comunes, cero añadidos/cambiados y sólo el objetivo
+  retirado; 58 568 calls comunes, 40 112 aún no resueltas, 18 456 resueltas sin
+  cambio y cero resoluciones nuevas, corregidas o perdidas;
+- status/review/diff mediante el launcher rc18 conservaron idénticos todos los
+  SHA-256 SQLite y dejaron cero sidecars. `current=false` es la limitación
+  explícita esperada de `journal_status=unavailable`, no una publicación
+  inválida.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -606,6 +656,11 @@ ausentes y su candidate limit, no evidencia inventada.
   después del upsert y comprueba rollback completo del slice. Ruff/format y
   Mypy limpios; wheel rc17, procedencia del import, replay, hashes y sidecars
   verificados.
+- Refactor Knowledge context: línea base `36 passed` y barrera focal final
+  `37 passed`; la barrera Knowledge/CLI amplia obtuvo `802 passed` y reprodujo
+  sólo los dos límites estructurales preexistentes de 907/910 líneas frente a
+  900 en archivos no modificados. Ruff/format, `git diff --check` y Mypy limpios;
+  wheel rc18, procedencia, replay, hashes y sidecars verificados.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -628,25 +683,28 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar la siguiente recomendación `act_now`.** El rango bruto 1,
-   `GoldenCase._validate_required_feature`, permanece
-   `validator/characterize_first`; continuar con
-   `knowledge_context._derive_context_graph`, preservando comportamiento
-   determinista y semántica de casos límite.
-2. **Demostrar la mejora con rc18.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc17; exigir retirar el hotspot objetivo sin
-   añadir otro, cero pérdidas de resolución y replay 100 % cache hit.
-3. **Ampliar comparabilidad sólo desde una necesidad medida.** Si rc18 revela
-   una brecha de decisión, evolucionar Publication Diff para comparar
-   `hotspot_id`, actionability y rol de callers, y añadir una vista por módulo;
-   no cambiar el ranking antes de esa evidencia.
-4. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
+1. **Caracterizar y cerrar la siguiente recomendación `act_now`.** Continuar con
+   `knowledge_exact._lookup_catalog`. Antes de partirla, fijar consultas
+   representativas de catálogo, orden/límites, provenance, lectura estricta y
+   abstención; conservar su firma y un único caller de producción.
+2. **Demostrar la mejora con rc19.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc18; exigir retirar el hotspot objetivo sin
+   añadir otro, cero pérdidas/correcciones de resolución y replay 100 % cache
+   hit.
+3. **No ampliar Publication Diff todavía.** v1 respondió la decisión rc18 con
+   identidad del hotspot, añadidos/retirados, evidencia y resolución. Evolucionar
+   a v2 o añadir vistas por módulo sólo cuando una comparación real no permita
+   decidir.
+4. **Caracterizar el classifier siguiente.** Después de Exact, evaluar
+   `document_taxonomy.classify_document` contra fixture representativo con
+   abstención e incertidumbre antes de tocar su partición.
+5. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
    callbacks, registries y contratos que ya explican los 37 falsos positivos;
    repetir la misma muestra y mantener la señal suprimida hasta pasar el gate.
-5. **Retomar otras fronteras después.** Imagen, calibración Semantic, soak del
-   watcher y promoción del launcher siguen pendientes, pero quedan detrás del
-   objetivo vigente de mejorar el autoanálisis. El estable permanece en 0.7.1
-   hasta autorización explícita de promoción.
+
+Imagen, calibración Semantic, soak del watcher y promoción del launcher siguen
+pendientes, pero quedan detrás del objetivo vigente de mejorar el autoanálisis.
+El estable permanece en 0.7.1 hasta autorización explícita de promoción.
 
 No abrir otra base, ANN, vector DB, pipeline, auditoría integral o corrida live
 para resolver estos pasos. Preservar `Neocortex --all --apply` como interfaz

@@ -136,6 +136,31 @@ def _hit(
     )
 
 
+def _resolved_code_relation_hit() -> KnowledgeHit:
+    return _hit(
+        1,
+        suffix="code-relation",
+        snippet="Q52 calls trip_coil.",
+        lines=(20, 21),
+        section_kind="code_relation",
+        section_id="code_references:17",
+        evidence_method=EvidenceMethod.STRUCTURAL,
+        identifiers=(
+            ("code_relation_id", "code_references:17"),
+            ("code_relation_family", "reference"),
+            ("code_relation_kind", "call"),
+            ("code_relation_name", "trip_coil"),
+            ("code_relation_source_resource", "resource:code-relation"),
+            ("code_relation_target_resource", "resource:trip-coil"),
+            ("code_relation_resolved", "true"),
+            ("code_relation_confirmed", "true"),
+            ("code_relation_confidence", "0.875"),
+            ("code_relation_provenance", "python_ast:call_expression"),
+            ("code_relation_scope", "project"),
+        ),
+    )
+
+
 def _result(
     *hits: KnowledgeHit,
     complete: bool = True,
@@ -460,28 +485,7 @@ def test_builder_derives_only_demonstrable_entities_and_planned_relation() -> No
 
 
 def test_builder_materializes_only_resolved_code_relation_endpoints() -> None:
-    resolved = _hit(
-        1,
-        suffix="code-relation",
-        snippet="Q52 calls trip_coil.",
-        lines=(20, 21),
-        section_kind="code_relation",
-        section_id="code_references:17",
-        evidence_method=EvidenceMethod.STRUCTURAL,
-        identifiers=(
-            ("code_relation_id", "code_references:17"),
-            ("code_relation_family", "reference"),
-            ("code_relation_kind", "call"),
-            ("code_relation_name", "trip_coil"),
-            ("code_relation_source_resource", "resource:code-relation"),
-            ("code_relation_target_resource", "resource:trip-coil"),
-            ("code_relation_resolved", "true"),
-            ("code_relation_confirmed", "true"),
-            ("code_relation_confidence", "0.875"),
-            ("code_relation_provenance", "python_ast:call_expression"),
-            ("code_relation_scope", "project"),
-        ),
-    )
+    resolved = _resolved_code_relation_hit()
 
     bundle = build_context_bundle(_result(resolved), character_limit=20_000)
 
@@ -538,6 +542,63 @@ def test_builder_materializes_only_resolved_code_relation_endpoints() -> None:
         entity.entity_kind == "resource_reference"
         for entity in unresolved_bundle.entities
     )
+
+
+def test_builder_rejects_inconsistent_code_relations_atomically() -> None:
+    resolved = _resolved_code_relation_hit()
+
+    duplicate_namespace = replace(
+        resolved,
+        evidence=replace(
+            resolved.evidence,
+            identifiers=resolved.evidence.identifiers
+            + (("CODE_RELATION_FAMILY", "reference"),),
+        ),
+    )
+    noncanonical_row = replace(
+        resolved,
+        evidence=replace(
+            resolved.evidence,
+            section_id="code_references:017",
+            identifiers=tuple(
+                (
+                    (namespace, "code_references:017")
+                    if namespace == "code_relation_id"
+                    else (namespace, value)
+                )
+                for namespace, value in resolved.evidence.identifiers
+            ),
+        ),
+    )
+    nonfinite_confidence = replace(
+        resolved,
+        evidence=replace(
+            resolved.evidence,
+            identifiers=tuple(
+                (
+                    (namespace, "NaN")
+                    if namespace == "code_relation_confidence"
+                    else (namespace, value)
+                )
+                for namespace, value in resolved.evidence.identifiers
+            ),
+        ),
+    )
+    mismatched_method = replace(
+        resolved,
+        evidence=replace(resolved.evidence, method=EvidenceMethod.INFERRED),
+    )
+
+    for invalid_hit in (
+        duplicate_namespace,
+        noncanonical_row,
+        nonfinite_confidence,
+        mismatched_method,
+    ):
+        bundle = build_context_bundle(_result(invalid_hit), character_limit=20_000)
+        assert bundle.selected_hits == (invalid_hit,)
+        assert bundle.entities == ()
+        assert bundle.relations == ()
 
 
 def test_graph_bounds_are_complete_and_reject_a_hit_atomically() -> None:
