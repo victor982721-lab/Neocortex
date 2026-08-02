@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -580,9 +581,15 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
+    assert first.as_payload()["schema"] == "neocortex.code-review/v3"
+    assert first.as_payload()["compatible_schemas"] == ["neocortex.code-review/v2"]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
     assert expanded.findings[:10] == first.findings
+    assert expanded.work_packages == first.work_packages
+    assert first.work_package_status == "ready"
+    assert len(first.work_packages) == 1
+    assert first.work_packages[0].members[0].role == "primary_change_target"
     assert max(Counter(finding.path for finding in first.findings).values()) == 2
     assert len({finding.path for finding in first.findings}) == 9
     assert first.findings[0].symbol == "pkg.compute_dominant_0"
@@ -627,6 +634,50 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert [finding.finding_id for finding in reinterpreted.findings] != [
         finding.finding_id for finding in first.findings
     ]
+
+
+def test_work_package_planning_uses_the_fixed_pool_not_the_output_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    _build_state(state_directory)
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(tmp_path),
+    )
+    original_assessor = code_review_module.assess_code_review_actionability
+
+    def characterize_the_visible_leader(actionability_input):
+        assessment = original_assessor(actionability_input)
+        if actionability_input.symbol == "pkg.compute_dominant_0":
+            return replace(
+                assessment,
+                actionability="characterize_first",
+                recommended_change=False,
+            )
+        return assessment
+
+    monkeypatch.setattr(
+        code_review_module,
+        "assess_code_review_actionability",
+        characterize_the_visible_leader,
+    )
+
+    limited = review_code_state(state_directory, limit=1)
+    planning_view = review_code_state(state_directory, limit=50)
+    expected = next(
+        finding
+        for finding in planning_view.findings
+        if finding.actionability == "act_now"
+    )
+
+    assert limited.findings[0].actionability == "characterize_first"
+    assert limited.recommendations == ()
+    assert limited.work_package_status == "ready"
+    assert limited.work_packages[0].primary_finding_id == expected.finding_id
+    assert limited.work_packages[0].primary_symbol == expected.symbol
 
 
 @pytest.mark.parametrize("limit", (0, 51, True))
@@ -701,6 +752,11 @@ def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
         "no_act_now_candidate_within_bounded_findings"
     )
     assert result.recommendations == ()
+    assert result.work_package_status == "abstained"
+    assert result.work_package_reason == (
+        "no_primary_act_now_recommendation_within_bounded_findings"
+    )
+    assert result.work_packages == ()
     assert result.coverage is not None
     assert result.coverage.candidate_hotspots == 0
     assert result.digest is not None

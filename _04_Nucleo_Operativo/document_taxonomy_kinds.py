@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -1338,71 +1337,58 @@ _FORMAL_NORMATIVE_CUES = (
 )
 
 
-def _normative_document_evidence(
-    scopes: Mapping[str, str],
+def _reject_cfe_procedure_as_normative(
+    front_matter: str,
     standards: tuple[StandardReference, ...],
-    *,
     primary_authority: str | None,
-    managed_path: bool,
-    managed_normative_path: bool,
-) -> ScoredLabel | None:
-    """Separate a standard itself from a procedure merely citing standards."""
+) -> bool:
+    if primary_authority != "CFE":
+        return False
+    som_reference = any(
+        reference.authority == "CFE" and reference.identifier.startswith("SOM-")
+        for reference in standards
+    )
+    if som_reference and compiled_regex(
+        r"\b(?:MANUAL\s+DE\s+)?PROCEDIMIENTOS?\b"
+    ).search(front_matter):
+        return True
+    cfe_procedure = compiled_regex(
+        r"\b(?:MANUAL\s+DE\s+PROCEDIMIENTOS|MANUAL\s+CFE|PROCEDIMIENTO\s+CFE)\b"
+    ).search(front_matter)
+    cfe_specification = compiled_regex(r"\bESPECIFICACION\s+CFE\b").search(front_matter)
+    return cfe_procedure is not None and cfe_specification is None
 
-    opening = _front_before_reference_section(scopes.get("opening", ""))
-    title = scopes.get("title", "")
-    front_matter = f"{title} {opening[:1_800]}".strip()
-    if (
-        primary_authority == "CFE"
-        and any(
-            reference.authority == "CFE" and reference.identifier.startswith("SOM-")
-            for reference in standards
-        )
-        and compiled_regex(r"\b(?:MANUAL\s+DE\s+)?PROCEDIMIENTOS?\b").search(
-            front_matter
-        )
-    ):
-        return None
-    if (
-        primary_authority == "CFE"
-        and compiled_regex(
-            r"\b(?:MANUAL\s+DE\s+PROCEDIMIENTOS|MANUAL\s+CFE|"
-            r"PROCEDIMIENTO\s+CFE)\b"
-        ).search(front_matter)
-        and not compiled_regex(r"\bESPECIFICACION\s+CFE\b").search(front_matter)
-    ):
-        return None
-    formal_match = next(
+
+def _formal_normative_cue(front_matter: str) -> str | None:
+    match = next(
         (
-            match
+            candidate
             for cue in _FORMAL_NORMATIVE_CUES
-            if (match := compiled_regex(cue).search(front_matter)) is not None
+            if (candidate := compiled_regex(cue).search(front_matter)) is not None
         ),
         None,
     )
-    formal = None if formal_match is None else formal_match.group(0)
-    path_title_form = compiled_regex(_EXPLICIT_NON_NORMATIVE_FORM_PATTERN).search(
-        f"{title} {scopes.get('path', '')}"
-    )
-    opening_form = compiled_regex(_EXPLICIT_NON_NORMATIVE_FORM_PATTERN).search(
-        opening[:600]
-    )
-    strong_operational_form = compiled_regex(_STRONG_OPERATIONAL_FORM_PATTERN).search(
-        f"{title} {scopes.get('path', '')} {opening[:1_000]}"
-    )
-    direct_identifiers = tuple(
+    return None if match is None else match.group(0)
+
+
+def _direct_normative_identifiers(
+    front_matter: str,
+    standards: tuple[StandardReference, ...],
+    primary_authority: str | None,
+) -> tuple[tuple[str, ...], bool]:
+    direct = tuple(
         reference.identifier
         for reference in standards
         if _reference_position(front_matter, reference) >= 0
     )
-    preferred_identifiers = tuple(
+    preferred = tuple(
         reference.identifier
         for reference in standards
         if reference.authority == primary_authority
         and _reference_position(front_matter, reference) >= 0
     )
-    if preferred_identifiers:
-        direct_identifiers = (*preferred_identifiers, *direct_identifiers)
-        direct_identifiers = tuple(dict.fromkeys(direct_identifiers))
+    if preferred:
+        direct = tuple(dict.fromkeys((*preferred, *direct)))
     starts_with_identifier = any(
         0
         <= _reference_position(
@@ -1414,44 +1400,127 @@ def _normative_document_evidence(
             ),
         )
         <= 40
-        for identifier in direct_identifiers
+        for identifier in direct
     )
-    if (
+    return direct, starts_with_identifier
+
+
+def _operational_form_blocks_normative(
+    scopes: Mapping[str, str],
+    opening: str,
+    *,
+    starts_with_identifier: bool,
+) -> bool:
+    title = scopes.get("title", "")
+    path_title_form = compiled_regex(_EXPLICIT_NON_NORMATIVE_FORM_PATTERN).search(
+        f"{title} {scopes.get('path', '')}"
+    )
+    opening_form = compiled_regex(_EXPLICIT_NON_NORMATIVE_FORM_PATTERN).search(
+        opening[:600]
+    )
+    strong_operational_form = compiled_regex(_STRONG_OPERATIONAL_FORM_PATTERN).search(
+        f"{title} {scopes.get('path', '')} {opening[:1_000]}"
+    )
+    return (
         strong_operational_form is not None
         or path_title_form is not None
         or (opening_form is not None and not starts_with_identifier)
-    ):
+    )
+
+
+def _direct_normative_evidence(
+    identifiers: tuple[str, ...],
+    formal_cue: str | None,
+    *,
+    starts_with_identifier: bool,
+) -> ScoredLabel | None:
+    if not identifiers or (formal_cue is None and not starts_with_identifier):
         return None
-    if direct_identifiers and (formal is not None or starts_with_identifier):
-        evidence = [f"opening:identificador_normativo={direct_identifiers[0]}"]
-        if formal is not None:
-            evidence.append(f"opening:estructura_normativa={_clean_identifier(formal)}")
-        return ScoredLabel("normativa", 0.96, tuple(evidence))
-    path = scopes.get("path", "")
-    if not managed_path or managed_normative_path:
-        filename = path.rsplit("\\", 1)[-1]
-        for reference in standards:
-            identifier = fold_signal(reference.identifier)
-            position = filename.find(identifier)
-            if (not managed_path and 0 <= position <= 12) or (
-                managed_normative_path and position >= 0
-            ):
-                return ScoredLabel(
-                    "normativa",
-                    0.90,
-                    (f"path:identificador_normativo={reference.identifier}",),
-                )
-        if managed_normative_path and standards:
-            reference = next(
-                (item for item in standards if item.authority == primary_authority),
-                standards[0],
-            )
+    evidence = [f"opening:identificador_normativo={identifiers[0]}"]
+    if formal_cue is not None:
+        evidence.append(f"opening:estructura_normativa={_clean_identifier(formal_cue)}")
+    return ScoredLabel("normativa", 0.96, tuple(evidence))
+
+
+def _path_normative_evidence(
+    scopes: Mapping[str, str],
+    standards: tuple[StandardReference, ...],
+    *,
+    primary_authority: str | None,
+    managed_path: bool,
+    managed_normative_path: bool,
+) -> ScoredLabel | None:
+    if managed_path and not managed_normative_path:
+        return None
+    filename = scopes.get("path", "").rsplit("\\", 1)[-1]
+    for reference in standards:
+        identifier = fold_signal(reference.identifier)
+        position = filename.find(identifier)
+        if (not managed_path and 0 <= position <= 12) or (
+            managed_normative_path and position >= 0
+        ):
             return ScoredLabel(
                 "normativa",
-                0.88,
-                (f"path:categoria_normativa_previa={reference.identifier}",),
+                0.90,
+                (f"path:identificador_normativo={reference.identifier}",),
             )
-    return None
+    if not managed_normative_path or not standards:
+        return None
+    reference = next(
+        (item for item in standards if item.authority == primary_authority),
+        standards[0],
+    )
+    return ScoredLabel(
+        "normativa",
+        0.88,
+        (f"path:categoria_normativa_previa={reference.identifier}",),
+    )
+
+
+def _normative_document_evidence(
+    scopes: Mapping[str, str],
+    standards: tuple[StandardReference, ...],
+    *,
+    primary_authority: str | None,
+    managed_path: bool,
+    managed_normative_path: bool,
+) -> ScoredLabel | None:
+    """Separate a standard itself from a procedure merely citing standards."""
+
+    opening = _front_before_reference_section(scopes.get("opening", ""))
+    front_matter = f"{scopes.get('title', '')} {opening[:1_800]}".strip()
+    if _reject_cfe_procedure_as_normative(
+        front_matter,
+        standards,
+        primary_authority,
+    ):
+        return None
+    formal_cue = _formal_normative_cue(front_matter)
+    identifiers, starts_with_identifier = _direct_normative_identifiers(
+        front_matter,
+        standards,
+        primary_authority,
+    )
+    if _operational_form_blocks_normative(
+        scopes,
+        opening,
+        starts_with_identifier=starts_with_identifier,
+    ):
+        return None
+    direct = _direct_normative_evidence(
+        identifiers,
+        formal_cue,
+        starts_with_identifier=starts_with_identifier,
+    )
+    if direct is not None:
+        return direct
+    return _path_normative_evidence(
+        scopes,
+        standards,
+        primary_authority=primary_authority,
+        managed_path=managed_path,
+        managed_normative_path=managed_normative_path,
+    )
 
 
 def _controlled_procedure_evidence(
@@ -1582,4 +1651,6 @@ def _calibration_certificate_evidence(
     )
     score = 0.97 if heading_scope in {"path", "title"} else 0.88
     return ScoredLabel("certificado_calibracion", score, evidence)
+
+
 # endregion [02]

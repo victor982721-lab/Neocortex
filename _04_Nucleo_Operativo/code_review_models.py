@@ -13,11 +13,23 @@ from .code_review_actionability import (
 )
 
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v2"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v3"
+CODE_REVIEW_COMPATIBLE_SCHEMAS = ("neocortex.code-review/v2",)
 
 ReviewStatus = Literal["ready", "abstained"]
 ReviewFreshness = Literal["current", "publication_only"]
 RecommendationStatus = Literal["ready", "abstained", "not_evaluated"]
+WorkPackageRelationship = Literal[
+    "primary",
+    "resolved_static_call",
+    "resolved_static_call_via",
+]
+WorkPackageConfidence = Literal[
+    "primary_finding_only",
+    "confirmed_static_relationship",
+]
+WorkPackagePhase = Literal["characterize", "change", "validate", "publish"]
+WorkPackageMemberRole = Literal["primary_change_target", "contract_guard"]
 FindingCategory = Literal[
     "complex_and_long_hotspot",
     "high_complexity_hotspot",
@@ -133,6 +145,56 @@ class CodeReviewRecommendation:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeReviewWorkPackageMember:
+    """One finding retained in a coherent bounded maintenance package."""
+
+    finding_id: str
+    hotspot_id: str
+    hotspot_rank: int
+    path: str
+    symbol: str
+    construction: Construction
+    actionability: Actionability
+    role: WorkPackageMemberRole
+    relationship: WorkPackageRelationship
+    relationship_evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CodeReviewWorkPackageStep:
+    """One ordered, non-mutating planning step with an explicit decision gate."""
+
+    order: int
+    phase: WorkPackagePhase
+    target: str
+    requirement: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodeReviewWorkPackage:
+    """A deterministic maintenance unit assembled from published evidence."""
+
+    package_rank: int
+    package_id: str
+    title: str
+    objective: str
+    primary_finding_id: str
+    primary_hotspot_id: str
+    primary_symbol: str
+    change_risk: ChangeRisk
+    members: tuple[CodeReviewWorkPackageMember, ...]
+    members_truncated: bool
+    consumer_module_examples: tuple[str, ...]
+    contracts_to_preserve: tuple[str, ...]
+    steps: tuple[CodeReviewWorkPackageStep, ...]
+    recommended_validation: tuple[str, ...]
+    acceptance_gates: tuple[str, ...]
+    evidence: tuple[str, ...]
+    limitations: tuple[str, ...]
+    confidence: WorkPackageConfidence
+
+
+@dataclass(frozen=True, slots=True)
 class CodeReviewSnapshot:
     """Published self-analysis snapshot that authorized this review."""
 
@@ -180,10 +242,14 @@ class CodeReviewResult:
     actionability_version: str
     recommendation_status: RecommendationStatus
     recommendation_reason: str | None
+    planning_version: str
+    work_package_status: RecommendationStatus
+    work_package_reason: str | None
     snapshot: CodeReviewSnapshot | None
     coverage: CodeReviewCoverage | None
     findings: tuple[CodeReviewFinding, ...]
     recommendations: tuple[CodeReviewRecommendation, ...]
+    work_packages: tuple[CodeReviewWorkPackage, ...]
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
 
@@ -191,6 +257,7 @@ class CodeReviewResult:
         return {
             "kind": "code-review",
             "schema": CODE_REVIEW_SCHEMA,
+            "compatible_schemas": list(CODE_REVIEW_COMPATIBLE_SCHEMAS),
             **asdict(self),
         }
 
@@ -226,6 +293,7 @@ def build_code_review_recommendations(
 
 
 __all__ = [
+    "CODE_REVIEW_COMPATIBLE_SCHEMAS",
     "CODE_REVIEW_SCHEMA",
     "CodeReviewCaller",
     "CodeReviewCoverage",
@@ -236,8 +304,15 @@ __all__ = [
     "CodeReviewRecommendation",
     "CodeReviewResult",
     "CodeReviewSnapshot",
+    "CodeReviewWorkPackage",
+    "CodeReviewWorkPackageMember",
+    "CodeReviewWorkPackageStep",
     "FindingCategory",
     "ReviewFreshness",
     "RecommendationStatus",
+    "WorkPackageConfidence",
+    "WorkPackageMemberRole",
+    "WorkPackagePhase",
+    "WorkPackageRelationship",
     "build_code_review_recommendations",
 ]

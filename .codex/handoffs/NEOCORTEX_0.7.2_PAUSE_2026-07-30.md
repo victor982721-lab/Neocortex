@@ -64,6 +64,23 @@ regresión apareció como hotspot; la partición final retira sólo el objetivo,
 añade cero y conserva cero resoluciones nuevas, corregidas o perdidas. La primera
 recomendación `act_now` pasa a `document_taxonomy.classify_document`.
 
+El corte rc20 convierte esa recomendación aislada en un paquete de mantenimiento
+explicable. `neocortex.code-review/v3` conserva todos los campos v2 y añade un
+único paquete construido desde el primer `act_now`, con objetivo primario,
+guardas contractuales y relaciones de llamadas estáticas confirmadas a uno o dos
+saltos dentro de un pool fijo de 50 candidatos. El paquete rc19 agrupó
+`document_taxonomy.classify_document` con `_normative_document_evidence` y
+`_plausible_authority_identifier`; sólo el primero quedó autorizado como objetivo
+de cambio. Treinta casos byte-estables y dos seams ambiguos fijaron exactamente
+tipo, evidencia, confianza, incertidumbre y abstención antes del refactor. El diff
+rc19→rc20 retira los hotspots de `classify_document` y
+`_normative_document_evidence`, añade cero, cambia cero evidencia y conserva cero
+resoluciones corregidas o perdidas. La siguiente raíz pasa a
+`knowledge_exact.lookup_exact`. La revisión independiente final detectó y cerró
+tres bordes antes de publicar: el pool ya no depende de `--code-review-limit`,
+las calls repetidas se colapsan antes del límite de pares y el rol de un bridge
+se clasifica relativo a su project root.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -78,11 +95,12 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada al iniciar este corte: `main` en
-  `a61567df91cd7bd6cb4e30a47bb519804a27dd72`, idéntico a `origin/main` tras
-  fusionar el PR #9.
-- El checkout fuente es `0.7.2`. El cierre rc19 se rastrea en el PR #10; su
-  implementación base es `944986674a2b038196698327799fcd09310de7cd`. La
+- Base publicada al iniciar rc20: `main` en
+  `770cc335e7006168be100904623d600fa0d301a7`, idéntico a `origin/main` tras
+  fusionar el PR #10.
+- El checkout fuente es `0.7.2`. rc20 se desarrolla en
+  `codex/rc20-code-review-work-packages`; el identificador final del PR queda en
+  la historia de Git/GitHub después de publicarlo. La
   igualdad final entre `main` y `origin/main` se verifica después del merge
   porque el commit no puede autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
@@ -243,6 +261,22 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc20` — paquetes de mantenimiento y taxonomy
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc20-final2-work-packages-taxonomy\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `ACAB258A8FC3EB8102B8CEE247D97D63CEFA20DE80F36B9FF6E52FD6E13E21A3`;
+- 1 339 546 bytes, 274 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e imports de
+  `code_review_work_packages.py` y `document_taxonomy.py` confirmados desde el
+  `site-packages` del venv rc20-final2;
+- el launcher instalado reproduce review/diff sin cambiar ninguna SQLite ni
+  crear sidecars y el replay incremental final obtiene 521/521 cache hits con
+  cero lectura, análisis, persistencia o grafo. Este runtime no se promovió al
+  launcher estable.
 
 ### Candidato focal `rc19` — cierre de hotspot Knowledge Exact
 
@@ -555,6 +589,30 @@ Publicación del refactor Knowledge Exact rc19:
   SHA-256 SQLite y dejaron cero sidecars. `current=false` sigue siendo la
   limitación explícita esperada de `journal_status=unavailable`.
 
+Publicación del planner y refactor taxonomy rc20:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc20-final2-work-packages-taxonomy-state`.
+
+- piloto acotado a 30 archivos antes de completar la misma raíz; la publicación
+  final contiene 531 archivos, 46 directorios excluidos, 521 candidatos, 15 011
+  símbolos, 81 699 referencias, 193 diagnósticos, un proyecto y cero errores;
+- la finalización procesó 491 entradas y reutilizó las 30 del piloto; una corrida
+  absorbió únicamente la actualización de este handoff (1 procesado/520 hits) y
+  el replay posterior desde el wheel rc20-final2 repitió 521/521 cache hits con
+  cero bytes y cero ms de lectura, análisis, persistencia y grafo;
+- review v3 byte-estable: digest `a626ac5237e013d6dfc420c85cadf45c`,
+  471/471 Python completos, 179 hotspots, 59 240 calls y 18 734 resueltas; el
+  siguiente paquete contiene únicamente la raíz `knowledge_exact.lookup_exact`;
+- diff rc19→rc20, digest `071308ea3a489433ed226b91396c5173`:
+  179 hotspots comunes, cero añadidos/cambiados y dos retirados; 57 231 calls
+  comunes, 39 136 aún no resueltas, 18 095 resueltas sin cambio y cero
+  resoluciones nuevas, corregidas o perdidas;
+- un primer candidato rc20 fue rechazado porque creó el hotspot
+  `code_review.review_code_state`; la extracción mínima del cálculo de estado lo
+  retiró antes de aceptar el corte, sin relajar umbrales;
+- review/diff conservaron idénticos todos los SHA-256 SQLite y dejaron cero
+  sidecars. `current=false` conserva la limitación explícita y honesta de un
+  journal no disponible en una consulta read-only.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -715,6 +773,15 @@ ausentes y su candidate limit, no evidencia inventada.
   `804 passed`, `2 deselected` por los mismos límites preexistentes de 907/910
   líneas. Ruff/format, `git diff --check` y Mypy limpios; wheel rc19,
   procedencia, replay, hashes y sidecars verificados.
+- Paquetes de mantenimiento y taxonomy rc20: línea base focal `196 passed`,
+  caracterización previa `38 passed`, barrera integrada final `277 passed`,
+  regresiones finales del planner `35 passed` y matriz contractual exacta
+  `33 passed`. Ruff/format y Mypy 2.1 quedaron limpios en ocho módulos;
+  `git diff --check`, wheel rc20, procedencia, piloto, replay, hashes y sidecars
+  quedaron verificados. La
+  barrera amplia aprobó 786 casos y aisló 17 rechazos causados por una frontera
+  temporal mal alineada; la repetición de los tres archivos completos bajo el
+  laboratorio correcto aprobó `38 passed`, incluidos los 17 rechazados.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -737,19 +804,19 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Caracterizar el classifier recomendado.** Evaluar
-   `document_taxonomy.classify_document` contra fixtures representativos de
-   código/estructura, documento técnico y caso ambiguo; fijar orden, evidencia,
-   confianza, incertidumbre y abstención antes de tocar su partición.
-2. **Demostrar la mejora con rc20.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc19; exigir retirar el hotspot objetivo sin
-   añadir otro, cero pérdidas/correcciones de resolución y replay 100 % cache
-   hit.
-3. **Caracterizar el segundo retrieval recomendado.** Después del classifier,
-   evaluar `knowledge_exact.lookup_exact` preservando orden de owners/términos,
-   presupuesto global, cobertura y API pública antes de decidir si se parte.
+1. **Caracterizar el siguiente paquete.** Evaluar
+   `knowledge_exact.lookup_exact` preservando orden de owners y términos,
+   presupuesto global, cobertura, API pública, provenance y lectura estricta;
+   fijar fixtures exactos antes de tocar su partición.
+2. **Demostrar el siguiente cambio contra rc20.** Usar el work-package planner,
+   repetir autoanálisis y `--code-publication-diff`; exigir retirar el objetivo
+   sin añadir/cambiar hotspots, cero pérdidas/correcciones de resolución y replay
+   100 % cache hit.
+3. **Extender paquetes sólo con evidencia.** Aplicar el planner a otros dominios
+   únicamente cuando relaciones de producción confirmadas cambien de verdad la
+   unidad de trabajo; no agrupar por nombre, prefijo o intuición arquitectónica.
 4. **No ampliar Publication Diff todavía.** v1 respondió también la decisión
-   rc19 con identidad del hotspot, añadidos/retirados, evidencia y resolución.
+   rc20 con identidad del paquete, añadidos/retirados, evidencia y resolución.
    Evolucionar sólo cuando una comparación real no permita decidir.
 5. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
    callbacks, registries y contratos que ya explican los 37 falsos positivos;

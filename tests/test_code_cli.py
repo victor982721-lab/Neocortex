@@ -134,10 +134,15 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
+    assert payload["schema"] == "neocortex.code-review/v3"
+    assert payload["compatible_schemas"] == ["neocortex.code-review/v2"]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
     assert payload["actionability_version"] == "python-maintenance-actionability-v1"
     assert payload["recommendation_status"] == "not_evaluated"
+    assert payload["planning_version"] == "python-maintenance-work-packages-v1"
+    assert payload["work_package_status"] == "not_evaluated"
+    assert payload["work_packages"] == []
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
