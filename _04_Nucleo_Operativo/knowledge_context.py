@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from .knowledge_contracts import (
@@ -83,6 +83,17 @@ class _ContextState:
     omitted_candidates: int
 
 
+type _EntityKey = tuple[str, str, str]
+type _RelationKey = tuple[
+    _EntityKey,
+    _EntityKey,
+    str,
+    EvidenceMethod,
+    tuple[str, ...],
+    float | None,
+]
+
+
 @dataclass(slots=True)
 class _EntityAccumulator:
     entity_kind: str
@@ -93,13 +104,105 @@ class _EntityAccumulator:
 
 @dataclass(slots=True)
 class _RelationAccumulator:
-    source_key: tuple[str, str, str]
-    target_key: tuple[str, str, str]
+    source_key: _EntityKey
+    target_key: _EntityKey
     relation_kind: str
     method: EvidenceMethod
     provenance: tuple[str, ...]
     confidence: float | None
     evidence_ids: list[str]
+
+
+@dataclass(slots=True)
+class _ContextGraphAccumulator:
+    entities: dict[_EntityKey, _EntityAccumulator] = field(default_factory=dict)
+    relations: dict[_RelationKey, _RelationAccumulator] = field(default_factory=dict)
+
+    def add_entity(
+        self,
+        *,
+        entity_kind: str,
+        label: str,
+        evidence_id: str,
+        resource_id: str,
+    ) -> _EntityKey:
+        key = (entity_kind, label, resource_id)
+        entity = self.entities.get(key)
+        if entity is None:
+            entity = _EntityAccumulator(entity_kind, label, [], [])
+            self.entities[key] = entity
+        _append_unique(entity.evidence_ids, evidence_id)
+        _append_unique(entity.resource_ids, resource_id)
+        return key
+
+    def add_relation(
+        self,
+        *,
+        source_key: _EntityKey,
+        target_key: _EntityKey,
+        relation_kind: str,
+        method: EvidenceMethod,
+        provenance: tuple[str, ...],
+        confidence: float | None,
+        evidence_id: str,
+    ) -> None:
+        if source_key == target_key:
+            return
+        key = (
+            source_key,
+            target_key,
+            relation_kind,
+            method,
+            provenance,
+            confidence,
+        )
+        relation = self.relations.get(key)
+        if relation is None:
+            relation = _RelationAccumulator(
+                source_key=source_key,
+                target_key=target_key,
+                relation_kind=relation_kind,
+                method=method,
+                provenance=provenance,
+                confidence=confidence,
+                evidence_ids=[],
+            )
+            self.relations[key] = relation
+        _append_unique(relation.evidence_ids, evidence_id)
+
+
+@dataclass(frozen=True, slots=True)
+class _CodeRelationIdentifiers:
+    family: str
+    relation_id: str
+    relation_kind: str
+    relation_name: str
+    source_resource: str
+    target_resource: str
+    resolved: str
+    confirmed: str
+    confidence: str
+    provenance: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedCodeRelation:
+    source_resource: str
+    target_resource: str
+    relation_kind: str
+    method: EvidenceMethod
+    provenance: tuple[str, ...]
+    confidence: float
+
+
+_CODE_RELATION_SOURCE_TABLES = {
+    "reference": "code_references",
+    "dependency": "dependencies",
+}
+_CODE_RELATION_OPTIONAL_PROVENANCE = (
+    "code_relation_scope",
+    "code_relation_version_spec",
+)
 
 
 def _json_string(value: str) -> str:
@@ -253,268 +356,287 @@ def _stable_graph_id(prefix: str, identity: dict[str, object]) -> str:
     )
 
 
-def _derive_context_graph(
-    entries: tuple[_ContextEntry, ...],
-) -> tuple[tuple[ContextEntityRef, ...], tuple[ContextRelationRef, ...]]:
-    entities: dict[tuple[str, str, str], _EntityAccumulator] = {}
-    relations: dict[
-        tuple[
-            tuple[str, str, str],
-            tuple[str, str, str],
-            str,
-            EvidenceMethod,
-            tuple[str, ...],
-            float | None,
-        ],
-        _RelationAccumulator,
-    ] = {}
+def _identifiers_by_namespace(
+    identifiers: tuple[tuple[str, str], ...],
+) -> dict[str, list[str]]:
+    grouped: dict[str, list[str]] = {}
+    for namespace, value in identifiers:
+        grouped.setdefault(namespace.casefold(), []).append(value)
+    return grouped
 
-    def add_entity(
-        *,
-        entity_kind: str,
-        label: str,
-        evidence_id: str,
-        resource_id: str,
-    ) -> tuple[str, str, str]:
-        key = (entity_kind, label, resource_id)
-        entity_accumulator = entities.get(key)
-        if entity_accumulator is None:
-            entity_accumulator = _EntityAccumulator(entity_kind, label, [], [])
-            entities[key] = entity_accumulator
-        _append_unique(entity_accumulator.evidence_ids, evidence_id)
-        _append_unique(entity_accumulator.resource_ids, resource_id)
-        return key
 
-    def add_relation(
-        *,
-        source_key: tuple[str, str, str],
-        target_key: tuple[str, str, str],
-        relation_kind: str,
-        method: EvidenceMethod,
-        provenance: tuple[str, ...],
-        confidence: float | None,
-        evidence_id: str,
-    ) -> None:
-        if source_key == target_key:
-            return
-        relation_key = (
-            source_key,
-            target_key,
-            relation_kind,
-            method,
-            provenance,
-            confidence,
-        )
-        relation_accumulator = relations.get(relation_key)
-        if relation_accumulator is None:
-            relation_accumulator = _RelationAccumulator(
-                source_key=source_key,
-                target_key=target_key,
-                relation_kind=relation_kind,
-                method=method,
-                provenance=provenance,
-                confidence=confidence,
-                evidence_ids=[],
-            )
-            relations[relation_key] = relation_accumulator
-        _append_unique(relation_accumulator.evidence_ids, evidence_id)
+def _single_identifier(
+    identifiers_by_namespace: dict[str, list[str]],
+    namespace: str,
+) -> str | None:
+    values = identifiers_by_namespace.get(namespace)
+    if values is None or len(values) != 1:
+        return None
+    return values[0]
 
-    for entry in entries:
-        hit = entry.hit
-        evidence_id = hit.evidence.evidence_id
-        resource_id = hit.resource.resource_id
-        if hit.evidence.symbol is not None:
-            add_entity(
-                entity_kind="code_symbol",
-                label=hit.evidence.symbol,
-                evidence_id=evidence_id,
-                resource_id=resource_id,
-            )
-        identifiers_by_namespace: dict[str, list[str]] = {}
-        for namespace, value in hit.evidence.identifiers:
-            identifiers_by_namespace.setdefault(namespace.casefold(), []).append(value)
 
-        def single_identifier(namespace: str) -> str | None:
-            values = identifiers_by_namespace.get(namespace)
-            if values is None or len(values) != 1:
-                return None
-            return values[0]
+def _required_code_relation_identifiers(
+    identifiers_by_namespace: dict[str, list[str]],
+) -> _CodeRelationIdentifiers | None:
+    family = _single_identifier(identifiers_by_namespace, "code_relation_family")
+    relation_id = _single_identifier(identifiers_by_namespace, "code_relation_id")
+    relation_kind = _single_identifier(identifiers_by_namespace, "code_relation_kind")
+    relation_name = _single_identifier(identifiers_by_namespace, "code_relation_name")
+    source_resource = _single_identifier(
+        identifiers_by_namespace,
+        "code_relation_source_resource",
+    )
+    target_resource = _single_identifier(
+        identifiers_by_namespace,
+        "code_relation_target_resource",
+    )
+    resolved = _single_identifier(identifiers_by_namespace, "code_relation_resolved")
+    confirmed = _single_identifier(
+        identifiers_by_namespace,
+        "code_relation_confirmed",
+    )
+    confidence = _single_identifier(
+        identifiers_by_namespace,
+        "code_relation_confidence",
+    )
+    provenance = _single_identifier(
+        identifiers_by_namespace,
+        "code_relation_provenance",
+    )
+    if (
+        family is None
+        or relation_id is None
+        or relation_kind is None
+        or relation_name is None
+        or source_resource is None
+        or target_resource is None
+        or resolved is None
+        or confirmed is None
+        or confidence is None
+        or provenance is None
+    ):
+        return None
+    return _CodeRelationIdentifiers(
+        family=family,
+        relation_id=relation_id,
+        relation_kind=relation_kind,
+        relation_name=relation_name,
+        source_resource=source_resource,
+        target_resource=target_resource,
+        resolved=resolved,
+        confirmed=confirmed,
+        confidence=confidence,
+        provenance=provenance,
+    )
 
-        if hit.evidence.section_kind == "code_relation":
-            family = single_identifier("code_relation_family")
-            relation_identifier = single_identifier("code_relation_id")
-            relation_kind = single_identifier("code_relation_kind")
-            relation_name = single_identifier("code_relation_name")
-            source_resource = single_identifier("code_relation_source_resource")
-            target_resource = single_identifier("code_relation_target_resource")
-            resolved_raw = single_identifier("code_relation_resolved")
-            confirmed_raw = single_identifier("code_relation_confirmed")
-            confidence_raw = single_identifier("code_relation_confidence")
-            analyzer_provenance = single_identifier("code_relation_provenance")
-            section_id = hit.evidence.section_id
-            source_table: str | None = None
-            source_row_id: str | None = None
-            if section_id is not None:
-                source_table, separator, source_row_id = section_id.partition(":")
-                if (
-                    separator != ":"
-                    or not source_row_id.isdecimal()
-                    or source_row_id != str(int(source_row_id))
-                    or int(source_row_id) < 1
-                ):
-                    source_table = None
-                    source_row_id = None
-            expected_source_table = (
-                None
-                if family is None
-                else {
-                    "reference": "code_references",
-                    "dependency": "dependencies",
-                }.get(family)
-            )
-            confirmed: bool | None = None
-            if confirmed_raw is not None:
-                if confirmed_raw.casefold() == "true":
-                    confirmed = True
-                elif confirmed_raw.casefold() == "false":
-                    confirmed = False
-            confidence: float | None = None
-            if confidence_raw is not None:
-                try:
-                    parsed_confidence = float(confidence_raw)
-                except (OverflowError, ValueError):
-                    pass
-                else:
-                    if math.isfinite(parsed_confidence) and (
-                        0.0 <= parsed_confidence <= 1.0
-                    ):
-                        confidence = parsed_confidence
-            method = (
-                EvidenceMethod.STRUCTURAL
-                if confirmed is True
-                else EvidenceMethod.INFERRED
-            )
-            if (
-                family is not None
-                and relation_identifier == section_id
-                and relation_kind is not None
-                and relation_name is not None
-                and source_resource == resource_id
-                and target_resource is not None
-                and target_resource != source_resource
-                and resolved_raw is not None
-                and resolved_raw.casefold() == "true"
-                and confirmed is not None
-                and confidence is not None
-                and analyzer_provenance is not None
-                and source_table == expected_source_table
-                and source_row_id is not None
-                and hit.evidence.method is method
-            ):
-                source_key = add_entity(
-                    entity_kind="resource",
-                    label=source_resource,
-                    evidence_id=evidence_id,
-                    resource_id=resource_id,
-                )
-                target_key = add_entity(
-                    entity_kind="resource_reference",
-                    label=target_resource,
-                    evidence_id=evidence_id,
-                    resource_id=target_resource,
-                )
-                provenance_items = [
-                    f"code:{source_table}:{source_row_id}",
-                    f"analyzer:{analyzer_provenance}",
-                    f"name:{relation_name}",
-                ]
-                for namespace in (
-                    "code_relation_scope",
-                    "code_relation_version_spec",
-                ):
-                    optional_provenance_value = single_identifier(namespace)
-                    if optional_provenance_value is not None:
-                        provenance_items.append(
-                            f"{namespace}:{optional_provenance_value}"
-                        )
-                add_relation(
-                    source_key=source_key,
-                    target_key=target_key,
-                    relation_kind=f"code_{family}:{relation_kind}",
-                    method=method,
-                    provenance=tuple(provenance_items),
-                    confidence=confidence,
-                    evidence_id=evidence_id,
-                )
-        for namespace, value in hit.evidence.identifiers:
-            if (
-                hit.evidence.section_kind == "code_relation"
-                and namespace.casefold().startswith("code_relation_")
-            ):
-                continue
-            if namespace.casefold() != "planned_duplicate_of":
-                add_entity(
-                    entity_kind=f"identifier:{namespace}",
-                    label=value,
-                    evidence_id=evidence_id,
-                    resource_id=resource_id,
-                )
-                continue
-            source_key = add_entity(
-                entity_kind="resource",
-                label=resource_id,
-                evidence_id=evidence_id,
-                resource_id=resource_id,
-            )
-            target_key = add_entity(
-                entity_kind="resource_reference",
+
+def _canonical_code_relation_source(section_id: str | None) -> tuple[str, str] | None:
+    if section_id is None:
+        return None
+    source_table, separator, source_row_id = section_id.partition(":")
+    if separator != ":" or not source_row_id.isdecimal():
+        return None
+    if source_row_id != str(int(source_row_id)) or int(source_row_id) < 1:
+        return None
+    return source_table, source_row_id
+
+
+def _parse_code_relation_confirmation(raw_value: str) -> bool | None:
+    normalized = raw_value.casefold()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    return None
+
+
+def _parse_code_relation_confidence(raw_value: str) -> float | None:
+    try:
+        confidence = float(raw_value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return None
+    return confidence
+
+
+def _validated_code_relation(hit: KnowledgeHit) -> _ValidatedCodeRelation | None:
+    identifiers_by_namespace = _identifiers_by_namespace(hit.evidence.identifiers)
+    identifiers = _required_code_relation_identifiers(identifiers_by_namespace)
+    source = _canonical_code_relation_source(hit.evidence.section_id)
+    if identifiers is None or source is None:
+        return None
+    confirmed = _parse_code_relation_confirmation(identifiers.confirmed)
+    confidence = _parse_code_relation_confidence(identifiers.confidence)
+    if confirmed is None or confidence is None:
+        return None
+    source_table, source_row_id = source
+    method = EvidenceMethod.STRUCTURAL if confirmed is True else EvidenceMethod.INFERRED
+    expected_source_table = _CODE_RELATION_SOURCE_TABLES.get(identifiers.family)
+    consistent = (
+        identifiers.relation_id == hit.evidence.section_id,
+        identifiers.source_resource == hit.resource.resource_id,
+        identifiers.target_resource != identifiers.source_resource,
+        identifiers.resolved.casefold() == "true",
+        source_table == expected_source_table,
+        hit.evidence.method is method,
+    )
+    if not all(consistent):
+        return None
+    provenance = [
+        f"code:{source_table}:{source_row_id}",
+        f"analyzer:{identifiers.provenance}",
+        f"name:{identifiers.relation_name}",
+    ]
+    for namespace in _CODE_RELATION_OPTIONAL_PROVENANCE:
+        optional_value = _single_identifier(identifiers_by_namespace, namespace)
+        if optional_value is not None:
+            provenance.append(f"{namespace}:{optional_value}")
+    return _ValidatedCodeRelation(
+        source_resource=identifiers.source_resource,
+        target_resource=identifiers.target_resource,
+        relation_kind=f"code_{identifiers.family}:{identifiers.relation_kind}",
+        method=method,
+        provenance=tuple(provenance),
+        confidence=confidence,
+    )
+
+
+def _accumulate_code_relation(
+    graph: _ContextGraphAccumulator,
+    hit: KnowledgeHit,
+) -> None:
+    relation = _validated_code_relation(hit)
+    if relation is None:
+        return
+    evidence_id = hit.evidence.evidence_id
+    resource_id = hit.resource.resource_id
+    source_key = graph.add_entity(
+        entity_kind="resource",
+        label=relation.source_resource,
+        evidence_id=evidence_id,
+        resource_id=resource_id,
+    )
+    target_key = graph.add_entity(
+        entity_kind="resource_reference",
+        label=relation.target_resource,
+        evidence_id=evidence_id,
+        resource_id=relation.target_resource,
+    )
+    graph.add_relation(
+        source_key=source_key,
+        target_key=target_key,
+        relation_kind=relation.relation_kind,
+        method=relation.method,
+        provenance=relation.provenance,
+        confidence=relation.confidence,
+        evidence_id=evidence_id,
+    )
+
+
+def _accumulate_entry_identifiers(
+    graph: _ContextGraphAccumulator,
+    hit: KnowledgeHit,
+) -> None:
+    evidence_id = hit.evidence.evidence_id
+    resource_id = hit.resource.resource_id
+    for namespace, value in hit.evidence.identifiers:
+        normalized_namespace = namespace.casefold()
+        if (
+            hit.evidence.section_kind == "code_relation"
+            and normalized_namespace.startswith("code_relation_")
+        ):
+            continue
+        if normalized_namespace != "planned_duplicate_of":
+            graph.add_entity(
+                entity_kind=f"identifier:{namespace}",
                 label=value,
                 evidence_id=evidence_id,
-                resource_id=value,
+                resource_id=resource_id,
             )
-            add_relation(
-                source_key=source_key,
-                target_key=target_key,
-                relation_kind="planned_duplicate_of",
-                method=EvidenceMethod.AMBIGUOUS,
-                provenance=("inventory:planned_duplicate_plan",),
-                confidence=None,
-                evidence_id=evidence_id,
-            )
+            continue
+        source_key = graph.add_entity(
+            entity_kind="resource",
+            label=resource_id,
+            evidence_id=evidence_id,
+            resource_id=resource_id,
+        )
+        target_key = graph.add_entity(
+            entity_kind="resource_reference",
+            label=value,
+            evidence_id=evidence_id,
+            resource_id=value,
+        )
+        graph.add_relation(
+            source_key=source_key,
+            target_key=target_key,
+            relation_kind="planned_duplicate_of",
+            method=EvidenceMethod.AMBIGUOUS,
+            provenance=("inventory:planned_duplicate_plan",),
+            confidence=None,
+            evidence_id=evidence_id,
+        )
 
-    entity_ids: dict[tuple[str, str, str], str] = {}
+
+def _accumulate_context_entry(
+    graph: _ContextGraphAccumulator,
+    entry: _ContextEntry,
+) -> None:
+    hit = entry.hit
+    if hit.evidence.symbol is not None:
+        graph.add_entity(
+            entity_kind="code_symbol",
+            label=hit.evidence.symbol,
+            evidence_id=hit.evidence.evidence_id,
+            resource_id=hit.resource.resource_id,
+        )
+    if hit.evidence.section_kind == "code_relation":
+        _accumulate_code_relation(graph, hit)
+    _accumulate_entry_identifiers(graph, hit)
+
+
+def _materialize_context_entities(
+    entities: dict[_EntityKey, _EntityAccumulator],
+) -> tuple[dict[_EntityKey, str], tuple[ContextEntityRef, ...]]:
+    entity_ids: dict[_EntityKey, str] = {}
     entity_refs: list[ContextEntityRef] = []
-    for key, entity_accumulator in entities.items():
+    for key, entity in entities.items():
         entity_id = _stable_graph_id(
             "context-entity",
             {
-                "entity_kind": entity_accumulator.entity_kind,
-                "label": entity_accumulator.label,
-                "resource_ids": sorted(entity_accumulator.resource_ids),
+                "entity_kind": entity.entity_kind,
+                "label": entity.label,
+                "resource_ids": sorted(entity.resource_ids),
             },
         )
         entity_ids[key] = entity_id
         entity_refs.append(
             ContextEntityRef(
                 entity_id=entity_id,
-                entity_kind=entity_accumulator.entity_kind,
-                label=entity_accumulator.label,
-                evidence_ids=tuple(entity_accumulator.evidence_ids),
-                resource_ids=tuple(entity_accumulator.resource_ids),
+                entity_kind=entity.entity_kind,
+                label=entity.label,
+                evidence_ids=tuple(entity.evidence_ids),
+                resource_ids=tuple(entity.resource_ids),
             )
         )
+    return entity_ids, tuple(entity_refs)
 
+
+def _materialize_context_relations(
+    relations: dict[_RelationKey, _RelationAccumulator],
+    entity_ids: dict[_EntityKey, str],
+) -> tuple[ContextRelationRef, ...]:
     relation_refs: list[ContextRelationRef] = []
-    for relation_accumulator in relations.values():
-        source_entity_id = entity_ids[relation_accumulator.source_key]
-        target_entity_id = entity_ids[relation_accumulator.target_key]
+    for relation in relations.values():
+        source_entity_id = entity_ids[relation.source_key]
+        target_entity_id = entity_ids[relation.target_key]
         relation_id = _stable_graph_id(
             "context-relation",
             {
-                "relation_kind": relation_accumulator.relation_kind,
-                "method": relation_accumulator.method.value,
-                "provenance": list(relation_accumulator.provenance),
-                "confidence": relation_accumulator.confidence,
+                "relation_kind": relation.relation_kind,
+                "method": relation.method.value,
+                "provenance": list(relation.provenance),
+                "confidence": relation.confidence,
                 "source_entity_id": source_entity_id,
                 "target_entity_id": target_entity_id,
             },
@@ -524,14 +646,25 @@ def _derive_context_graph(
                 relation_id=relation_id,
                 source_entity_id=source_entity_id,
                 target_entity_id=target_entity_id,
-                relation_kind=relation_accumulator.relation_kind,
-                method=relation_accumulator.method,
-                provenance=relation_accumulator.provenance,
-                evidence_ids=tuple(relation_accumulator.evidence_ids),
-                confidence=relation_accumulator.confidence,
+                relation_kind=relation.relation_kind,
+                method=relation.method,
+                provenance=relation.provenance,
+                evidence_ids=tuple(relation.evidence_ids),
+                confidence=relation.confidence,
             )
         )
-    return tuple(entity_refs), tuple(relation_refs)
+    return tuple(relation_refs)
+
+
+def _derive_context_graph(
+    entries: tuple[_ContextEntry, ...],
+) -> tuple[tuple[ContextEntityRef, ...], tuple[ContextRelationRef, ...]]:
+    graph = _ContextGraphAccumulator()
+    for entry in entries:
+        _accumulate_context_entry(graph, entry)
+    entity_ids, entity_refs = _materialize_context_entities(graph.entities)
+    relation_refs = _materialize_context_relations(graph.relations, entity_ids)
+    return entity_refs, relation_refs
 
 
 # endregion [02]

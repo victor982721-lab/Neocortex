@@ -246,6 +246,18 @@ cero resoluciones corregidas o perdidas. El replay instalado obtuvo 515/515
 cache hits y cero trabajo de análisis/grafo. Esta secuencia valida el gate sobre
 un cambio posterior, pero no demuestra calibración universal.
 
+rc18 aplica la siguiente recomendación: `_derive_context_graph` pasa de 279
+líneas/complejidad 43 a un coordinador de nueve líneas con validación,
+acumulación y materialización separadas. El diff rc17→rc18 reduce los hotspots
+de 183 a 182, retira sólo el objetivo, añade cero y conserva cero resoluciones
+nuevas, corregidas o perdidas sobre 58 568 calls comunes. El replay desde el
+wheel instalado obtuvo 515/515 cache hits y cero trabajo de lectura, análisis,
+persistencia o grafo. Una comparación diferencial rc17/rc18 sobre relación Code
+válida, duplicado planeado y evidencia inválida produjo JSON idéntico, incluidos
+orden e IDs estables. La primera recomendación `act_now` queda ahora en
+`knowledge_exact._lookup_catalog`; Publication Diff v1 fue suficiente para esta
+decisión y no justifica todavía ampliar su contrato.
+
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible
 puede leerse como `freshness=publication_only`, `current=false` y limitación

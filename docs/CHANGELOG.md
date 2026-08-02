@@ -62,6 +62,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   carga, selección, rebind y escrituras a fases acotadas sin commits internos.
   La regresión post-upsert demuestra rollback del slice y el autoanálisis rc17
   reduce el símbolo de 302 líneas/complejidad 44 a 47/3 sin hotspot sustituto.
+- Partición determinista de `knowledge_context._derive_context_graph`: un
+  coordinador de nueve líneas delega validación de relaciones Code,
+  acumulación y materialización sin cambiar orden, IDs estables ni rechazo
+  atómico de evidencia inconsistente. El autoanálisis rc18 retira sólo ese
+  hotspot, añade cero y conserva cero resoluciones corregidas o perdidas.
 - Fixture reproducible de actionability para el primer top 10, con labels
   provisionales `actionable`/`defer`, score recalculado y `Precision@10`
   explícitamente no humana antes de modificar pesos o añadir detectores.
