@@ -495,7 +495,7 @@ Publicación del refactor Knowledge context rc18:
   repitió 515/515 cache hits con cero bytes y cero ms de lectura, análisis,
   persistencia y grafo;
 - review de 50 findings: digest
-  `a80573e88f52814bdc4349776846daec`; el objetivo desaparece y la primera
+  `30675d2f4c06ec708900f7436bba77e5`; el objetivo desaparece y la primera
   recomendación pasa a `knowledge_exact._lookup_catalog`;
 - diff rc17→rc18, digest `21053e149aff5292f448a747b6e4044b`:
   hotspots 183→182, 182 comunes, cero añadidos/cambiados y sólo el objetivo
@@ -504,7 +504,10 @@ Publicación del refactor Knowledge context rc18:
 - status/review/diff mediante el launcher rc18 conservaron idénticos todos los
   SHA-256 SQLite y dejaron cero sidecars. `current=false` es la limitación
   explícita esperada de `journal_status=unavailable`, no una publicación
-  inválida.
+  inválida;
+- una segunda publicación aislada desde los mismos bytes reprodujo el digest
+  de review `30675d2f4c06ec708900f7436bba77e5`; su diff contra rc18 encontró 58 969
+  calls y 182 hotspots comunes, cero exclusivos y cero evidencia cambiada.
 
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
