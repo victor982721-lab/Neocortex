@@ -83,6 +83,14 @@ def register_code_arguments(
             "published self-analysis"
         ),
     )
+    code.add_argument(
+        "--code-publication-diff",
+        metavar="BASELINE_STATE",
+        help=(
+            "compare the current completed Code publication with a baseline "
+            "state without writing either owner"
+        ),
+    )
     code.add_argument("--code-search", metavar="QUERY")
     code.add_argument(
         "--code-search-mode",

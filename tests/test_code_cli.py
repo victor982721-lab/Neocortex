@@ -135,6 +135,30 @@ def test_code_review_abstains_without_initializing_absent_state(
     assert not (tmp_path / "dedup.sqlite3").exists()
 
 
+def test_code_publication_diff_abstains_without_initializing_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    baseline = tmp_path / "baseline"
+    current = tmp_path / "current"
+    args = _validated(
+        "--state-directory",
+        str(current),
+        "--code-publication-diff",
+        str(baseline),
+        "--code-json",
+    )
+
+    assert dispatch_direct(args) == 2
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["kind"] == "code-publication-diff"
+    assert payload["status"] == "abstained"
+    assert payload["reason"].startswith("baseline_unavailable:FileNotFoundError:")
+    assert not baseline.exists()
+    assert not current.exists()
+
+
 def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:
     args = build_parser().parse_args(
         ("--semantic-index", "text", "--semantic-source", "code")

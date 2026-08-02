@@ -151,6 +151,13 @@ el envelope `neocortex.code-review/v1`. Un snapshot full completado con USN
 indisponible sigue siendo consultable como `freshness=publication_only` y
 `current=false`; journal avanzado/discontinuo, manifest inválido o vínculo de
 raíz/framework incompatible devuelve `2` sin crear estado.
+
+`--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
+de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
+run completado, el schema no coincide o existe cualquier sidecar SQLite. El
+envelope `neocortex.code-publication-diff/v1` informa calls comunes y
+exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
+delta meramente descriptivo de `probable_dead`; nunca aplica cambios.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 

@@ -240,6 +240,13 @@ pero no se recomiendan hasta que su resolución de llamadas esté calibrada. Un
 snapshot full completado sin USN se etiqueta `publication_only`; un journal
 avanzado/discontinuo o un vínculo incompatible causa abstención con código `2`.
 
+`--code-publication-diff` compara dos publicaciones Code completadas sin
+escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
+hotspots añadidos o retirados y el delta no calibrado de `probable_dead`. Exige
+bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
+Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
+regresión inventada.
+
 La corrida normal usa el mismo baseline portable cuando USN no existe o deja
 de estar disponible: publica el snapshot completo con cursor nulo y las rutas
 comparan ese inventario contra sus caches. USN permanece como acelerador en

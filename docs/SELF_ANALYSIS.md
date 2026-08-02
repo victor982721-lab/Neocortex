@@ -183,8 +183,8 @@ ordena con enteros deterministas y devuelve como máximo 10, primero uno por
 archivo y luego un segundo hasta completar. La puntuación es:
 
 ```text
-max(complexity_bp, length_bp)
-+ floor(min(complexity_bp, length_bp) / 4)
+complexity_bp
++ floor(length_bp / 4)
 + 250 * min(callers_estáticos_resueltos, 20)
 ```
 
@@ -193,10 +193,13 @@ analizador, valor/umbral y hasta tres callers resueltos. El score prioriza
 inspección; no representa probabilidad, riesgo calibrado ni autorización para
 refactorizar. Cero hallazgos es una respuesta válida y exitosa.
 
-`probable_dead_symbol` se informa únicamente como conteo suprimido. La
-resolución estática no observa dispatch dinámico y todavía deja llamadas sin
-resolver; recomendar borrado con esa señal produciría falsos positivos. Debe
-calibrarse contra decisiones representativas antes de habilitarse como finding.
+`probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
+portable de 40 entre los 246 candidatos de rc11 encontró 36 usos demostrables,
+un contrato externo y sólo tres candidatos de revisión. Su precisión máxima
+provisional fue 0.075 y exige abstenerse en 37/40 casos; por tanto falló el gate
+de 0.90 y no se habilita como finding ni como recomendación de borrado. La
+resolución estática no observa dispatch dinámico, callbacks, registros ni todos
+los contratos de importación.
 
 El analizador Python conserva además el binding léxico de imports y aliases. El
 resolvedor sólo lo usa cuando no existe shadowing local: primero exige un
@@ -207,13 +210,14 @@ redefinidos permanecen sin enlazar. El porcentaje global de calls resueltas es
 descriptivo —su denominador incluye builtins, APIs externas y dispatch
 dinámico— y no debe convertirse en objetivo aislado de calidad.
 
-La primera calibración de actionability vive en
-`tests/fixtures/code_review/rc6_top10_actionability_v1.json`. Fija exactamente
-los diez resultados y su score, con seis `actionable` y cuatro `defer`
-(`Precision@10` provisional de 0.60). Es revisión estática reproducible, no
-ground truth humano; sirve para impedir que pesos nuevos se acepten por
-intuición y para evidenciar que builders declarativos como `build_parser`
-pueden ser largos sin constituir el siguiente refactor prudente.
+La línea base de actionability vive en
+`tests/fixtures/code_review/rc6_top10_actionability_v1.json`. La ampliación
+representativa está en `rc11_top40_actionability_v2.json`: reúne la unión de
+los top 40 de ambos rankings, 41 símbolos etiquetados como builders,
+validadores, reglas, algoritmos y orquestadores. El ranking v2 elevó la
+`Precision@10` provisional de 0.60 a 0.70 y dejó iguales P@20, P@30 y P@40;
+`build_parser` pasó del rango 2 al 39. Es revisión estática reproducible, no
+ground truth humano, y el score sigue sin representar riesgo calibrado.
 
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible
@@ -223,6 +227,30 @@ Journal `advanced`/`discontinuous`, vínculo incompatible, sidecars o schema no
 admitido causan abstención con código `2`. El digest excluye timestamps e IDs
 SQLite de corrida para que un replay sin cambios conserve identidad de
 contenido.
+
+## Comparación read-only entre publicaciones
+
+`--code-publication-diff` convierte la comparación de dos publicaciones Code
+en una operación canónica, acotada y determinista. El argumento identifica el
+estado baseline; `--state-directory` identifica la publicación actual:
+
+```powershell
+Neocortex --state-directory $CurrentState --code-publication-diff $BaselineState
+Neocortex --state-directory $CurrentState --code-publication-diff $BaselineState --code-json
+```
+
+Ambos estados deben contener un último run completado, schema compatible y
+`code.sqlite3` quiescente sin `-wal`, `-shm` ni `-journal`. La consulta abre las
+bases como snapshots immutable, no migra, no hace checkpoint y no escribe
+ningún owner. Compara como máximo 250 000 calls y 20 000 hotspots; conserva
+conteos totales y hasta 20 ejemplos por clase.
+
+Una call común exige la misma ruta relativa, rango de bytes y nombre. Sobre
+esas calls informa resoluciones nuevas, corregidas, perdidas, estables y aún no
+resueltas; los cambios de texto que desplazan un rango aparecen honestamente
+como sitios exclusivos de una publicación. Los hotspots se identifican por
+ruta relativa y qualified name. El conteo `probable_dead` se muestra sólo como
+delta no calibrado y nunca autoriza cambios de código o corpus.
 
 ## Mini-root de laboratorio
 

@@ -58,6 +58,16 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 - Fixture reproducible de actionability para el primer top 10, con labels
   provisionales `actionable`/`defer`, score recalculado y `Precision@10`
   explícitamente no humana antes de modificar pesos o añadir detectores.
+- Calibración ampliada sobre la unión de los top 40 de ranking v1/v2: 41
+  símbolos etiquetados por construcción. El peso v2 prioriza complejidad sobre
+  longitud y elevó `Precision@10` provisional de 0.60 a 0.70 sin degradar los
+  cortes 20/30/40.
+- `--code-publication-diff BASELINE_STATE` como comparación canónica, bounded y
+  estrictamente read-only de dos publicaciones Code completadas, con cambios
+  de resolución, hotspots, ejemplos acotados, limitaciones y digest portable.
+- Fixture portable de 40 `probable_dead_symbol`: 36 usos demostrables, un
+  contrato externo y tres candidatos de revisión. La señal falló el gate de
+  precisión y permanece suprimida para recomendaciones de borrado.
 - [Guía operativa del autoanálisis protegido](SELF_ANALYSIS.md), incluido un
   mini-root sintético reproducible.
 - Topología canónica por usuario: fuente en

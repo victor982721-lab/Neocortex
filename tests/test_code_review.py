@@ -41,6 +41,12 @@ ACTIONABILITY_FIXTURE = (
     / "code_review"
     / "rc6_top10_actionability_v1.json"
 )
+REPRESENTATIVE_ACTIONABILITY_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "code_review"
+    / "rc11_top40_actionability_v2.json"
+)
 
 
 def _fixture_score(label: dict[str, object]) -> int:
@@ -80,6 +86,98 @@ def test_rc6_top10_actionability_fixture_is_reproducible() -> None:
         "abstention_ranks": [2, 3, 8, 10],
         "duplicate_groups": [],
     }
+
+
+def _representative_score(label: dict[str, object], ranking: str) -> int:
+    signals = label["signals"]
+    assert isinstance(signals, dict)
+    complexity = signals["complexity"]
+    function_lines = signals["function_lines"]
+    complexity_bp = (
+        0 if complexity is None else (10_000 * int(complexity[0])) // int(complexity[1])
+    )
+    length_bp = (
+        0
+        if function_lines is None
+        else (10_000 * int(function_lines[0])) // int(function_lines[1])
+    )
+    impact_bp = 250 * min(int(signals["resolved_static_callers"]), 20)
+    if ranking == "baseline":
+        return (
+            max(complexity_bp, length_bp)
+            + min(complexity_bp, length_bp) // 4
+            + impact_bp
+        )
+    assert ranking == "candidate"
+    return complexity_bp + length_bp // 4 + impact_bp
+
+
+def _ranked_fixture_labels(
+    labels: list[dict[str, object]],
+    ranking: str,
+) -> list[dict[str, object]]:
+    selected = [
+        label
+        for label in labels
+        if isinstance(label[ranking], dict) and label[ranking]["rank"] is not None
+    ]
+    return sorted(selected, key=lambda label: int(label[ranking]["rank"]))
+
+
+def _precision_triplet(
+    labels: list[dict[str, object]],
+    ranking: str,
+    cutoff: int,
+) -> list[int]:
+    selected = _ranked_fixture_labels(labels, ranking)[:cutoff]
+    actionable = sum(label["label"] == "actionable" for label in selected)
+    return [actionable, cutoff, (10_000 * actionable) // cutoff]
+
+
+def test_rc11_top40_actionability_fixture_measures_ranking_v2() -> None:
+    payload = json.loads(
+        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
+    )
+    labels = payload["labels"]
+    summary = payload["review_summary"]
+
+    assert payload["schema"] == "neocortex-code-review-actionability-fixture-v2"
+    assert payload["source"]["ground_truth_status"] == (
+        "provisional_not_human_validated"
+    )
+    assert payload["source"]["sample_strategy"] == "union_of_v1_and_v2_top40"
+    assert len(labels) == summary["sample_size"] == 41
+    assert len({(label["path"], label["symbol"]) for label in labels}) == 41
+    assert all(":" not in label["path"] for label in labels)
+    assert {label["construction"] for label in labels}.issuperset(
+        {"algorithm", "builder", "orchestrator", "rule", "validator"}
+    )
+    assert sum(label["label"] == "actionable" for label in labels) == 24
+    assert sum(label["label"] == "defer" for label in labels) == 17
+    for label in labels:
+        assert label["baseline"]["score_basis_points"] == _representative_score(
+            label, "baseline"
+        )
+        assert label["candidate"]["score_basis_points"] == _representative_score(
+            label, "candidate"
+        )
+
+    baseline = _ranked_fixture_labels(labels, "baseline")
+    candidate = _ranked_fixture_labels(labels, "candidate")
+    assert [label["baseline"]["rank"] for label in baseline] == list(range(1, 41))
+    assert [label["candidate"]["rank"] for label in candidate] == list(range(1, 41))
+    assert sum(label["baseline"]["rank"] is None for label in labels) == 1
+    assert sum(label["candidate"]["rank"] is None for label in labels) == 1
+    for cutoff in (10, 20, 30, 40):
+        assert summary["baseline_v1"][f"top_{cutoff}"] == _precision_triplet(
+            labels, "baseline", cutoff
+        )
+        assert summary["candidate_v2"][f"top_{cutoff}"] == _precision_triplet(
+            labels, "candidate", cutoff
+        )
+    assert summary["precision_at_10_delta_basis_points"] == 1000
+    assert summary["unchanged_precision_cutoffs"] == [20, 30, 40]
+    assert summary["duplicate_groups"] == []
 
 
 def _source_range(index: int, function_lines: int) -> SourceRange:
@@ -360,12 +458,15 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     first = review_code_state(state_directory)
     second = review_code_state(state_directory)
+    expanded = review_code_state(state_directory, limit=11)
     first_json = json.dumps(first.as_payload(), ensure_ascii=True, sort_keys=True)
     second_json = json.dumps(second.as_payload(), ensure_ascii=True, sort_keys=True)
 
     assert first.status == "ready"
     assert first_json == second_json
     assert len(first.findings) == 10
+    assert len(expanded.findings) == 11
+    assert expanded.findings[:10] == first.findings
     assert max(Counter(finding.path for finding in first.findings).values()) == 2
     assert len({finding.path for finding in first.findings}) == 9
     assert first.findings[0].symbol == "pkg.dominant_0"
@@ -377,15 +478,8 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     }
     for finding in first.findings:
         expected_score = (
-            max(
-                finding.complexity_ratio_basis_points,
-                finding.length_ratio_basis_points,
-            )
-            + min(
-                finding.complexity_ratio_basis_points,
-                finding.length_ratio_basis_points,
-            )
-            // 4
+            finding.complexity_ratio_basis_points
+            + finding.length_ratio_basis_points // 4
             + 250 * min(finding.resolved_static_callers, 20)
         )
         assert finding.score_basis_points == expected_score
@@ -393,6 +487,18 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert first.coverage is not None
     assert first.coverage.probable_dead_suppressed > 0
     assert first.digest is not None
+
+
+@pytest.mark.parametrize("limit", (0, 51, True))
+def test_review_rejects_an_unbounded_calibration_limit(
+    tmp_path: Path,
+    limit: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="code review limit must be between 1 and 50",
+    ):
+        review_code_state(tmp_path, limit=limit)  # type: ignore[arg-type]
 
 
 def test_review_freshness_is_fail_closed_with_portable_full_snapshot_exception(

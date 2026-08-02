@@ -26,8 +26,9 @@ from .semantic_models import canonical_json, fingerprint_text
 
 
 CODE_REVIEW_SCHEMA = "neocortex.code-review/v1"
-CODE_REVIEW_RANKING = "python-confirmed-hotspots-v1"
+CODE_REVIEW_RANKING = "python-confirmed-hotspots-v2"
 CODE_REVIEW_LIMIT = 10
+CODE_REVIEW_MAX_LIMIT = 50
 CODE_REVIEW_MAX_PER_FILE = 2
 CODE_REVIEW_MAX_CANDIDATES = 10_000
 CODE_REVIEW_CALLER_EXAMPLES = 3
@@ -319,11 +320,7 @@ def _candidate(row: sqlite3.Row) -> _Candidate:
     complexity_ratio = _ratio_basis_points(complexity, complexity_threshold)
     length_ratio = _ratio_basis_points(function_lines, length_threshold)
     callers = int(row["resolved_static_callers"])
-    score = (
-        max(complexity_ratio, length_ratio)
-        + min(complexity_ratio, length_ratio) // 4
-        + 250 * min(callers, 20)
-    )
+    score = _score_basis_points(complexity_ratio, length_ratio, callers)
     return _Candidate(
         file_id=int(row["file_id"]),
         volume_id=str(row["volume_id"]),
@@ -390,6 +387,16 @@ def _ratio_basis_points(value: int, threshold: int | None) -> int:
     return 0 if threshold is None else (10_000 * value) // threshold
 
 
+def _score_basis_points(
+    complexity_ratio: int,
+    length_ratio: int,
+    resolved_static_callers: int,
+) -> int:
+    """Prioritize branching evidence while retaining length and impact support."""
+
+    return complexity_ratio + length_ratio // 4 + 250 * min(resolved_static_callers, 20)
+
+
 def _rank_key(candidate: _Candidate) -> tuple[object, ...]:
     return (
         -candidate.score_basis_points,
@@ -408,7 +415,11 @@ def _rank_key(candidate: _Candidate) -> tuple[object, ...]:
     )
 
 
-def _select_candidates(candidates: tuple[_Candidate, ...]) -> tuple[_Candidate, ...]:
+def _select_candidates(
+    candidates: tuple[_Candidate, ...],
+    *,
+    limit: int,
+) -> tuple[_Candidate, ...]:
     ordered = tuple(sorted(candidates, key=_rank_key))
     selected: list[_Candidate] = []
     selected_ids: set[int] = set()
@@ -423,7 +434,7 @@ def _select_candidates(candidates: tuple[_Candidate, ...]) -> tuple[_Candidate, 
             selected.append(candidate)
             selected_ids.add(candidate.symbol_id)
             per_file[path_key] = per_file.get(path_key, 0) + 1
-            if len(selected) == CODE_REVIEW_LIMIT:
+            if len(selected) == limit:
                 return tuple(selected)
     return tuple(selected)
 
@@ -578,7 +589,7 @@ def _finding(
     )
 
 
-def _read_review(path: Path) -> _ReviewRead:
+def _read_review(path: Path, *, limit: int) -> _ReviewRead:
     with readonly_code_database(path) as connection:
         validate_code_schema(connection)
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -593,7 +604,7 @@ def _read_review(path: Path) -> _ReviewRead:
         ).fetchall()
         candidates = tuple(_candidate(row) for row in rows)
         total_candidates = int(rows[0]["total_candidates"]) if rows else 0
-        selected = _select_candidates(candidates)
+        selected = _select_candidates(candidates, limit=limit)
         findings = tuple(
             _finding(connection, candidate, rank)
             for rank, candidate in enumerate(selected, start=1)
@@ -739,15 +750,23 @@ def _digest(
     )
 
 
-def review_code_state(state_directory: Path) -> CodeReviewResult:
+def review_code_state(
+    state_directory: Path,
+    *,
+    limit: int = CODE_REVIEW_LIMIT,
+) -> CodeReviewResult:
     """Return a bounded maintenance shortlist without writing any owner."""
 
+    if isinstance(limit, bool) or not 1 <= limit <= CODE_REVIEW_MAX_LIMIT:
+        raise ValueError(
+            f"code review limit must be between 1 and {CODE_REVIEW_MAX_LIMIT}"
+        )
     state_directory = Path(state_directory)
     path = state_directory / "code.sqlite3"
     require_sqlite_sidecars_absent(path)
     if not path.is_file():
         return _abstained(path, "code_state_missing")
-    read = _read_review(path)
+    read = _read_review(path, limit=limit)
     if read.latest_run is None:
         return _abstained(path, "code_run_missing")
     if read.latest_run.status != "completed":
@@ -794,6 +813,7 @@ def review_code_state(state_directory: Path) -> CodeReviewResult:
 
 __all__ = [
     "CODE_REVIEW_LIMIT",
+    "CODE_REVIEW_MAX_LIMIT",
     "CODE_REVIEW_MAX_PER_FILE",
     "CODE_REVIEW_RANKING",
     "CODE_REVIEW_SCHEMA",
