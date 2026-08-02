@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
@@ -14,6 +14,10 @@ from .code_review_actionability import (
     SourceRole,
     assess_code_review_actionability,
     classify_source_role,
+)
+from .code_review_eligibility import (
+    code_review_eligibility,
+    self_analysis_manifest_root,
 )
 from .code_review_models import (
     CODE_REVIEW_SCHEMA,
@@ -28,8 +32,15 @@ from .code_review_models import (
     CodeReviewSnapshot,
     FindingCategory,
     RecommendationStatus,
-    ReviewFreshness,
     build_code_review_recommendations,
+)
+from .code_review_serialization import build_code_review_digest
+from .code_review_work_packages import (
+    CODE_REVIEW_PLANNING,
+    CODE_REVIEW_PLANNING_FINDING_LIMIT,
+    CodeReviewPlanningLink,
+    plan_code_review_work_packages,
+    read_code_review_planning_links,
 )
 from .code_schema import (
     CODE_SCHEMA_VERSION,
@@ -38,7 +49,6 @@ from .code_schema import (
 )
 from .self_analysis_status import (
     CodeRunStatusEvidence,
-    SelfAnalysisStatus,
     read_self_analysis_status,
     require_sqlite_sidecars_absent,
 )
@@ -97,6 +107,8 @@ class _ReviewRead:
     latest_run: CodeRunStatusEvidence | None
     coverage: CodeReviewCoverage
     findings: tuple[CodeReviewFinding, ...]
+    planning_findings: tuple[CodeReviewFinding, ...]
+    planning_links: tuple[CodeReviewPlanningLink, ...]
     enumeration_truncated: bool
 
 
@@ -637,10 +649,26 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         ).fetchall()
         candidates = tuple(_candidate(row) for row in rows)
         total_candidates = int(rows[0]["total_candidates"]) if rows else 0
-        selected = _select_candidates(candidates, limit=limit)
-        findings = tuple(
+        planning_limit = min(
+            len(candidates),
+            max(limit, CODE_REVIEW_PLANNING_FINDING_LIMIT),
+        )
+        selected = _select_candidates(candidates, limit=planning_limit)
+        planning_findings = tuple(
             _finding(connection, candidate, rank)
             for rank, candidate in enumerate(selected, start=1)
+        )
+        findings = planning_findings[:limit]
+        planning_links = read_code_review_planning_links(
+            connection,
+            {
+                candidate.symbol_id: finding.finding_id
+                for candidate, finding in zip(
+                    selected,
+                    planning_findings,
+                    strict=True,
+                )
+            },
         )
         probable_dead = int(
             connection.execute(
@@ -680,6 +708,8 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
             resolved_call_edges=int(resolved_call_edges),
         ),
         findings=findings,
+        planning_findings=planning_findings,
+        planning_links=planning_links,
         enumeration_truncated=total_candidates > len(candidates),
     )
 
@@ -693,100 +723,16 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         actionability_version=CODE_REVIEW_ACTIONABILITY,
         recommendation_status="not_evaluated",
         recommendation_reason=reason,
+        planning_version=CODE_REVIEW_PLANNING,
+        work_package_status="not_evaluated",
+        work_package_reason=reason,
         snapshot=None,
         coverage=None,
         findings=(),
         recommendations=(),
+        work_packages=(),
         limitations=(),
         digest=None,
-    )
-
-
-def _manifest_mapping(value: object, label: str) -> dict[str, object]:
-    if not isinstance(value, dict):
-        raise ValueError(f"self-analysis manifest {label} must be an object")
-    return value
-
-
-def _eligibility(
-    status: SelfAnalysisStatus | None,
-) -> tuple[str | None, ReviewFreshness | None, str | None]:
-    if status is None:
-        return "self_analysis_manifest_missing", None, None
-    if status.manifest_status != "valid" or status.manifest is None:
-        return f"self_analysis_manifest_{status.manifest_status}", None, None
-    freshness = status.freshness
-    if not freshness.root_identity_current:
-        return "self_analysis_root_identity_not_current", None, None
-    if not freshness.framework_link_current:
-        return "self_analysis_framework_link_not_current", None, None
-    manifest = status.manifest
-    inventory = _manifest_mapping(manifest.get("inventory"), "inventory")
-    journal = _manifest_mapping(inventory.get("journal"), "inventory journal")
-    if freshness.current:
-        return None, "current", None
-    if freshness.journal_status == "unavailable":
-        if inventory.get("mode") == "full" and journal.get("status") == "unavailable":
-            return (
-                None,
-                "publication_only",
-                ("live_tree_freshness_not_proven_without_journal"),
-            )
-        return "self_analysis_journal_probe_unavailable", None, None
-    if freshness.journal_status == "advanced":
-        return "self_analysis_journal_advanced", None, None
-    if freshness.journal_status == "discontinuous":
-        return "self_analysis_journal_discontinuous", None, None
-    if not freshness.inventory_checkpoint_current:
-        return "self_analysis_inventory_checkpoint_not_current", None, None
-    return "self_analysis_not_current", None, None
-
-
-def _manifest_root(status: SelfAnalysisStatus) -> str:
-    if status.manifest is None:
-        raise ValueError("self-analysis manifest is unavailable")
-    run = _manifest_mapping(status.manifest.get("run"), "run")
-    root = run.get("root")
-    if not isinstance(root, str) or not root:
-        raise ValueError("self-analysis manifest root must be a non-empty string")
-    return root
-
-
-def _digest(
-    snapshot: CodeReviewSnapshot,
-    coverage: CodeReviewCoverage,
-    findings: tuple[CodeReviewFinding, ...],
-    recommendation_status: RecommendationStatus,
-    recommendation_reason: str | None,
-    recommendations: tuple[CodeReviewRecommendation, ...],
-    limitations: tuple[str, ...],
-) -> CodeReviewDigest:
-    payload = canonical_json(
-        {
-            "schema": CODE_REVIEW_SCHEMA,
-            "ranking": CODE_REVIEW_RANKING,
-            "actionability_version": CODE_REVIEW_ACTIONABILITY,
-            "recommendation_status": recommendation_status,
-            "recommendation_reason": recommendation_reason,
-            "snapshot": {
-                "processing_signature": snapshot.processing_signature,
-                "freshness": snapshot.freshness,
-                "current": snapshot.current,
-                "journal_status": snapshot.journal_status,
-            },
-            "coverage": asdict(coverage),
-            "findings": [asdict(finding) for finding in findings],
-            "recommendations": [
-                asdict(recommendation) for recommendation in recommendations
-            ],
-            "limitations": list(limitations),
-        }
-    )
-    fingerprint = fingerprint_text(payload)
-    return CodeReviewDigest(
-        fingerprint.xxh3_128,
-        fingerprint.xxh3_64_guard,
-        fingerprint.byte_count,
     )
 
 
@@ -812,7 +758,7 @@ def review_code_state(
     if read.latest_run.status != "completed":
         return _abstained(path, f"code_run_not_completed:{read.latest_run.status}")
     status = read_self_analysis_status(state_directory, read.latest_run)
-    reason, freshness, freshness_limitation = _eligibility(status)
+    reason, freshness, freshness_limitation = code_review_eligibility(status)
     if reason is not None:
         return _abstained(path, reason)
     if status is None or freshness is None:
@@ -823,6 +769,7 @@ def review_code_state(
         "intentional_complexity_requires_human_confirmation",
         "static_call_resolution_is_partial",
         "dynamic_dispatch_is_not_observed",
+        "work_package_relationships_are_bounded_to_two_static_call_hops",
         "probable_dead_symbol_is_suppressed_uncalibrated_evidence",
     ]
     if freshness_limitation is not None:
@@ -834,7 +781,7 @@ def review_code_state(
         framework_run_id=read.latest_run.framework_run_id,
         scan_id=read.latest_run.scan_id,
         processing_signature=read.latest_run.processing_signature,
-        root=_manifest_root(status),
+        root=self_analysis_manifest_root(status),
         freshness=freshness,
         current=status.freshness.current,
         journal_status=status.freshness.journal_status,
@@ -843,11 +790,22 @@ def review_code_state(
         read.findings,
         limit=CODE_REVIEW_RECOMMENDATION_LIMIT,
     )
+    planning_recommendations = build_code_review_recommendations(
+        read.planning_findings,
+        limit=CODE_REVIEW_RECOMMENDATION_LIMIT,
+    )
     recommendation_status: RecommendationStatus = (
         "ready" if recommendations else "abstained"
     )
     recommendation_reason = (
         None if recommendations else "no_act_now_candidate_within_bounded_findings"
+    )
+    work_packages, work_package_status, work_package_reason = (
+        plan_code_review_work_packages(
+            read.planning_findings,
+            planning_recommendations,
+            read.planning_links,
+        )
     )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
@@ -858,19 +816,29 @@ def review_code_state(
         actionability_version=CODE_REVIEW_ACTIONABILITY,
         recommendation_status=recommendation_status,
         recommendation_reason=recommendation_reason,
+        planning_version=CODE_REVIEW_PLANNING,
+        work_package_status=work_package_status,
+        work_package_reason=work_package_reason,
         snapshot=snapshot,
         coverage=read.coverage,
         findings=read.findings,
         recommendations=recommendations,
+        work_packages=work_packages,
         limitations=limitation_tuple,
-        digest=_digest(
+        digest=build_code_review_digest(
             snapshot,
             read.coverage,
             read.findings,
-            recommendation_status,
-            recommendation_reason,
-            recommendations,
-            limitation_tuple,
+            ranking=CODE_REVIEW_RANKING,
+            actionability_version=CODE_REVIEW_ACTIONABILITY,
+            recommendation_status=recommendation_status,
+            recommendation_reason=recommendation_reason,
+            recommendations=recommendations,
+            planning_version=CODE_REVIEW_PLANNING,
+            work_package_status=work_package_status,
+            work_package_reason=work_package_reason,
+            work_packages=work_packages,
+            limitations=limitation_tuple,
         ),
     )
 

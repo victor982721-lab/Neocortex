@@ -276,8 +276,10 @@ def run_code_review(args: argparse.Namespace) -> int:
     _print_console_line(
         f"CODE_REVIEW status=ready freshness={result.snapshot.freshness} "
         f"current={int(result.snapshot.current)} findings={len(result.findings)} "
-        f"recommendations={len(result.recommendations)} ranking={result.ranking} "
-        f"actionability={result.actionability_version} digest={result.digest.xxh3_128}"
+        f"recommendations={len(result.recommendations)} "
+        f"work_packages={len(result.work_packages)} ranking={result.ranking} "
+        f"actionability={result.actionability_version} planner={result.planning_version} "
+        f"digest={result.digest.xxh3_128}"
     )
     _print_console_line(
         f"CODE_REVIEW_COVERAGE python_files={result.coverage.current_python_files} "
@@ -291,6 +293,21 @@ def run_code_review(args: argparse.Namespace) -> int:
         _print_console_line(
             "CODE_REVIEW_RECOMMENDATION status=abstained "
             f"reason={result.recommendation_reason}"
+        )
+    if result.work_package_status == "abstained":
+        _print_console_line(
+            "CODE_REVIEW_WORK_PACKAGE status=abstained "
+            f"reason={result.work_package_reason}"
+        )
+    for package in result.work_packages:
+        _print_console_line(
+            "CODE_REVIEW_WORK_PACKAGE status=ready "
+            f"package_rank={package.package_rank} risk={package.change_risk} "
+            f"members={len(package.members)} "
+            f"members_truncated={int(package.members_truncated)} "
+            f"confidence={package.confidence} "
+            f"primary={json.dumps(package.primary_symbol, ensure_ascii=True)} "
+            f"package_id={package.package_id}"
         )
     for recommendation in result.recommendations:
         _print_console_line(

@@ -57,6 +57,17 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   contratos y validación. `--code-review-limit` expone de 1 a 50 resultados en
   JSON; builders, validators, reglas y evidencia desconocida no se promueven
   por score. Los avisos `probable_dead_symbol` permanecen suprimidos.
+- `--code-review` v3 conserva los campos v2 y añade un `work_package`
+  determinista sobre un top 50 fijo: una sola recomendación raíz y guards
+  alcanzables exclusivamente por llamadas confirmadas a uno o dos saltos, con
+  riesgo, contratos, orden, validación, gates, provenance y abstención explícita.
+  La calibración rc13–rc19 fija el rechazo de hotspots sustitutos y replays no
+  completamente incrementales.
+- Caracterización v14 de Document Taxonomy con 30 payloads sintéticos completos
+  y dos seams de ambigüedad. La partición de `classify_document` y de la regla
+  normativa conserva firma, evidencia, orden, confianza, incertidumbre,
+  abstención y naming; el autoanálisis rc20 retira ambos hotspots sin añadir otro
+  ni perder o corregir resoluciones comunes.
 - Partición transaccional de `_queue_job_rows_bounded`: el orquestador conserva
   orden, presupuesto de jobs, lazy base-member reuse y reanudación, pero delega
   carga, selección, rebind y escrituras a fases acotadas sin commits internos.

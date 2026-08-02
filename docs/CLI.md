@@ -144,16 +144,19 @@ Cada propietario exige un snapshot SQLite immutable y sidecar-free. Cualquier
 cualquiera de ellas, causa abstención total con código `2` sin tocar el estado.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v2` conserva hasta 10 hotspots brutos por
-defecto y antepone hasta tres recomendaciones `act_now`. Separa callers de
-producción, pruebas, fixtures, herramientas y compatibilidad; informa tipo de
-construcción, riesgo, contratos y validación sugerida, y se abstiene ante
-evidencia insuficiente. `--code-review-limit N --code-json` permite inspeccionar
-entre 1 y 50 hotspots; valores mayores a 10 exigen JSON. No admite `--apply`,
-`--route` ni otra operación directa. Un snapshot full completado con USN
-indisponible sigue siendo consultable como `freshness=publication_only` y
-`current=false`; journal avanzado/discontinuo, manifest inválido o vínculo de
-raíz/framework incompatible devuelve `2` sin crear estado.
+envelope `neocortex.code-review/v3` conserva los campos y significados v2 —hasta
+10 hotspots brutos por defecto y tres recomendaciones `act_now`— y declara
+`compatible_schemas=["neocortex.code-review/v2"]`. Añade un `work_package`
+determinista con una sola recomendación raíz, guards alcanzados por llamadas
+confirmadas a uno o dos saltos, riesgo agregado, contratos, pasos y gates. El
+pool del planificador siempre es el top 50, independientemente de la vista; no
+agrupa por nombre o directorio y los guards exigen caracterización antes de
+cualquier cambio. `--code-review-limit N --code-json` permite inspeccionar entre
+1 y 50 hotspots; valores mayores a 10 exigen JSON. No admite `--apply`, `--route`
+ni otra operación directa. Un snapshot full completado con USN indisponible
+sigue siendo consultable como `freshness=publication_only` y `current=false`;
+journal avanzado/discontinuo, manifest inválido o vínculo de raíz/framework
+incompatible devuelve `2` sin crear estado.
 
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un

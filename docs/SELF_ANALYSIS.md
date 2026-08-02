@@ -178,7 +178,8 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v2` conserva dos capas. `findings` selecciona
+El contrato `neocortex.code-review/v3` conserva íntegramente las dos capas v2 y
+declara esa compatibilidad en el envelope. `findings` selecciona
 sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
 enumera hasta 10 000 hotspots y mantiene el ranking v2 auditable. Devuelve 10
 por defecto, primero uno por archivo y luego un segundo hasta completar;
@@ -208,6 +209,19 @@ evidencia exacta, contratos a preservar y validación sugerida. El score bruto y
 todos los hotspots siguen disponibles: esta capa no es ground truth humano ni
 autoriza modificar código. Cero hallazgos o cero `act_now` son respuestas
 válidas; en el segundo caso `recommendation_status=abstained` explica la brecha.
+
+`work_packages` añade una tercera capa mediante
+`python-maintenance-work-packages-v1`. El primer y único paquete toma la primera
+recomendación como `primary_change_target` y consulta siempre un pool fijo de 50
+hotspots, aunque la vista solicitada sea menor. Sólo incorpora
+`contract_guard`s alcanzados por una llamada confirmada directa o por dos saltos
+a través de un símbolo Python vigente, completo, no generado y de producción.
+No usa coincidencias de nombre, ruta, módulo ni caller compartido. Cada relación
+conserva profundidad, símbolo puente, confianza mínima y provenance; el paquete
+expone riesgo conservador, contratos, orden de ejecución, validación y los gates
+históricos de caracterización exacta, cero hotspots sustitutos, cero
+resoluciones corregidas/perdidas y replay completamente incremental. Los guards
+no son objetivos automáticos y el paquete nunca autoriza modificar código.
 
 `probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
 portable de 40 entre los 246 candidatos de rc11 encontró 36 usos demostrables,
@@ -270,6 +284,20 @@ wheel instalado obtuvo 515/515 cache hits y cero trabajo de lectura, análisis,
 persistencia o grafo. La primera recomendación pasa a
 `document_taxonomy.classify_document`; Publication Diff v1 vuelve a ser
 suficiente para decidir.
+
+rc20 añade el planificador y lo prueba primero sobre la publicación rc19. El
+paquete raíz `document_taxonomy.classify_document` enlaza, mediante cadenas
+confirmadas a dos saltos, `_normative_document_evidence` y
+`_plausible_authority_identifier` como guards; Knowledge y Semantic permanecen
+fuera. Una matriz sintética congela 30 payloads completos y dos seams de
+ambigüedad antes del refactor. `classify_document` queda como coordinador y la
+regla normativa separa exclusiones CFE, señales formales, referencias directas,
+bloqueos operativos y fallback de ruta sin cambiar `CLASSIFIER_VERSION` ni un
+solo fingerprint. El primer candidato rc20 fue rechazado porque el propio
+autoanálisis detectó `review_code_state` con complejidad 15; la partición final
+elimina ese reemplazo. El diff rc19→rc20 retira los dos hotspots Taxonomy, añade
+cero, no cambia evidencia común y conserva cero resoluciones nuevas, corregidas
+o perdidas. La siguiente raíz pasa a `knowledge_exact.lookup_exact`.
 
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible

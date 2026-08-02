@@ -232,16 +232,19 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. Conserva el ranking bruto de 10 hotspots por defecto, pero antepone
-como máximo tres recomendaciones `act_now`: clasifica producción, pruebas,
-fixtures y herramientas; distingue builders, validators, reglas, persistencia,
-recuperación y orquestación; y conserva riesgo, contratos y validación sugerida.
-`--code-review-limit N --code-json` amplía de 1 a 50 la vista auditable. La
-consulta es estrictamente read-only y se abstiene si no puede reconocer una
-construcción prudente. Los avisos heurísticos de código probablemente muerto se
-cuentan pero no se recomiendan hasta calibrar su resolución de llamadas. Un
-snapshot full completado sin USN se etiqueta `publication_only`; un journal
-avanzado/discontinuo o un vínculo incompatible causa abstención con código `2`.
+explicable. El envelope v3 conserva el ranking bruto y hasta tres recomendaciones
+`act_now` de v2, y añade un único `work_package` como siguiente cambio coherente.
+Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
+los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
+y enumera contratos, orden, validación y gates de publicación. El horizonte de
+planeación permanece fijo en 50 aunque la vista muestre 10; no agrupa por nombre,
+directorio ni prefijo de módulo. `--code-review-limit N --code-json` amplía de 1
+a 50 la vista auditable. La consulta es estrictamente read-only y el paquete es
+consejo, nunca autorización de cambio. Los avisos heurísticos de código
+probablemente muerto se cuentan pero no se recomiendan hasta calibrar su
+resolución de llamadas. Un snapshot full completado sin USN se etiqueta
+`publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
+causa abstención con código `2`.
 
 `--code-publication-diff` compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
