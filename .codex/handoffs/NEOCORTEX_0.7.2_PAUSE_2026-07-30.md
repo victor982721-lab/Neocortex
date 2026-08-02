@@ -15,13 +15,14 @@ quiescencia; decisión de imagen v10 validada con OCR; y watcher portable que us
 USN sólo como acelerador. Conserva además inventario Dedup v9, enlace exacto
 Code↔Semantic y analizador Python v3/resolver v4.
 
-El candidato focal `rc11` conserva `Neocortex --code-review` y mejora el propio
-autoanálisis con Python analyzer v5/resolver v7. El top 10 sigue determinista;
-el grafo pasa de 16 733/58 262 a 18 426/58 429 calls resueltas. Sobre las 57 428
-calls comunes con rc6 añadió 1 622 bindings, corrigió 57 destinos y no perdió
-ninguno. El fixture inicial mide `Precision@10=0.60` provisional; los 246 avisos
-de dead code continúan suprimidos. El replay no-op conservó el digest
-`33d8ba5de1b0f005b7763f12fc814ed8` con 504/504 cache hits.
+El corte de autoanálisis portable quedó fusionado mediante el PR #3 en el merge
+commit `2c5a046177ce3a1f2fdb5e882d847a8fbf136405`. El candidato focal `rc12`
+añade `Neocortex --code-publication-diff`, amplía la calibración del ranking a
+41 símbolos y cambia a `python-confirmed-hotspots-v2`: la `Precision@10`
+provisional sube de 0.60 a 0.70 sin degradar P@20/30/40 y `build_parser` baja
+del rango 2 al 39. Una muestra portable de 40 `probable_dead_symbol` encontró
+36 usos demostrables, un contrato externo y tres candidatos de revisión; la
+señal falla el gate de 0.90 y permanece suprimida.
 
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
@@ -37,10 +38,12 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base de esta continuación: `main`; HEAD
-  `1e2535494d5d37192a98bfd8201f6c7e64b545bb`.
-- El checkout fuente es `0.7.2`; la rama y el commit publicados deben
-  verificarse en Git/PR porque este handoff también forma parte del corte.
+- Base publicada de esta continuación: `main` en
+  `2c5a046177ce3a1f2fdb5e882d847a8fbf136405`, idéntico a `origin/main` tras
+  fusionar el PR #3.
+- El checkout fuente es `0.7.2`; el corte de calibración y diff se prepara en
+  `codex/neocortex-autoanalysis-calibration`. Su commit/merge final debe
+  verificarse en Git porque este handoff forma parte de ese mismo corte.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
@@ -200,6 +203,29 @@ ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
 
+### Candidato focal `rc12` — calibración y diff de publicaciones
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc12\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `AE95DB50A4ACB8EC958B90D89EF0A72DF88E00D862B3A87726C8E303F44A7D21`;
+- 1 322 090 bytes y 269 miembros;
+- `ZipFile.testzip()` limpio; `RECORD`, entry point y
+  `_04_Nucleo_Operativo/code_publication_diff.py` presentes.
+
+Runtime de smoke:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc12\venv`.
+
+- `Neocortex 0.7.2`, `pip check` limpio e imports confirmados desde el
+  `site-packages` del propio venv, no desde el checkout;
+- el launcher rc12 reprodujo rc6→rc11 con digest
+  `7870b9de799ff095c8c54ae3fbfc83f2`: 1 622 resoluciones nuevas, 57
+  correcciones, cero pérdidas, dos hotspots añadidos y uno retirado;
+- los SHA-256 de ambas SQLite permanecieron idénticos antes/después del diff;
+- este venv usa `--system-site-packages` para un smoke focal. No sustituye la
+  prueba full hermética de `rc5` ni autoriza promover el launcher estable.
+
 ### Candidato focal `rc11` — autoanálisis y code-review
 
 Wheel:
@@ -268,46 +294,38 @@ decoder conserva lectura estricta de v1. Un status journal-free puede validar
 la evidencia terminada, pero devuelve `current=false` porque una consulta
 read-only no puede demostrar frescura posterior sin volver a recorrer la raíz.
 
-Publicación actual rc11:
-`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc11-state`.
+Publicación actual rc12:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc12-state`.
 
-- primera corrida: inventario 512 archivos y 46 directorios excluidos; 504
-  candidatos Code, 504 procesados, 8 763 695 bytes y 19.027 s de pared;
-- 14 540 símbolos, 80 567 referencias, 201 diagnósticos del analizador y cero
-  errores/acciones;
-- grafo actual: 176 `high_complexity`, 21 `long_function`, 246
-  `probable_dead_symbol` y cero `unresolved_relative_import`;
-- dependencias relativas: 1 009/1 009 resueltas;
-- replay inmediato: 0 procesados/504 cache hits en 3.672 s, cero bytes y cero
-  ms de lectura, análisis, persistencia y grafo;
-- `--code-review` en ambos runs publicó el digest estable
-  `33d8ba5de1b0f005b7763f12fc814ed8`; 461/461 Python completos, 185 hotspots
-  únicos y 18 426/58 429 calls resueltas (31.54 %);
-- sobre 57 428 calls comunes con rc6, v7 añadió 1 622 bindings, corrigió 57
-  destinos y retiró cero; 8 988/11 960 calls import-bound quedaron resueltas,
-  incluidos qualified names directos, un reexport confirmado o un submódulo
-  físico único;
-- el fixture rc6 fija seis `actionable` y cuatro `defer`: `Precision@10=0.60`
-  provisional, no ground truth humano;
-- el hotspot introducido durante el resolvedor bajó de 435 líneas/complejidad
-  18 a 179/12; cuatro helpers quedan entre 40 y 95 líneas, complejidad 1–7, y
-  `code_state` salió del top 10.
+- piloto inicial acotado: inventario 517 archivos, 509 candidatos, 509
+  procesados, 8 888 058 bytes, 14 651 símbolos, 80 979 referencias, cero
+  errores/acciones y 18.157 s de pared. El límite explícito de 1 000 conservó
+  correctamente el run como `partial`, aunque no se alcanzó;
+- segunda corrida completa: 0 procesados/509 cache hits, run `completed` y
+  publicación elegible; la tercera corrida repitió 509/509 cache hits en
+  3.759 s con cero bytes y cero ms de lectura, análisis, persistencia y grafo;
+- `--code-review` publicó en ambos replays el digest estable
+  `51196515f21c2268766e8d3d4aed1dc5`; 464/464 Python completos, 185 hotspots
+  únicos y 18 508/58 739 calls resueltas;
+- el top 10 v2 inicia con `knowledge_search.execute_knowledge_search`
+  (complejidad 75, 416 líneas, 37 callers) y ya no contiene el builder
+  declarativo `cli_parser.build_parser`;
+- la muestra de actionability contiene 24 `actionable` y 17 `defer` en la unión
+  de 41 candidatos. P@10 pasa de 6/10 a 7/10; P@20, P@30 y P@40 permanecen
+  iguales;
+- la muestra SHA-256 portable de dead code exige 37/40 abstenciones. Sólo
+  `_query_vector`, `_text_probe` y `_enqueue_text_chunk_batch` quedaron como
+  candidatos de revisión; no son autorización de borrado;
+- el diff rc11→rc12 encontró 49 775 calls comunes, cero resoluciones nuevas,
+  corregidas o perdidas y hotspots 185→185. Los sitios exclusivos reflejan
+  desplazamientos de rango y tres Python nuevos, como declara la limitación del
+  contrato.
 
-Triage manual preliminar del top 10: seis resultados señalan fronteras
-estructurales plausiblemente accionables (Knowledge search, cola Semantic,
-grafo de contexto, lookup de catálogo, clasificación documental e indexación
-de imagen); cuatro son validadores/builders deliberadamente declarativos. El
-caso más claro es `cli_parser.build_parser`: quedó rank 2 por 830 líneas y muchos
-callers pese a complejidad 2. Esto demuestra utilidad real, pero también que la
-próxima calibración debe distinguir orquestación algorítmica de declaraciones y
-preservar precedencia/error contracts; no conviene retocar pesos por intuición.
-
-Las publicaciones rc6 y `graph-resolver-v4-20260801-rc1\full-state` se conservan
-como baselines históricos; no se mutaron para producir rc11.
-
-La línea base anterior de 58 imports relativos no resueltos y 1 000 dead
-candidates queda retirada. Los 246 dead restantes continúan siendo candidatos
-diagnósticos, no una orden de refactor ni borrado.
+Las publicaciones rc6, rc11 y
+`graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
+históricos; no se mutaron. La línea base anterior de 58 imports relativos no
+resueltos y 1 000 dead candidates queda retirada. Los 246 dead restantes
+continúan siendo candidatos diagnósticos, no una orden de refactor ni borrado.
 
 ## Inventario normal portable — Dedup v9
 
@@ -440,6 +458,10 @@ ausentes y su candidate limit, no evidencia inventada.
 - Code-review y fronteras CLI focales: `139 passed`, `2 subtests`; Ruff y Mypy
   limpios sobre su implementación y contratos. La prueba real aislada devolvió
   exit `0`, 10 findings y cero mutación de estado.
+- Ranking v2, diff de publicaciones, calibración dead, Code/CLI y autoanálisis:
+  `279 passed`, `2 subtests`; la barrera focal previa aprobó `80 passed`.
+  Ruff/format limpios en 11 archivos y Mypy sin errores en los cinco módulos
+  fuente del corte.
 - Resolver imports/aliases/reexports y refactor del hotspot: `137 passed`; Ruff
   0.15 y Mypy 2.1 limpios en los tres módulos fuente modificados. El piloto de
   30 archivos tuvo 30/30 cache hits en replay y la publicación completa 504/504.
@@ -452,24 +474,24 @@ ausentes y su candidate limit, no evidencia inventada.
   sin errores en 37 módulos fuente.
 - Wheel de 267 miembros, venv full nuevo, 54 distribuciones, `pip check`, versión
   y ocho capacidades verificados. Los smokes finales usaron el launcher rc5.
+- Wheel rc12 de 269 miembros, `ZipFile.testzip()`, `pip check`, procedencia del
+  import y launcher instalados verificados. El estable no se modificó.
 - `git diff --check` limpio; sólo avisos de futura conversión LF→CRLF.
 
 ## Próximos pasos, en orden
 
-1. **Ampliar la calibración del ranking.** Llevar el fixture provisional de 10
-   a una muestra representativa de 30–50 candidatos, etiquetar builders,
-   validadores, reglas y algoritmos, medir P@10/abstención y sólo entonces
-   ajustar ranking o añadir detectores.
-2. **Comparar publicaciones por el comando canónico.** La comparación manual
-   rc6→rc11 ya distinguió 1 622 altas, 57 correcciones, cero pérdidas y caída
-   del hotspot; convertirla en un diff read-only/determinista sin otra base.
-3. **Calibrar `probable_dead_symbol`.** Muestrear los 246 candidatos contra
-   calls dinámicas, imports y fixtures etiquetados. Mantenerlos suprimidos y no
-   recomendar borrados mientras precision/abstención no pasen el gate.
-4. **Cerrar el siguiente hotspot accionable.** Elegirlo desde la muestra
-   calibrada, exigir prueba de comportamiento y demostrar caída de score en un
-   autoanálisis nuevo, como se hizo con el resolvedor.
-5. **Retomar otras fronteras después.** Imagen, calibración Semantic, soak del
+1. **Cerrar el siguiente hotspot accionable.** Empezar por
+   `knowledge_search.execute_knowledge_search`, preservar orden de owners,
+   retries, telemetría, abstención y contratos de error con pruebas de
+   comportamiento; refactorizar sólo la primera frontera que reduzca su
+   complejidad sin cambiar resultados.
+2. **Demostrar la mejora con rc13.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc12; exigir caída de score/hotspot, cero
+   pérdidas de resolución y replay 100 % cache hit.
+3. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
+   callbacks, registries y contratos que ya explican los 37 falsos positivos;
+   repetir la misma muestra y mantener la señal suprimida hasta pasar el gate.
+4. **Retomar otras fronteras después.** Imagen, calibración Semantic, soak del
    watcher y promoción del launcher siguen pendientes, pero quedan detrás del
    objetivo vigente de mejorar el autoanálisis. El estable permanece en 0.7.1
    hasta autorización explícita de promoción.

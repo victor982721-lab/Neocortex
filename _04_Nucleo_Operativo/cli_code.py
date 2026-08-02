@@ -298,6 +298,64 @@ def run_code_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_code_publication_diff(args: argparse.Namespace) -> int:
+    """Compare two completed Code publications without mutating either state."""
+
+    from .code_publication_diff import compare_code_publications
+
+    try:
+        result = compare_code_publications(
+            Path(args.code_publication_diff),
+            args.state_directory,
+        )
+    except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
+        return _error("code-publication-diff", exc)
+    if args.code_json:
+        _emit(result.as_payload(), json_output=True)
+        return 0 if result.status == "ready" else 2
+    if result.status != "ready":
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF status=abstained reason={result.reason} "
+            f"baseline={json.dumps(result.baseline_database, ensure_ascii=True)} "
+            f"current={json.dumps(result.current_database, ensure_ascii=True)}"
+        )
+        return 2
+    if (
+        result.baseline is None
+        or result.current is None
+        or result.calls is None
+        or result.hotspots is None
+        or result.probable_dead_delta is None
+        or result.digest is None
+    ):
+        return _error(
+            "code-publication-diff",
+            RuntimeError("ready result is incomplete"),
+        )
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF status=ready digest={result.digest.xxh3_128} "
+        f"baseline_calls={result.baseline.resolved_call_edges}/"
+        f"{result.baseline.call_edges} current_calls="
+        f"{result.current.resolved_call_edges}/{result.current.call_edges}"
+    )
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_CALLS common={result.calls.common_call_sites} "
+        f"baseline_only={result.calls.baseline_only_call_sites} "
+        f"current_only={result.calls.current_only_call_sites} "
+        f"newly_resolved={result.calls.newly_resolved} "
+        f"corrected={result.calls.corrected} lost={result.calls.lost}"
+    )
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_HOTSPOTS common={result.hotspots.common} "
+        f"added={result.hotspots.added} removed={result.hotspots.removed} "
+        f"changed_evidence={result.hotspots.changed_evidence} "
+        f"probable_dead_delta={result.probable_dead_delta:+d}"
+    )
+    for limitation in result.limitations:
+        _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
+    return 0
+
+
 def run_code_doctor(args: argparse.Namespace) -> int:
     """Validate schema, FTS and optional tools without loading heavy analyzers."""
 
@@ -477,6 +535,7 @@ def run_code_reconstruct(args: argparse.Namespace) -> int:
 
 __all__ = [
     "run_code_doctor",
+    "run_code_publication_diff",
     "run_code_projects",
     "run_code_reconstruct",
     "run_code_review",

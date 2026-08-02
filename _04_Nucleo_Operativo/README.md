@@ -252,6 +252,7 @@ Neocortex --root C:\Codigo --route code
 Neocortex --root C:\Codigo --route code --code-cache-validation full
 Neocortex --code-status
 Neocortex --code-review
+Neocortex --state-directory C:\Estado\Actual --code-publication-diff C:\Estado\Baseline
 Neocortex --code-doctor
 ```
 
@@ -262,6 +263,13 @@ combina severidad relativa a los umbrales e impacto por callers estáticos
 resueltos; es prioridad de revisión, no riesgo ni confianza calibrada. La
 consulta conserva archivos y SQLite byte por byte y suprime deliberadamente
 `probable_dead_symbol` mientras la resolución de llamadas siga incompleta.
+
+`--code-publication-diff` compara dos publicaciones completadas sin crear,
+migrar ni modificar sus bases. La identidad portable de una call común usa
+ruta relativa, rango de bytes y nombre; la de un hotspot usa ruta relativa y
+qualified name. El resultado separa altas, correcciones, pérdidas y cambios de
+evidencia, conserva límites duros y trata `probable_dead` sólo como conteo no
+calibrado.
 
 La transacción global se conserva deliberadamente en el esquema 2. Pruebas con
 lectores concurrentes y fault injection confirmaron snapshot precommit y

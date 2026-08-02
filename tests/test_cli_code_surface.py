@@ -169,6 +169,15 @@ EXPECTED_CODE_ACTIONS = (
         ),
     ),
     _expected_store(
+        "--code-publication-diff",
+        "code_publication_diff",
+        metavar="BASELINE_STATE",
+        help_text=(
+            "compare the current completed Code publication with a baseline "
+            "state without writing either owner"
+        ),
+    ),
+    _expected_store(
         "--code-search",
         "code_search",
         metavar="QUERY",
@@ -257,6 +266,9 @@ EXPECTED_CODE_HELP = (
     "  --code-status         show bounded code database, analyzer and index status\n"
     "  --code-review         show a deterministic read-only top-10 maintenance\n"
     "                        shortlist from published self-analysis\n"
+    "  --code-publication-diff BASELINE_STATE\n"
+    "                        compare the current completed Code publication with a\n"
+    "                        baseline state without writing either owner\n"
     "  --code-search QUERY\n"
     "  --code-search-mode "
     "{literal,fts,path,language,symbol,definition,reference,import,dependency,call,"

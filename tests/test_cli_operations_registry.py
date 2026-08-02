@@ -121,6 +121,11 @@ DIRECT_ARGUMENT_CASES = (
     ("audio_doctor", "run_audio_doctor", ("--audio-doctor",)),
     ("code_status", "run_code_status", ("--code-status",)),
     ("code_review", "run_code_review", ("--code-review",)),
+    (
+        "code_publication_diff",
+        "run_code_publication_diff",
+        ("--code-publication-diff", "baseline"),
+    ),
     ("code_search", "run_code_search", ("--code-search", "query")),
     ("code_projects", "run_code_projects", ("--code-projects",)),
     (
