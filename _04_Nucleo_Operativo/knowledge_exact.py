@@ -2289,6 +2289,317 @@ def _catalog_row_match(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _CatalogPreflight:
+    valid_heads: tuple[tuple[str, int], ...]
+    missing_heads: int
+    shared_steps: int
+    invalid_identifier_json: bool
+    identifier_coverage_incomplete: bool
+
+
+def _catalog_snapshot_heads(
+    owner: OwnerSnapshot,
+    source_scope: tuple[str, ...] | None,
+    path_scope: tuple[str, ...] | None,
+) -> tuple[tuple[str, int], ...]:
+    format_head_scope = _catalog_head_sources_for_path_scope(path_scope)
+    return tuple(
+        sorted(
+            (head.scope, head.generation)
+            for head in owner.publications
+            if (source_scope is None or head.scope in source_scope)
+            and (format_head_scope is None or head.scope in format_head_scope)
+        )
+    )
+
+
+def _catalog_preflight(
+    connection: sqlite3.Connection,
+    control: _QueryControl,
+    heads: Sequence[tuple[str, int]],
+    terms: Sequence[ExactLookupTerm],
+    path_scope: tuple[str, ...] | None,
+) -> _CatalogPreflight:
+    valid_heads, missing_heads, shared_steps = _catalog_valid_heads(
+        connection,
+        control,
+        heads,
+    )
+    invalid_identifier_json = False
+    identifier_coverage_incomplete = False
+    if valid_heads and any(term.kind is ExactLookupKind.IDENTIFIER for term in terms):
+        invalid_identifier_json, identifier_probe_steps = (
+            _catalog_has_invalid_identifier_json(
+                connection,
+                control,
+                valid_heads,
+                path_scope,
+            )
+        )
+        identifier_coverage_incomplete, identifier_quality_steps = (
+            _catalog_identifier_coverage_incomplete(
+                connection,
+                control,
+                valid_heads,
+                path_scope,
+            )
+        )
+        shared_steps += identifier_probe_steps + identifier_quality_steps
+    return _CatalogPreflight(
+        valid_heads,
+        missing_heads,
+        shared_steps,
+        invalid_identifier_json,
+        identifier_coverage_incomplete,
+    )
+
+
+def _catalog_head_reports(
+    terms: Sequence[ExactLookupTerm],
+    status: ExactLookupStatus,
+    sqlite_steps: int,
+    reason: str,
+) -> list[ExactOwnerReport]:
+    return [
+        _report(
+            "catalog",
+            term,
+            status,
+            executed=True,
+            available=True,
+            sqlite_steps=sqlite_steps,
+            reason=reason,
+        )
+        for term in terms
+    ]
+
+
+def _decode_catalog_matches(
+    rows: Sequence[sqlite3.Row],
+    term: ExactLookupTerm,
+    control: _QueryControl,
+) -> tuple[list[ExactEvidenceMatch], int]:
+    matches: list[ExactEvidenceMatch] = []
+    invalid_rows = 0
+    for row in rows:
+        control.checkpoint()
+        try:
+            matches.append(_catalog_row_match(row, term, len(matches) + 1))
+        except (FileIdentityError, TypeError, ValueError):
+            invalid_rows += 1
+    return matches, invalid_rows
+
+
+def _catalog_match_quality_warnings(
+    matches: Sequence[ExactEvidenceMatch],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                warning
+                for match in matches
+                for warning in match.warnings
+                if warning.startswith("catalog_")
+            }
+        )
+    )
+
+
+def _catalog_term_reason(
+    term: ExactLookupTerm,
+    *,
+    was_truncated: bool,
+    missing_heads: int,
+    invalid_rows: int,
+    invalid_identifier_json: bool,
+    identifier_coverage_incomplete: bool,
+    quality_warnings: tuple[str, ...],
+    unicode_warnings: tuple[str, ...],
+) -> str | None:
+    if was_truncated:
+        return "exact_result_limit_reached"
+    if missing_heads:
+        return "catalog_snapshot_heads_partially_unavailable"
+    if invalid_rows:
+        return "catalog_identity_or_provenance_invalid"
+    if term.kind is ExactLookupKind.IDENTIFIER and invalid_identifier_json:
+        return "catalog_identifier_json_invalid"
+    if quality_warnings:
+        return quality_warnings[0]
+    if term.kind is ExactLookupKind.IDENTIFIER and identifier_coverage_incomplete:
+        return "catalog_identifier_coverage_incomplete"
+    if unicode_warnings:
+        return "unicode_casefold_not_provable"
+    return None
+
+
+def _catalog_report_warnings(
+    term: ExactLookupTerm,
+    identifier_coverage_incomplete: bool,
+    quality_warnings: tuple[str, ...],
+) -> tuple[str, ...]:
+    warnings: list[str] = []
+    if term.kind is ExactLookupKind.NAME:
+        warnings.append("catalog_has_no_basename_index")
+    if term.kind is ExactLookupKind.IDENTIFIER:
+        warnings.append("catalog_has_no_standard_identifier_index")
+        if identifier_coverage_incomplete:
+            warnings.append("catalog_identifier_coverage_incomplete")
+    warnings.extend(quality_warnings)
+    return tuple(warnings)
+
+
+def _catalog_term_result(
+    rows: Sequence[sqlite3.Row],
+    term: ExactLookupTerm,
+    control: _QueryControl,
+    per_term_limit: int,
+    query_steps: int,
+    query_truncated: bool,
+    shared_steps: int,
+    preflight: _CatalogPreflight,
+) -> tuple[tuple[ExactEvidenceMatch, ...], ExactOwnerReport]:
+    decoded, invalid_rows = _decode_catalog_matches(rows, term, control)
+    all_ranked = _rank_matches(decoded)
+    ranked = all_ranked[:per_term_limit]
+    known_omitted = max(0, len(all_ranked) - len(ranked))
+    was_truncated = query_truncated or known_omitted > 0
+    quality_warnings = _catalog_match_quality_warnings(ranked)
+    unicode_warnings = _non_ascii_case_warning(term)
+    identifier_json_invalid = (
+        term.kind is ExactLookupKind.IDENTIFIER and preflight.invalid_identifier_json
+    )
+    identifier_coverage_incomplete = (
+        term.kind is ExactLookupKind.IDENTIFIER
+        and preflight.identifier_coverage_incomplete
+    )
+    incomplete = bool(
+        preflight.missing_heads
+        or invalid_rows
+        or was_truncated
+        or identifier_json_invalid
+        or identifier_coverage_incomplete
+        or quality_warnings
+        or unicode_warnings
+    )
+    reason = _catalog_term_reason(
+        term,
+        was_truncated=was_truncated,
+        missing_heads=preflight.missing_heads,
+        invalid_rows=invalid_rows,
+        invalid_identifier_json=preflight.invalid_identifier_json,
+        identifier_coverage_incomplete=preflight.identifier_coverage_incomplete,
+        quality_warnings=quality_warnings,
+        unicode_warnings=unicode_warnings,
+    )
+    report = _report(
+        "catalog",
+        term,
+        ExactLookupStatus.PARTIAL if incomplete else ExactLookupStatus.COMPLETE,
+        executed=True,
+        available=True,
+        returned=len(ranked),
+        rows_observed=len(rows),
+        sqlite_steps=query_steps + shared_steps,
+        truncated=was_truncated,
+        omitted_matches=known_omitted,
+        reason=reason,
+        warnings=_catalog_report_warnings(
+            term,
+            preflight.identifier_coverage_incomplete,
+            quality_warnings,
+        ),
+    )
+    return ranked, report
+
+
+def _lookup_catalog_terms(
+    connection: sqlite3.Connection,
+    terms: Sequence[ExactLookupTerm],
+    control: _QueryControl,
+    per_term_limit: int,
+    source_scope: tuple[str, ...] | None,
+    path_scope: tuple[str, ...] | None,
+    preflight: _CatalogPreflight,
+    matches: list[ExactEvidenceMatch],
+    reports: list[ExactOwnerReport],
+) -> None:
+    if not preflight.valid_heads:
+        reports.extend(
+            _catalog_head_reports(
+                terms,
+                ExactLookupStatus.PARTIAL,
+                preflight.shared_steps,
+                "catalog_snapshot_heads_unavailable",
+            )
+        )
+        return
+    shared_steps = preflight.shared_steps
+    for term in terms:
+        try:
+            rows, query_steps, query_truncated = _catalog_term_rows(
+                connection,
+                control,
+                preflight.valid_heads,
+                term,
+                per_term_limit + 1,
+                source_scope,
+                path_scope,
+            )
+        except _WorkBudgetExceeded:
+            reports.append(
+                _report(
+                    "catalog",
+                    term,
+                    ExactLookupStatus.PARTIAL,
+                    executed=True,
+                    available=True,
+                    truncated=True,
+                    reason="exact_work_budget_exhausted",
+                )
+            )
+            continue
+        ranked, report = _catalog_term_result(
+            rows,
+            term,
+            control,
+            per_term_limit,
+            query_steps,
+            query_truncated,
+            shared_steps,
+            preflight,
+        )
+        matches.extend(ranked)
+        reports.append(report)
+        shared_steps = 0
+
+
+def _catalog_failure_reports(
+    terms: Sequence[ExactLookupTerm],
+    completed_reports: int,
+    exc: BaseException,
+) -> list[ExactOwnerReport]:
+    exhausted = isinstance(exc, _WorkBudgetExceeded)
+    reason = (
+        "exact_work_budget_exhausted"
+        if exhausted
+        else f"owner_read_failed:{type(exc).__name__}"
+    )
+    return [
+        _report(
+            "catalog",
+            term,
+            ExactLookupStatus.PARTIAL,
+            executed=True,
+            available=True,
+            truncated=exhausted,
+            reason=reason,
+        )
+        for term in terms[completed_reports:]
+    ]
+
+
 def _lookup_catalog(
     path: Path,
     owner: OwnerSnapshot,
@@ -2300,219 +2611,52 @@ def _lookup_catalog(
 ) -> tuple[list[ExactEvidenceMatch], list[ExactOwnerReport]]:
     matches: list[ExactEvidenceMatch] = []
     reports: list[ExactOwnerReport] = []
-    format_head_scope = _catalog_head_sources_for_path_scope(path_scope)
-    heads = tuple(
-        sorted(
-            (head.scope, head.generation)
-            for head in owner.publications
-            if (source_scope is None or head.scope in source_scope)
-            and (format_head_scope is None or head.scope in format_head_scope)
-        )
-    )
+    heads = _catalog_snapshot_heads(owner, source_scope, path_scope)
     try:
         connection = connect_document_catalog(path, readonly=True)
         try:
             connection.execute("BEGIN")
-            valid_heads, missing_heads, preflight_steps = _catalog_valid_heads(
+            preflight = _catalog_preflight(
                 connection,
                 control,
                 heads,
+                terms,
+                path_scope,
             )
-            invalid_identifier_json = False
-            identifier_probe_steps = 0
-            identifier_coverage_incomplete = False
-            identifier_quality_steps = 0
-            if (
-                any(term.kind is ExactLookupKind.IDENTIFIER for term in terms)
-                and valid_heads
-            ):
-                invalid_identifier_json, identifier_probe_steps = (
-                    _catalog_has_invalid_identifier_json(
-                        connection,
-                        control,
-                        valid_heads,
-                        path_scope,
-                    )
-                )
-                identifier_coverage_incomplete, identifier_quality_steps = (
-                    _catalog_identifier_coverage_incomplete(
-                        connection,
-                        control,
-                        valid_heads,
-                        path_scope,
-                    )
-                )
             if not heads:
-                for term in terms:
-                    reports.append(
-                        _report(
-                            "catalog",
-                            term,
-                            ExactLookupStatus.COMPLETE,
-                            executed=True,
-                            available=True,
-                            sqlite_steps=preflight_steps,
-                            reason="catalog_snapshot_has_no_heads",
-                        )
-                    )
-                connection.execute("ROLLBACK")
-                return matches, reports
-            for term in terms:
-                if not valid_heads:
-                    reports.append(
-                        _report(
-                            "catalog",
-                            term,
-                            ExactLookupStatus.PARTIAL,
-                            executed=True,
-                            available=True,
-                            sqlite_steps=preflight_steps,
-                            reason="catalog_snapshot_heads_unavailable",
-                        )
-                    )
-                    continue
-                try:
-                    rows, steps, truncated = _catalog_term_rows(
-                        connection,
-                        control,
-                        valid_heads,
-                        term,
-                        per_term_limit + 1,
-                        source_scope,
-                        path_scope,
-                    )
-                except _WorkBudgetExceeded:
-                    reports.append(
-                        _report(
-                            "catalog",
-                            term,
-                            ExactLookupStatus.PARTIAL,
-                            executed=True,
-                            available=True,
-                            truncated=True,
-                            reason="exact_work_budget_exhausted",
-                        )
-                    )
-                    continue
-                invalid_rows = 0
-                term_matches: list[ExactEvidenceMatch] = []
-                for row in rows:
-                    control.checkpoint()
-                    try:
-                        term_matches.append(
-                            _catalog_row_match(row, term, len(term_matches) + 1)
-                        )
-                    except (FileIdentityError, TypeError, ValueError):
-                        invalid_rows += 1
-                all_ranked = _rank_matches(term_matches)
-                ranked = all_ranked[:per_term_limit]
-                known_omitted = max(0, len(all_ranked) - len(ranked))
-                matches.extend(ranked)
-                was_truncated = truncated or known_omitted > 0
-                quality_warnings = tuple(
-                    sorted(
-                        {
-                            warning
-                            for match in ranked
-                            for warning in match.warnings
-                            if warning.startswith("catalog_")
-                        }
+                reports.extend(
+                    _catalog_head_reports(
+                        terms,
+                        ExactLookupStatus.COMPLETE,
+                        preflight.shared_steps,
+                        "catalog_snapshot_has_no_heads",
                     )
                 )
-                incomplete = bool(
-                    missing_heads
-                    or invalid_rows
-                    or was_truncated
-                    or (
-                        term.kind is ExactLookupKind.IDENTIFIER
-                        and invalid_identifier_json
-                    )
-                    or (
-                        term.kind is ExactLookupKind.IDENTIFIER
-                        and identifier_coverage_incomplete
-                    )
-                    or quality_warnings
-                    or _non_ascii_case_warning(term)
+            else:
+                _lookup_catalog_terms(
+                    connection,
+                    terms,
+                    control,
+                    per_term_limit,
+                    source_scope,
+                    path_scope,
+                    preflight,
+                    matches,
+                    reports,
                 )
-                reason: str | None = None
-                if was_truncated:
-                    reason = "exact_result_limit_reached"
-                elif missing_heads:
-                    reason = "catalog_snapshot_heads_partially_unavailable"
-                elif invalid_rows:
-                    reason = "catalog_identity_or_provenance_invalid"
-                elif (
-                    term.kind is ExactLookupKind.IDENTIFIER and invalid_identifier_json
-                ):
-                    reason = "catalog_identifier_json_invalid"
-                elif quality_warnings:
-                    reason = quality_warnings[0]
-                elif (
-                    term.kind is ExactLookupKind.IDENTIFIER
-                    and identifier_coverage_incomplete
-                ):
-                    reason = "catalog_identifier_coverage_incomplete"
-                elif _non_ascii_case_warning(term):
-                    reason = "unicode_casefold_not_provable"
-                warnings: list[str] = []
-                if term.kind is ExactLookupKind.NAME:
-                    warnings.append("catalog_has_no_basename_index")
-                if term.kind is ExactLookupKind.IDENTIFIER:
-                    warnings.append("catalog_has_no_standard_identifier_index")
-                    if identifier_coverage_incomplete:
-                        warnings.append("catalog_identifier_coverage_incomplete")
-                warnings.extend(quality_warnings)
-                reports.append(
-                    _report(
-                        "catalog",
-                        term,
-                        (
-                            ExactLookupStatus.PARTIAL
-                            if incomplete
-                            else ExactLookupStatus.COMPLETE
-                        ),
-                        executed=True,
-                        available=True,
-                        returned=len(ranked),
-                        rows_observed=len(rows),
-                        sqlite_steps=(
-                            steps
-                            + preflight_steps
-                            + identifier_probe_steps
-                            + identifier_quality_steps
-                        ),
-                        truncated=was_truncated,
-                        omitted_matches=known_omitted,
-                        reason=reason,
-                        warnings=tuple(warnings),
-                    )
-                )
-                preflight_steps = 0
-                identifier_probe_steps = 0
-                identifier_quality_steps = 0
             connection.execute("ROLLBACK")
         finally:
             connection.close()
     except (sqlite3.Error, RuntimeError, OSError) as exc:
         if control.cancellation_failure is exc:
             raise
-        failure_reason = (
-            "exact_work_budget_exhausted"
-            if isinstance(exc, _WorkBudgetExceeded)
-            else f"owner_read_failed:{type(exc).__name__}"
-        )
-        for term in terms[len(reports) :]:
-            reports.append(
-                _report(
-                    "catalog",
-                    term,
-                    ExactLookupStatus.PARTIAL,
-                    executed=True,
-                    available=True,
-                    truncated=isinstance(exc, _WorkBudgetExceeded),
-                    reason=failure_reason,
-                )
+        reports.extend(
+            _catalog_failure_reports(
+                terms,
+                len(reports),
+                exc,
             )
+        )
     return matches, reports
 
 

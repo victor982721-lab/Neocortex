@@ -258,6 +258,19 @@ orden e IDs estables. La primera recomendación `act_now` queda ahora en
 `knowledge_exact._lookup_catalog`; Publication Diff v1 fue suficiente para esta
 decisión y no justifica todavía ampliar su contrato.
 
+rc19 aplica esa recomendación: `_lookup_catalog` pasa de 225 líneas/complejidad
+44 a un wrapper de 58/5. Preflight generacional, decodificación, ordenamiento,
+cobertura y reportes quedan separados; una regresión multitérmino fija orden,
+límites, provenance y ausencia de escritura de contenido SQLite. El primer
+candidato rc19 se rechazó porque la propia regresión apareció como hotspot; al
+dividir sus verificaciones, el diff final rc18→rc19 reduce los hotspots de 182 a
+181, retira sólo `_lookup_catalog`, no añade otro y conserva cero resoluciones
+nuevas, corregidas o perdidas sobre 58 451 calls comunes. El replay desde el
+wheel instalado obtuvo 515/515 cache hits y cero trabajo de lectura, análisis,
+persistencia o grafo. La primera recomendación pasa a
+`document_taxonomy.classify_document`; Publication Diff v1 vuelve a ser
+suficiente para decidir.
+
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible
 puede leerse como `freshness=publication_only`, `current=false` y limitación

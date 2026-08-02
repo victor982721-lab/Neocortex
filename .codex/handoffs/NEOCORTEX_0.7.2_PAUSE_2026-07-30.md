@@ -56,6 +56,14 @@ separadas sin cambiar orden, IDs estables ni rechazo atómico de evidencia
 inconsistente. El diff rc17→rc18 retira sólo ese hotspot, añade cero y conserva
 cero resoluciones nuevas, corregidas o perdidas.
 
+El corte rc19 cierra `knowledge_exact._lookup_catalog`. El wrapper pasa de 225
+líneas/complejidad 44 a 58/5; preflight generacional, decodificación, cobertura,
+razones y warnings quedan en fases acotadas sin cambiar firma, ranking, límites,
+provenance ni lectura estricta. Un primer candidato se rechazó porque la nueva
+regresión apareció como hotspot; la partición final retira sólo el objetivo,
+añade cero y conserva cero resoluciones nuevas, corregidas o perdidas. La primera
+recomendación `act_now` pasa a `document_taxonomy.classify_document`.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -71,11 +79,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
 - Base publicada al iniciar este corte: `main` en
-  `6cd127984acbeeb8a88905ea308295913df5cf53`, idéntico a `origin/main` tras
-  fusionar el PR #7.
-- El checkout fuente es `0.7.2`. El cierre del hotspot Knowledge context se
-  rastrea en el PR #8; su implementación base es
-  `aef3513e799f156b3bb49192bce2f024b3d7e997`. La igualdad final entre `main` y
+  `a61567df91cd7bd6cb4e30a47bb519804a27dd72`, idéntico a `origin/main` tras
+  fusionar el PR #9.
+- El checkout fuente es `0.7.2`. El cierre rc19 se prepara en la rama
+  `codex/neocortex-knowledge-exact-hotspot`; la igualdad final entre `main` y
   `origin/main` se verifica después del merge porque el commit no puede
   autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
@@ -236,6 +243,23 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc19` — cierre de hotspot Knowledge Exact
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc19-knowledge-exact\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `22A300CF3B6EBF9E725B4D50AAF67BAB7EA9E15453D4172D070DAB71C4B263A0`;
+- 1 331 901 bytes, 271 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e import de `knowledge_exact.py`
+  confirmado desde el `site-packages` del venv rc19;
+- fuente e instalación comparten SHA-256
+  `8B601F9C499FB08734D396F126713089E15C62C6438931C650E0710B788D3743`;
+  `_lookup_catalog` ocupa 58 líneas y complejidad 5 en la publicación final;
+- el launcher instalado reprodujo 515/515 cache hits con cero lectura,
+  análisis, persistencia o grafo, y reprodujo review/diff sin cambiar ninguna
+  SQLite ni crear sidecars. Este runtime no se promovió al launcher estable.
 
 ### Candidato focal `rc18` — cierre de hotspot Knowledge context
 
@@ -509,6 +533,28 @@ Publicación del refactor Knowledge context rc18:
   de review `30675d2f4c06ec708900f7436bba77e5`; su diff contra rc18 encontró 58 969
   calls y 182 hotspots comunes, cero exclusivos y cero evidencia cambiada.
 
+Publicación del refactor Knowledge Exact rc19:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc19-knowledge-exact-state`.
+
+- piloto con límite explícito: 525 archivos, 46 directorios excluidos, 515
+  candidatos, 8 957 488 bytes, 14 868 símbolos, 81 340 referencias, 196
+  diagnósticos, un proyecto y cero errores/acciones; el run Code permaneció
+  `partial` por contrato;
+- la finalización reutilizó 515/515 entradas. Después de fijar la regresión que
+  el primer diff señaló como hotspot, una actualización procesó sólo ese archivo
+  y conservó 514 hits; el replay desde el wheel rc19 repitió 515/515 cache hits,
+  cero bytes y cero ms de lectura, análisis, persistencia y grafo;
+- review de 50 findings: digest
+  `588782e9ec4693947c99891b2a023f17`; `_lookup_catalog` desaparece y la primera
+  recomendación pasa a `document_taxonomy.classify_document`;
+- diff rc18→rc19, digest `56a5c40d4ace5953e02d53bbdac1743c`:
+  hotspots 182→181, 181 comunes, cero añadidos/cambiados y sólo el objetivo
+  retirado; 58 451 calls comunes, 40 151 aún no resueltas, 18 300 resueltas sin
+  cambio y cero resoluciones nuevas, corregidas o perdidas;
+- status/review/diff mediante el launcher rc19 conservaron idénticos todos los
+  SHA-256 SQLite y dejaron cero sidecars. `current=false` sigue siendo la
+  limitación explícita esperada de `journal_status=unavailable`.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -664,6 +710,11 @@ ausentes y su candidate limit, no evidencia inventada.
   sólo los dos límites estructurales preexistentes de 907/910 líneas frente a
   900 en archivos no modificados. Ruff/format, `git diff --check` y Mypy limpios;
   wheel rc18, procedencia, replay, hashes y sidecars verificados.
+- Refactor Knowledge Exact: línea base `61 passed`, regresión contractual sobre
+  rc18 `1 passed`, barrera focal final `62 passed` y barrera Knowledge/CLI amplia
+  `804 passed`, `2 deselected` por los mismos límites preexistentes de 907/910
+  líneas. Ruff/format, `git diff --check` y Mypy limpios; wheel rc19,
+  procedencia, replay, hashes y sidecars verificados.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -686,21 +737,20 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Caracterizar y cerrar la siguiente recomendación `act_now`.** Continuar con
-   `knowledge_exact._lookup_catalog`. Antes de partirla, fijar consultas
-   representativas de catálogo, orden/límites, provenance, lectura estricta y
-   abstención; conservar su firma y un único caller de producción.
-2. **Demostrar la mejora con rc19.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc18; exigir retirar el hotspot objetivo sin
+1. **Caracterizar el classifier recomendado.** Evaluar
+   `document_taxonomy.classify_document` contra fixtures representativos de
+   código/estructura, documento técnico y caso ambiguo; fijar orden, evidencia,
+   confianza, incertidumbre y abstención antes de tocar su partición.
+2. **Demostrar la mejora con rc20.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc19; exigir retirar el hotspot objetivo sin
    añadir otro, cero pérdidas/correcciones de resolución y replay 100 % cache
    hit.
-3. **No ampliar Publication Diff todavía.** v1 respondió la decisión rc18 con
-   identidad del hotspot, añadidos/retirados, evidencia y resolución. Evolucionar
-   a v2 o añadir vistas por módulo sólo cuando una comparación real no permita
-   decidir.
-4. **Caracterizar el classifier siguiente.** Después de Exact, evaluar
-   `document_taxonomy.classify_document` contra fixture representativo con
-   abstención e incertidumbre antes de tocar su partición.
+3. **Caracterizar el segundo retrieval recomendado.** Después del classifier,
+   evaluar `knowledge_exact.lookup_exact` preservando orden de owners/términos,
+   presupuesto global, cobertura y API pública antes de decidir si se parte.
+4. **No ampliar Publication Diff todavía.** v1 respondió también la decisión
+   rc19 con identidad del hotspot, añadidos/retirados, evidencia y resolución.
+   Evolucionar sólo cuando una comparación real no permita decidir.
 5. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
    callbacks, registries y contratos que ya explican los 37 falsos positivos;
    repetir la misma muestra y mantener la señal suprimida hasta pasar el gate.

@@ -67,6 +67,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   acumulación y materialización sin cambiar orden, IDs estables ni rechazo
   atómico de evidencia inconsistente. El autoanálisis rc18 retira sólo ese
   hotspot, añade cero y conserva cero resoluciones corregidas o perdidas.
+- Partición contractual de `knowledge_exact._lookup_catalog`: el wrapper baja
+  de 225 líneas/complejidad 44 a 58/5 y delega preflight generacional,
+  decodificación, cobertura y reportes sin cambiar firma, ranking, límites,
+  provenance ni lectura estricta. El autoanálisis rc19 retira sólo el hotspot
+  objetivo, no añade otro y conserva cero resoluciones corregidas o perdidas.
 - Fixture reproducible de actionability para el primer top 10, con labels
   provisionales `actionable`/`defer`, score recalculado y `Precision@10`
   explícitamente no humana antes de modificar pesos o añadir detectores.
