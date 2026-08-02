@@ -128,6 +128,10 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   `candidate_limit` y no permite que otro ranking del mismo canal sustituya una
   evidencia requerida. Un ranking exacto truncado o requerido ausente fuerza
   completitud parcial y warnings deterministas.
+- `execute_knowledge_search` separa su orquestación en fases privadas acotadas
+  sin cambiar firma, seams, orden de owners, reloj, cancelación, warnings ni
+  resultado. El método público baja de 416 a 26 líneas y el autoanálisis retira
+  su hotspot sin introducir otro.
 - Los hotspots de Semantic Plan, Knowledge Planner, Knowledge Search y contratos
   Knowledge se dividieron en módulos con DAG unidireccional; las dataclasses,
   firmas públicas, `__module__`, pickle, JSON, IDs y excepciones permanecen en

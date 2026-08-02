@@ -11,7 +11,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import semantic_service
@@ -830,17 +830,55 @@ def _required_direct_ranking_names(plan: KnowledgePlan) -> frozenset[str]:
     )
 
 
-def execute_knowledge_search(
+@dataclass(slots=True)
+class _SearchExecution:
+    paths: KnowledgeStatePaths
+    plan: KnowledgePlan
+    snapshot: KnowledgeSnapshot
+    cancellation_check: Callable[[], None] | None
+    clock_contract: KnowledgeTelemetryClock
+    started_ns: int
+    rankings: dict[str, tuple[KnowledgeCandidate, ...]] = field(default_factory=dict)
+    discovery_signals: tuple[ResourceDiscoverySignal, ...] = ()
+    reports: list[RankingExecution] = field(default_factory=list)
+    phase_timings: list[KnowledgePhaseTiming] = field(default_factory=list)
+    exact_omitted: int = 0
+    exact_truncated: bool = False
+
+    @property
+    def clock(self) -> Callable[[], int]:
+        return self.clock_contract.now_ns
+
+    def check_cancelled(self) -> None:
+        if self.cancellation_check is not None:
+            self.cancellation_check()
+
+    def add_reports(self, values: Sequence[RankingExecution]) -> None:
+        self.reports.extend(values)
+        for report in values:
+            if report.owner is None or report.elapsed_ns is None:
+                continue
+            self.phase_timings.append(
+                KnowledgePhaseTiming(
+                    KnowledgeTimingPhase.OWNER_RANKING,
+                    report.elapsed_ns,
+                    service_attempt=1,
+                    owner=report.owner,
+                    ranking_names=(report.name,),
+                    executed=report.executed,
+                )
+            )
+
+
+def _new_search_execution(
     paths: KnowledgeStatePaths,
     plan: KnowledgePlan,
     snapshot: KnowledgeSnapshot,
     *,
-    cancellation_check: Callable[[], None] | None = None,
-    clock_ns: Callable[[], int] | None = None,
-    telemetry_clock: KnowledgeTelemetryClock | None = None,
-) -> KnowledgeSearchResult:
-    """Execute one already-snapshotted, read-only, bounded retrieval plan."""
-
+    cancellation_check: Callable[[], None] | None,
+    clock_ns: Callable[[], int] | None,
+    telemetry_clock: KnowledgeTelemetryClock | None,
+) -> _SearchExecution:
     if telemetry_clock is not None and not isinstance(
         telemetry_clock,
         KnowledgeTelemetryClock,
@@ -853,55 +891,38 @@ def execute_knowledge_search(
         if telemetry_clock is not None
         else KnowledgeTelemetryClock.from_legacy(clock_ns)
     )
-    clock = clock_contract.now_ns
-    started_ns = clock()
-    rankings: dict[str, tuple[KnowledgeCandidate, ...]] = {}
-    discovery_signals: tuple[ResourceDiscoverySignal, ...] = ()
-    reports: list[RankingExecution] = []
-    phase_timings: list[KnowledgePhaseTiming] = []
+    return _SearchExecution(
+        paths,
+        plan,
+        snapshot,
+        cancellation_check,
+        clock_contract,
+        clock_contract.now_ns(),
+    )
 
-    def check_cancelled() -> None:
-        if cancellation_check is not None:
-            cancellation_check()
 
-    def record_report_timings(values: Sequence[RankingExecution]) -> None:
-        for report in values:
-            if report.owner is None or report.elapsed_ns is None:
-                continue
-            phase_timings.append(
-                KnowledgePhaseTiming(
-                    KnowledgeTimingPhase.OWNER_RANKING,
-                    report.elapsed_ns,
-                    service_attempt=1,
-                    owner=report.owner,
-                    ranking_names=(report.name,),
-                    executed=report.executed,
-                )
-            )
-
-    check_cancelled()
-    lexical_cancellation = SQLiteCancellationBridge(cancellation_check)
+def _run_lexical_phase(execution: _SearchExecution) -> None:
+    execution.check_cancelled()
+    cancellation = SQLiteCancellationBridge(execution.cancellation_check)
     try:
-        lexical, lexical_reports = _lexical_rankings(
-            paths,
-            plan,
-            snapshot,
+        rankings, reports = _lexical_rankings(
+            execution.paths,
+            execution.plan,
+            execution.snapshot,
             cancellation_check=(
-                lexical_cancellation.checkpoint
-                if lexical_cancellation.enabled
-                else None
+                cancellation.checkpoint if cancellation.enabled else None
             ),
-            clock_ns=clock,
+            clock_ns=execution.clock,
         )
     except ValueError as exc:
-        _reraise_captured_cancellation(lexical_cancellation, exc)
-        lexical = {}
-        lexical_reports = [
+        _reraise_captured_cancellation(cancellation, exc)
+        rankings = {}
+        reports = [
             RankingExecution(
                 f"fts_{owner}",
                 "lexical",
                 False,
-                _owner_available(snapshot, owner),
+                _owner_available(execution.snapshot, owner),
                 False,
                 0,
                 reason=f"query_unsupported_by_fts:{type(exc).__name__}",
@@ -909,134 +930,130 @@ def execute_knowledge_search(
             )
             for owner in _LEXICAL_OWNER_FORMATS
         ]
-    rankings.update(lexical)
-    reports.extend(lexical_reports)
-    record_report_timings(lexical_reports)
+    execution.rankings.update(rankings)
+    execution.add_reports(reports)
 
-    check_cancelled()
-    if _planned(plan, "semantic"):
-        semantic_cancellation = SQLiteCancellationBridge(cancellation_check)
-        try:
-            semantic_result = _semantic_rankings(
-                paths,
-                plan,
-                snapshot,
-                (
-                    semantic_cancellation.checkpoint
-                    if semantic_cancellation.enabled
-                    else None
-                ),
-                clock_ns=clock,
-            )
-            if len(semantic_result) == 2:  # compatibility for injected v2 seams
-                semantic, semantic_reports = semantic_result
-            else:
-                semantic, discovery_signals, semantic_reports = semantic_result
-        except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
-            _reraise_captured_cancellation(semantic_cancellation, exc)
-            semantic = {}
-            discovery_signals = ()
-            failed_steps = (
-                *_planned_steps(plan, "semantic"),
-                *_planned_steps(plan, "semantic_discovery"),
-            )
-            semantic_reports = [
-                RankingExecution(
-                    step.ranking_name,
-                    step.channel,
-                    True,
-                    False,
-                    False,
-                    0,
-                    reason=f"owner_read_failed:{type(exc).__name__}",
-                    owner="semantic",
-                )
-                for step in failed_steps
-            ]
-        rankings.update(semantic)
-        reports.extend(semantic_reports)
-        record_report_timings(semantic_reports)
 
-    exact_omitted = 0
-    exact_truncated = False
-    check_cancelled()
-    if _planned(plan, "exact"):
-        exact_result = _exact_rankings(
-            paths,
-            plan,
-            snapshot,
-            cancellation_check=cancellation_check,
-            clock_ns=clock,
+def _run_semantic_phase(execution: _SearchExecution) -> None:
+    execution.check_cancelled()
+    if not _planned(execution.plan, "semantic"):
+        return
+    cancellation = SQLiteCancellationBridge(execution.cancellation_check)
+    try:
+        result = _semantic_rankings(
+            execution.paths,
+            execution.plan,
+            execution.snapshot,
+            cancellation.checkpoint if cancellation.enabled else None,
+            clock_ns=execution.clock,
         )
-        if len(exact_result) == 4:
-            (
-                exact_rankings,
-                exact_reports,
-                exact_omitted,
-                exact_truncated,
-            ) = exact_result
-            exact_owner_timings: tuple[ExactOwnerTiming, ...] = ()
+        if len(result) == 2:  # compatibility for injected v2 seams
+            rankings, reports = result
         else:
-            (
-                exact_rankings,
-                exact_reports,
-                exact_omitted,
-                exact_truncated,
-                exact_owner_timings,
-            ) = exact_result
-        rankings.update(exact_rankings)
-        reports.extend(exact_reports)
-        phase_timings.extend(
-            KnowledgePhaseTiming(
-                KnowledgeTimingPhase.OWNER_RANKING,
-                timing.duration_ns,
-                service_attempt=1,
-                owner=timing.owner,
-                ranking_names=timing.ranking_names,
-                executed=timing.executed,
+            rankings, discovery_signals, reports = result
+            execution.discovery_signals = discovery_signals
+    except (OSError, RuntimeError, sqlite3.Error, ValueError) as exc:
+        _reraise_captured_cancellation(cancellation, exc)
+        rankings = {}
+        execution.discovery_signals = ()
+        failed_steps = (
+            *_planned_steps(execution.plan, "semantic"),
+            *_planned_steps(execution.plan, "semantic_discovery"),
+        )
+        reports = [
+            RankingExecution(
+                step.ranking_name,
+                step.channel,
+                True,
+                False,
+                False,
+                0,
+                reason=f"owner_read_failed:{type(exc).__name__}",
+                owner="semantic",
             )
-            for timing in exact_owner_timings
-        )
+            for step in failed_steps
+        ]
+    execution.rankings.update(rankings)
+    execution.add_reports(reports)
 
-    check_cancelled()
-    if _planned(plan, "structural_code"):
-        ranking_started_ns = clock()
-        code, code_report = _code_ranking(
-            paths,
-            plan,
-            snapshot,
-            cancellation_check=cancellation_check,
+
+def _run_exact_phase(execution: _SearchExecution) -> None:
+    execution.check_cancelled()
+    if not _planned(execution.plan, "exact"):
+        return
+    result = _exact_rankings(
+        execution.paths,
+        execution.plan,
+        execution.snapshot,
+        cancellation_check=execution.cancellation_check,
+        clock_ns=execution.clock,
+    )
+    if len(result) == 4:
+        rankings, reports, execution.exact_omitted, execution.exact_truncated = result
+        owner_timings: tuple[ExactOwnerTiming, ...] = ()
+    else:
+        (
+            rankings,
+            reports,
+            execution.exact_omitted,
+            execution.exact_truncated,
+            owner_timings,
+        ) = result
+    execution.rankings.update(rankings)
+    execution.reports.extend(reports)
+    execution.phase_timings.extend(
+        KnowledgePhaseTiming(
+            KnowledgeTimingPhase.OWNER_RANKING,
+            timing.duration_ns,
+            service_attempt=1,
+            owner=timing.owner,
+            ranking_names=timing.ranking_names,
+            executed=timing.executed,
         )
-        code_report = replace(
-            code_report,
+        for timing in owner_timings
+    )
+
+
+def _run_direct_phases(execution: _SearchExecution) -> None:
+    execution.check_cancelled()
+    if _planned(execution.plan, "structural_code"):
+        ranking_started_ns = execution.clock()
+        values, report = _code_ranking(
+            execution.paths,
+            execution.plan,
+            execution.snapshot,
+            cancellation_check=execution.cancellation_check,
+        )
+        report = replace(
+            report,
             owner="code",
-            elapsed_ns=_duration_ns(clock, ranking_started_ns),
+            elapsed_ns=_duration_ns(execution.clock, ranking_started_ns),
         )
-        if code:
-            rankings[code_report.name] = code
-        reports.append(code_report)
-        record_report_timings((code_report,))
-    check_cancelled()
-    if _planned(plan, "catalog"):
-        ranking_started_ns = clock()
-        catalog, catalog_report = _catalog_ranking(
-            paths,
-            plan,
-            snapshot,
-            cancellation_check=cancellation_check,
+        if values:
+            execution.rankings[report.name] = values
+        execution.add_reports((report,))
+
+    execution.check_cancelled()
+    if _planned(execution.plan, "catalog"):
+        ranking_started_ns = execution.clock()
+        values, report = _catalog_ranking(
+            execution.paths,
+            execution.plan,
+            execution.snapshot,
+            cancellation_check=execution.cancellation_check,
         )
-        catalog_report = replace(
-            catalog_report,
+        report = replace(
+            report,
             owner="catalog",
-            elapsed_ns=_duration_ns(clock, ranking_started_ns),
+            elapsed_ns=_duration_ns(execution.clock, ranking_started_ns),
         )
-        if catalog:
-            rankings[catalog_report.name] = catalog
-        reports.append(catalog_report)
-        record_report_timings((catalog_report,))
-    check_cancelled()
-    if _planned(plan, "relational"):
-        reports.append(
+        if values:
+            execution.rankings[report.name] = values
+        execution.add_reports((report,))
+
+    execution.check_cancelled()
+    if _planned(execution.plan, "relational"):
+        execution.reports.append(
             RankingExecution(
                 "verified_relations",
                 "relational",
@@ -1047,9 +1064,10 @@ def execute_knowledge_search(
                 reason="cross-owner graph is not available in phase 1",
             )
         )
-    check_cancelled()
-    if _planned(plan, "temporal"):
-        reports.append(
+
+    execution.check_cancelled()
+    if _planned(execution.plan, "temporal"):
+        execution.reports.append(
             RankingExecution(
                 "published_history",
                 "temporal",
@@ -1061,16 +1079,20 @@ def execute_knowledge_search(
             )
         )
 
-    check_cancelled()
-    counts_before_filters = {name: len(values) for name, values in rankings.items()}
-    rankings = _apply_plan_filters(rankings, plan)
+
+def _filter_and_apply_inventory(execution: _SearchExecution) -> RankingExecution:
+    execution.check_cancelled()
+    counts_before_filters = {
+        name: len(values) for name, values in execution.rankings.items()
+    }
+    execution.rankings = _apply_plan_filters(execution.rankings, execution.plan)
     postfiltered_names = {
         name
         for name, count in counts_before_filters.items()
-        if len(rankings.get(name, ())) < count
+        if len(execution.rankings.get(name, ())) < count
     }
     if postfiltered_names:
-        reports = [
+        execution.reports = [
             replace(
                 report,
                 complete=False,
@@ -1078,174 +1100,279 @@ def execute_knowledge_search(
             )
             if report.name in postfiltered_names
             else report
-            for report in reports
+            for report in execution.reports
         ]
     # Catalog candidates are a membership/filter surface. Exact relevance is
     # supplied by the typed exact adapter and metadata must never become an
     # independent query-relevance signal.
-    rankings.pop("catalog_metadata", None)
-    check_cancelled()
-    ranking_started_ns = clock()
-    rankings, duplicate_report = _apply_inventory_dispositions(
-        paths,
-        snapshot,
-        rankings,
-        cancellation_check=cancellation_check,
+    execution.rankings.pop("catalog_metadata", None)
+
+    execution.check_cancelled()
+    ranking_started_ns = execution.clock()
+    execution.rankings, report = _apply_inventory_dispositions(
+        execution.paths,
+        execution.snapshot,
+        execution.rankings,
+        cancellation_check=execution.cancellation_check,
     )
-    duplicate_report = replace(
-        duplicate_report,
+    report = replace(
+        report,
         owner="inventory",
-        elapsed_ns=_duration_ns(clock, ranking_started_ns),
+        elapsed_ns=_duration_ns(execution.clock, ranking_started_ns),
     )
-    reports.append(duplicate_report)
-    record_report_timings((duplicate_report,))
-    check_cancelled()
-    fusion_started_ns = clock()
-    if discovery_signals:
+    execution.add_reports((report,))
+    execution.check_cancelled()
+    return report
+
+
+def _fuse_search_rankings(
+    execution: _SearchExecution,
+) -> tuple[tuple[KnowledgeHit, ...], int]:
+    fusion_started_ns = execution.clock()
+    if execution.discovery_signals:
         hits, omitted = fuse_evidence_rankings(
-            rankings,
-            discovery_signals=discovery_signals,
-            limit=plan.limit,
-            max_per_resource=plan.max_per_resource,
-            min_section_distance=plan.min_section_distance,
-            include_history=plan.include_history,
-            cancellation_check=cancellation_check,
+            execution.rankings,
+            discovery_signals=execution.discovery_signals,
+            limit=execution.plan.limit,
+            max_per_resource=execution.plan.max_per_resource,
+            min_section_distance=execution.plan.min_section_distance,
+            include_history=execution.plan.include_history,
+            cancellation_check=execution.cancellation_check,
         )
     else:
         hits, omitted = fuse_evidence_rankings(
-            rankings,
-            limit=plan.limit,
-            max_per_resource=plan.max_per_resource,
-            min_section_distance=plan.min_section_distance,
-            include_history=plan.include_history,
-            cancellation_check=cancellation_check,
+            execution.rankings,
+            limit=execution.plan.limit,
+            max_per_resource=execution.plan.max_per_resource,
+            min_section_distance=execution.plan.min_section_distance,
+            include_history=execution.plan.include_history,
+            cancellation_check=execution.cancellation_check,
         )
-    phase_timings.append(
+    execution.phase_timings.append(
         KnowledgePhaseTiming(
             KnowledgeTimingPhase.FUSION,
-            _duration_ns(clock, fusion_started_ns),
+            _duration_ns(execution.clock, fusion_started_ns),
             service_attempt=1,
         )
     )
-    omitted += exact_omitted
-    check_cancelled()
-    required_channels = {step.channel for step in plan.steps if step.required}
-    required_lexical = _required_lexical_ranking_names(plan)
-    required_semantic = _required_semantic_ranking_names(plan)
-    required_direct = _required_direct_ranking_names(plan)
-    unavailable_required: set[str] = set()
-    incomplete_required: set[str] = set()
-    reports_by_name = {report.name: report for report in reports}
-    for name in required_lexical:
-        report = reports_by_name.get(name)
-        if report is None or not report.executed or not report.available:
-            unavailable_required.add(name)
-        elif not report.complete:
-            incomplete_required.add(name)
-    for name in required_semantic:
-        report = reports_by_name.get(name)
-        if report is None or not report.executed or not report.available:
-            unavailable_required.add(name)
-        elif not report.complete:
-            incomplete_required.add(name)
-    for name in required_direct:
-        report = reports_by_name.get(name)
-        if report is None or not report.executed or not report.available:
-            unavailable_required.add(name)
-        elif not report.complete:
-            incomplete_required.add(name)
-    if not duplicate_report.complete:
-        incomplete_required.add(duplicate_report.name)
-    if "exact" in required_channels:
-        required_exact_reports = tuple(
-            report for report in reports if report.channel == "exact"
-        )
-        if required_exact_reports:
-            for report in required_exact_reports:
-                if not report.executed or not report.available:
-                    unavailable_required.add(report.name)
-                elif not report.complete:
-                    incomplete_required.add(report.name)
-        else:
-            unavailable_required.add("exact")
-    blocking_ranking_names = (unavailable_required | incomplete_required).intersection(
-        required_lexical | required_semantic | required_direct
+    execution.check_cancelled()
+    return hits, omitted + execution.exact_omitted
+
+
+def _required_ranking_gaps(
+    execution: _SearchExecution,
+    duplicate_report: RankingExecution,
+) -> tuple[
+    set[str],
+    frozenset[str],
+    frozenset[str],
+    set[str],
+    set[str],
+]:
+    required_channels = {step.channel for step in execution.plan.steps if step.required}
+    required_lexical = _required_lexical_ranking_names(execution.plan)
+    required_named = (
+        required_lexical
+        | _required_semantic_ranking_names(execution.plan)
+        | _required_direct_ranking_names(execution.plan)
     )
-    blocking_owners = tuple(
+    unavailable, incomplete = _named_ranking_gaps(
+        required_named,
+        execution.reports,
+    )
+    if not duplicate_report.complete:
+        incomplete.add(duplicate_report.name)
+    _apply_exact_ranking_gaps(
+        required_channels,
+        execution.reports,
+        unavailable,
+        incomplete,
+    )
+    return (
+        required_channels,
+        required_lexical,
+        required_named,
+        unavailable,
+        incomplete,
+    )
+
+
+def _named_ranking_gaps(
+    required_names: frozenset[str],
+    reports: Sequence[RankingExecution],
+) -> tuple[set[str], set[str]]:
+    unavailable: set[str] = set()
+    incomplete: set[str] = set()
+    reports_by_name = {report.name: report for report in reports}
+    for name in required_names:
+        report = reports_by_name.get(name)
+        if report is None or not report.executed or not report.available:
+            unavailable.add(name)
+        elif not report.complete:
+            incomplete.add(name)
+    return unavailable, incomplete
+
+
+def _apply_exact_ranking_gaps(
+    required_channels: set[str],
+    reports: Sequence[RankingExecution],
+    unavailable: set[str],
+    incomplete: set[str],
+) -> None:
+    if "exact" in required_channels:
+        exact_reports = tuple(report for report in reports if report.channel == "exact")
+        if not exact_reports:
+            unavailable.add("exact")
+        for report in exact_reports:
+            if not report.executed or not report.available:
+                unavailable.add(report.name)
+            elif not report.complete:
+                incomplete.add(report.name)
+
+
+def _blocking_ranking_owners(
+    reports: Sequence[RankingExecution],
+    blocking_names: set[str],
+) -> tuple[str, ...]:
+    return tuple(
         sorted(
             {
                 report.owner
                 for report in reports
-                if report.name in blocking_ranking_names and report.owner is not None
+                if report.name in blocking_names and report.owner is not None
             }
         )
     )
-    upstream_cutoffs = tuple(
-        report
-        for report in reports
-        if report.reason is not None
+
+
+def _upstream_cutoff_count(
+    execution: _SearchExecution,
+    required_channels: set[str],
+) -> int:
+    return sum(
+        report.reason is not None
         and "limit_reached" in report.reason
         and report.channel != "exact"
-        and (report.name in rankings or report.channel in required_channels)
+        and (report.name in execution.rankings or report.channel in required_channels)
+        for report in execution.reports
     )
-    omitted += len(upstream_cutoffs)
-    complete = (
-        snapshot.consistency is SnapshotConsistency.STABLE
-        and not unavailable_required
-        and not incomplete_required
-        and omitted == 0
-        and not exact_truncated
-    )
+
+
+def _completion_warnings(
+    reports: Sequence[RankingExecution],
+    required_lexical: frozenset[str],
+    unavailable_required: set[str],
+) -> tuple[str, ...]:
     partial_warnings = {
         f"ranking_partial:{report.name}:{(report.reason or 'incomplete').replace(' ', '_')}"
         for report in reports
         if report.executed and not report.complete
     }
-    warnings = tuple(
+    no_lexical_owner = (
+        ("no_lexical_owner_available",)
+        if required_lexical and required_lexical.issubset(unavailable_required)
+        else ()
+    )
+    return tuple(
         sorted(
             {
                 *(f"ranking_unavailable:{name}" for name in unavailable_required),
                 *partial_warnings,
-                *(
-                    ("no_lexical_owner_available",)
-                    if required_lexical
-                    and required_lexical.issubset(unavailable_required)
-                    else ()
-                ),
+                *no_lexical_owner,
             }
         )
     )
-    broker_duration_ns = _duration_ns(clock, started_ns)
-    phase_timings.append(
+
+
+def _finalize_search(
+    execution: _SearchExecution,
+    hits: tuple[KnowledgeHit, ...],
+    omitted: int,
+    duplicate_report: RankingExecution,
+) -> KnowledgeSearchResult:
+    (
+        required_channels,
+        required_lexical,
+        required_named,
+        unavailable_required,
+        incomplete_required,
+    ) = _required_ranking_gaps(execution, duplicate_report)
+    blocking_names = (unavailable_required | incomplete_required).intersection(
+        required_named
+    )
+    blocking_owners = _blocking_ranking_owners(
+        execution.reports,
+        blocking_names,
+    )
+    omitted += _upstream_cutoff_count(execution, required_channels)
+    complete = (
+        execution.snapshot.consistency is SnapshotConsistency.STABLE
+        and not unavailable_required
+        and not incomplete_required
+        and omitted == 0
+        and not execution.exact_truncated
+    )
+    warnings = _completion_warnings(
+        execution.reports,
+        required_lexical,
+        unavailable_required,
+    )
+    broker_duration_ns = _duration_ns(execution.clock, execution.started_ns)
+    execution.phase_timings.append(
         KnowledgePhaseTiming(
             KnowledgeTimingPhase.BROKER,
             broker_duration_ns,
             service_attempt=1,
         )
     )
-    elapsed = broker_duration_ns // 1_000_000
-    rows_scanned = sum(report.rows_scanned for report in reports)
-    vectors_scanned = sum(report.vectors_scanned for report in reports)
     return KnowledgeSearchResult(
-        plan=plan,
-        snapshot=snapshot,
+        plan=execution.plan,
+        snapshot=execution.snapshot,
         hits=hits,
-        rankings=tuple(reports),
+        rankings=tuple(execution.reports),
         complete=complete,
-        truncated=omitted > 0 or exact_truncated,
+        truncated=omitted > 0 or execution.exact_truncated,
         omitted_candidates=omitted,
-        rows_scanned=rows_scanned,
-        vectors_scanned=vectors_scanned,
-        elapsed_milliseconds=elapsed,
+        rows_scanned=sum(report.rows_scanned for report in execution.reports),
+        vectors_scanned=sum(report.vectors_scanned for report in execution.reports),
+        elapsed_milliseconds=broker_duration_ns // 1_000_000,
         warnings=warnings,
         telemetry=KnowledgeQueryTelemetry(
             KnowledgeTelemetryOperation.SEARCH,
             broker_duration_ns,
-            tuple(phase_timings),
-            clock_signature=clock_contract.signature,
+            tuple(execution.phase_timings),
+            clock_signature=execution.clock_contract.signature,
         ),
         blocking_owners=blocking_owners,
     )
+
+
+def execute_knowledge_search(
+    paths: KnowledgeStatePaths,
+    plan: KnowledgePlan,
+    snapshot: KnowledgeSnapshot,
+    *,
+    cancellation_check: Callable[[], None] | None = None,
+    clock_ns: Callable[[], int] | None = None,
+    telemetry_clock: KnowledgeTelemetryClock | None = None,
+) -> KnowledgeSearchResult:
+    """Execute one already-snapshotted, read-only, bounded retrieval plan."""
+
+    execution = _new_search_execution(
+        paths,
+        plan,
+        snapshot,
+        cancellation_check=cancellation_check,
+        clock_ns=clock_ns,
+        telemetry_clock=telemetry_clock,
+    )
+    _run_lexical_phase(execution)
+    _run_semantic_phase(execution)
+    _run_exact_phase(execution)
+    _run_direct_phases(execution)
+    duplicate_report = _filter_and_apply_inventory(execution)
+    hits, omitted = _fuse_search_rankings(execution)
+    return _finalize_search(execution, hits, omitted, duplicate_report)
 
 
 # endregion [04]
