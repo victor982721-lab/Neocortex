@@ -31,6 +31,7 @@ from _04_Nucleo_Operativo.knowledge_contracts import (
 from _04_Nucleo_Operativo.knowledge_exact import (
     ExactLookupKind,
     ExactLookupRequest,
+    ExactLookupResult,
     ExactLookupStatus,
     ExactLookupTerm,
     classify_plan_exact_terms,
@@ -463,6 +464,68 @@ def test_catalog_lookup_uses_captured_generation_and_exact_json_element(
     ) in exact.matches[0].evidence.identifiers
     assert prefix.complete
     assert prefix.matches == ()
+
+
+def _assert_catalog_multi_term_reports(
+    result: ExactLookupResult,
+    terms: tuple[ExactLookupTerm, ...],
+) -> None:
+    assert result.complete
+    assert [report.term for report in result.reports] == list(terms)
+    assert [report.returned for report in result.reports] == [1, 1, 1]
+    assert all(report.status is ExactLookupStatus.COMPLETE for report in result.reports)
+    assert all(report.rows_observed == 1 for report in result.reports)
+    assert all(report.sqlite_steps > 0 for report in result.reports)
+    assert result.reports[0].sqlite_steps > result.reports[1].sqlite_steps
+    assert result.reports[1].warnings == ("catalog_has_no_standard_identifier_index",)
+    assert result.reports[2].warnings == ("catalog_has_no_basename_index",)
+
+
+def _assert_catalog_multi_term_matches(
+    result: ExactLookupResult,
+    terms: tuple[ExactLookupTerm, ...],
+) -> None:
+    assert [match.term for match in result.matches] == list(terms)
+    assert all(
+        match.resource.current_path == "C:/docs/proteccion.pdf"
+        for match in result.matches
+    )
+    assert all(match.source_rank == 1 for match in result.matches)
+    assert all(match.generation == 1 for match in result.matches)
+    assert all(match.model_signature == "classifier-v1" for match in result.matches)
+    assert all(
+        match.evidence.extractor == "document-catalog" for match in result.matches
+    )
+    assert all(match.evidence.extractor_version == "6" for match in result.matches)
+    assert len({match.evidence.evidence_id for match in result.matches}) == 3
+
+
+def test_catalog_multi_term_contract_preserves_order_provenance_and_state(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    catalog = state / "document_catalog.sqlite3"
+    _create_catalog(catalog)
+    terms = (
+        ExactLookupTerm(ExactLookupKind.PATH, "C:/docs/proteccion.pdf"),
+        ExactLookupTerm(ExactLookupKind.IDENTIFIER, "IEC-61850"),
+        ExactLookupTerm(ExactLookupKind.NAME, "proteccion.pdf"),
+    )
+    before = catalog.read_bytes()
+    wal = catalog.with_name(f"{catalog.name}-wal")
+    wal_before = wal.read_bytes() if wal.exists() else None
+
+    result = lookup_exact(
+        KnowledgeStatePaths.from_directory(state),
+        _snapshot(_catalog_owner()),
+        ExactLookupRequest(terms, limit=5, owner_scope=("catalog",)),
+    )
+
+    _assert_catalog_multi_term_reports(result, terms)
+    _assert_catalog_multi_term_matches(result, terms)
+    assert catalog.read_bytes() == before
+    assert (wal.read_bytes() if wal.exists() else None) == wal_before
 
 
 def test_serial_without_contractual_field_is_unsupported_not_catalog_identifier(
