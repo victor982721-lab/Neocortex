@@ -30,6 +30,20 @@ TEXT_MODEL_ID = "jinaai/jina-embeddings-v2-base-es"
 TEXT_MODEL_SIGNATURE = f"{TEXT_ENCODER_CONTRACT_VERSION}|{TEXT_MODEL_ID}|float16"
 TEXT_VECTOR_SPACE = "jina-embeddings-v2-base-es-v1"
 
+# Retrieval-only abstention floors measured on the bounded 65-resource
+# PDF/Code pilot.  They are deliberately tied to the exact encoder and
+# pipeline below; scores remain cosine similarities, never probabilities or
+# classification confidence.  Owners without representative qrels remain
+# unfiltered until they receive their own calibration.
+TEXT_RETRIEVAL_CALIBRATION_SIGNATURE = (
+    "semantic-text-retrieval-abstention-jina-pdf-code-v1"
+)
+TEXT_RETRIEVAL_CALIBRATION_BACKEND = "fastembed"
+TEXT_RETRIEVAL_SCORE_FLOORS = (
+    ("code", 0.46),
+    ("pdf", 0.50),
+)
+
 COMPACT_TEXT_MODEL_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 COMPACT_TEXT_MODEL_SIGNATURE = (
     f"{TEXT_ENCODER_CONTRACT_VERSION}|{COMPACT_TEXT_MODEL_ID}|mean-pooling|float16"
@@ -71,6 +85,31 @@ def multilingual_text_model() -> EmbeddingModelSpec:
             "calibration": "retrieval-only-not-classification-calibrated",
             "selection": "quality-profile-local-retrieval-smoke-v1",
         },
+    )
+
+
+def text_retrieval_score_floor(
+    *,
+    model_signature: str,
+    pipeline: object,
+    backend: object,
+    source_kind: str,
+) -> float | None:
+    """Return an exact-contract retrieval floor, or abstain from calibration."""
+
+    if (
+        model_signature != TEXT_MODEL_SIGNATURE
+        or pipeline != SEMANTIC_PIPELINE_VERSION
+        or backend != TEXT_RETRIEVAL_CALIBRATION_BACKEND
+    ):
+        return None
+    return next(
+        (
+            floor
+            for calibrated_source, floor in TEXT_RETRIEVAL_SCORE_FLOORS
+            if source_kind == calibrated_source
+        ),
+        None,
     )
 
 

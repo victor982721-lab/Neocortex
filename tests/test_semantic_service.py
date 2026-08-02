@@ -1242,6 +1242,212 @@ def test_resolved_hit_preserves_legacy_positional_mapping_arguments() -> None:
     assert resolved.source_status is None
 
 
+def _calibrated_ranking_hit(
+    ref_id: int,
+    *,
+    source_kind: str,
+    score: float,
+    backend: str = "fastembed",
+) -> tuple[SearchHit, ResolvedSearchHit]:
+    model = service.multilingual_text_model()
+    hit = SearchHit(
+        ref_id=ref_id,
+        entity_id=f"chunk:{ref_id}",
+        item_id=f"item:{source_kind}:{ref_id}",
+        indexed_model_signature=model.model_signature,
+        vector_space=model.vector_space,
+        modality=EmbeddingModality.TEXT,
+        score=score,
+        generation_id=7,
+        provenance={
+            "backend": backend,
+            "pipeline": service.SEMANTIC_PIPELINE_VERSION,
+        },
+        query_model_signature=model.model_signature,
+    )
+    return hit, ResolvedSearchHit(
+        hit=hit,
+        path=f"C:/fixtures/{source_kind}-{ref_id}",
+        source_kind=source_kind,
+        source_identity=f"{source_kind}-{ref_id}",
+        section_kind="content",
+        section_id=str(ref_id),
+        start_char=0,
+        end_char=10,
+        snippet="fixture",
+    )
+
+
+def test_text_retrieval_calibration_abstains_below_exact_owner_floors() -> None:
+    pdf_hit, pdf_resolved = _calibrated_ranking_hit(
+        1,
+        source_kind="pdf",
+        score=0.499999,
+    )
+    code_hit, code_resolved = _calibrated_ranking_hit(
+        2,
+        source_kind="code",
+        score=0.459999,
+    )
+    ranking = service.SemanticRanking(
+        name="semantic_text",
+        hits=(pdf_hit, code_hit),
+        resolved=(pdf_resolved, code_resolved),
+        scanned=2,
+        complete=True,
+    )
+
+    calibrated = search_implementation.apply_text_retrieval_calibration(
+        ranking,
+        selected_model=service.multilingual_text_model(),
+    )
+
+    assert calibrated.hits == ()
+    assert calibrated.resolved == ()
+    metadata = calibrated.provenance["retrieval_abstention"]
+    assert metadata["status"] == "applied"
+    assert metadata["query_abstained"] is True
+    assert metadata["rejected_by_source_kind"] == {"pdf": 1, "code": 1}
+    assert metadata["score_floor_by_source_kind"] == {"code": 0.46, "pdf": 0.5}
+    assert metadata["score_interpretation"].endswith("not_probability")
+
+
+def test_text_retrieval_calibration_accepts_exact_reused_payload_provenance() -> None:
+    hit, resolved = _calibrated_ranking_hit(
+        1,
+        source_kind="pdf",
+        score=0.499999,
+    )
+    hit = replace(
+        hit,
+        provenance={
+            "reuse": "exact-xxh3-content",
+            "payload_provenance": hit.provenance,
+        },
+    )
+    ranking = service.SemanticRanking(
+        name="semantic_text",
+        hits=(hit,),
+        resolved=(replace(resolved, hit=hit),),
+        scanned=1,
+        complete=True,
+    )
+
+    calibrated = search_implementation.apply_text_retrieval_calibration(
+        ranking,
+        selected_model=service.multilingual_text_model(),
+    )
+
+    assert calibrated.hits == ()
+    metadata = calibrated.provenance["retrieval_abstention"]
+    assert metadata["calibrated_hits"] == 1
+    assert metadata["query_abstained"] is True
+
+
+def test_text_retrieval_calibration_does_not_hide_provenance_conflicts() -> None:
+    hit, resolved = _calibrated_ranking_hit(
+        1,
+        source_kind="pdf",
+        score=-1.0,
+    )
+    hit = replace(
+        hit,
+        provenance={
+            **hit.provenance,
+            "payload_provenance": {
+                "backend": "other-backend",
+                "pipeline": service.SEMANTIC_PIPELINE_VERSION,
+            },
+        },
+    )
+    ranking = service.SemanticRanking(
+        name="semantic_text",
+        hits=(hit,),
+        resolved=(replace(resolved, hit=hit),),
+        scanned=1,
+        complete=True,
+    )
+
+    calibrated = search_implementation.apply_text_retrieval_calibration(
+        ranking,
+        selected_model=service.multilingual_text_model(),
+    )
+
+    assert calibrated.hits == (hit,)
+    metadata = calibrated.provenance["retrieval_abstention"]
+    assert metadata["calibrated_hits"] == 0
+    assert metadata["uncalibrated_by_reason"] == {
+        "provenance_contract_conflict": 1,
+    }
+
+
+def test_text_retrieval_calibration_keeps_boundaries_and_unknown_contracts() -> None:
+    pdf_hit, pdf_resolved = _calibrated_ranking_hit(
+        1,
+        source_kind="pdf",
+        score=0.50,
+    )
+    code_hit, code_resolved = _calibrated_ranking_hit(
+        2,
+        source_kind="code",
+        score=0.46,
+    )
+    docx_hit, docx_resolved = _calibrated_ranking_hit(
+        3,
+        source_kind="docx",
+        score=-0.25,
+    )
+    fixture_hit, fixture_resolved = _calibrated_ranking_hit(
+        4,
+        source_kind="pdf",
+        score=-0.50,
+        backend="semantic-service-fixture",
+    )
+    ranking = service.SemanticRanking(
+        name="semantic_text",
+        hits=(pdf_hit, code_hit, docx_hit, fixture_hit),
+        resolved=(pdf_resolved, code_resolved, docx_resolved, fixture_resolved),
+        scanned=4,
+        complete=True,
+    )
+
+    calibrated = search_implementation.apply_text_retrieval_calibration(
+        ranking,
+        selected_model=service.multilingual_text_model(),
+    )
+
+    assert calibrated.hits == ranking.hits
+    metadata = calibrated.provenance["retrieval_abstention"]
+    assert metadata["status"] == "partial"
+    assert metadata["calibrated_hits"] == 2
+    assert metadata["uncalibrated_by_reason"] == {
+        "source_kind_not_calibrated": 1,
+        "backend_not_calibrated": 1,
+    }
+    assert metadata["query_abstained"] is False
+
+
+def test_compact_text_model_is_not_filtered_by_quality_calibration() -> None:
+    hit, resolved = _calibrated_ranking_hit(1, source_kind="pdf", score=-1.0)
+    ranking = service.SemanticRanking(
+        name="semantic_text",
+        hits=(hit,),
+        resolved=(resolved,),
+        scanned=1,
+        complete=True,
+    )
+
+    calibrated = search_implementation.apply_text_retrieval_calibration(
+        ranking,
+        selected_model=compact_multilingual_text_model(),
+    )
+
+    assert calibrated.hits == (hit,)
+    metadata = calibrated.provenance["retrieval_abstention"]
+    assert metadata["status"] == "model_not_calibrated"
+    assert metadata["query_abstained"] is False
+
+
 def test_search_reports_unindexed_space_without_losing_available_results(
     tmp_path: Path,
     monkeypatch,

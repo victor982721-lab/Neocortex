@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from _04_Nucleo_Operativo import semantic_generation_repository
 from _04_Nucleo_Operativo import semantic_schema
 from _04_Nucleo_Operativo.semantic_chunking import (
     TextChunkingConfig,
@@ -46,6 +47,10 @@ from _04_Nucleo_Operativo.semantic_state import (
     stage_text_chunks,
     start_embedding_generation,
     upsert_semantic_item,
+)
+from _04_Nucleo_Operativo.semantic_work_budget import (
+    SemanticIndexDeadlineExceeded,
+    SemanticWorkBudget,
 )
 # endregion [01]
 
@@ -303,6 +308,202 @@ def _complete_jobs(path: Path, generation_id: int, *, now_ns: int) -> None:
             vector=(1.0, 0.0, 0.0, 0.0),
             provenance={"fixture": "publication"},
             now_ns=now_ns + offset,
+        )
+
+
+def _duplicate_generation_member_rows(
+    path: Path,
+    generation_id: int,
+    *,
+    count: int,
+) -> None:
+    with semantic_database(path) as connection:
+        row = connection.execute(
+            """SELECT model_signature,entity_kind,entity_id,item_id,
+                item_revision_id,chunk_revision_id,payload_id,
+                content_xxh3_128,content_bytes,content_xxh3_64_guard,
+                provenance_json,updated_ns
+            FROM embedding_generation_members WHERE generation_id=? LIMIT 1""",
+            (generation_id,),
+        ).fetchone()
+        assert row is not None
+        existing_count = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_generation_members
+                WHERE generation_id=?""",
+                (generation_id,),
+            ).fetchone()[0]
+        )
+        connection.executemany(
+            """INSERT INTO embedding_generation_members(
+                generation_id,model_signature,entity_kind,entity_id,item_id,
+                item_revision_id,chunk_revision_id,payload_id,
+                content_xxh3_128,content_bytes,content_xxh3_64_guard,
+                provenance_json,updated_ns,base_member_id)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+            (
+                (
+                    generation_id,
+                    str(row["model_signature"]),
+                    str(row["entity_kind"]),
+                    f"{row['entity_id']}:clone-fixture:{existing_count + offset}",
+                    str(row["item_id"]),
+                    int(row["item_revision_id"]),
+                    int(row["chunk_revision_id"]),
+                    int(row["payload_id"]),
+                    str(row["content_xxh3_128"]),
+                    int(row["content_bytes"]),
+                    str(row["content_xxh3_64_guard"]),
+                    str(row["provenance_json"]),
+                    int(row["updated_ns"]) + offset,
+                )
+                for offset in range(1, count + 1)
+            ),
+        )
+
+
+def _published_fixture_with_members(
+    path: Path,
+    *,
+    extra_members: int,
+) -> tuple[EmbeddingModelSpec, int]:
+    model = _initialize(path)
+    chunk = _stage(path, "clone-base", "published transformer record", 1)
+    generation_id = start_embedding_generation(
+        path,
+        model_signature=model.model_signature,
+        processing_signature="clone-base-v1",
+        provenance={"fixture": "clone-base-v1"},
+        started_ns=100,
+    )
+    enqueue_text_chunk_jobs(path, generation_id, (chunk.chunk_id,), now_ns=101)
+    _complete_jobs(path, generation_id, now_ns=102)
+    finalize_embedding_generation(path, generation_id, completed_ns=110)
+    # Populate the immutable-base fixture directly so clone pagination can be
+    # exercised without staging hundreds of otherwise unrelated source items.
+    _duplicate_generation_member_rows(
+        path,
+        generation_id,
+        count=extra_members,
+    )
+    return model, generation_id
+
+
+def test_base_clone_deadline_persists_cursor_and_replays_to_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model, baseline = _published_fixture_with_members(database, extra_members=4)
+    candidate = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="clone-successor-v1",
+        provenance={"fixture": "clone-successor-v1"},
+        materialize_base=False,
+        started_ns=120,
+    )
+    monkeypatch.setattr(semantic_generation_repository, "MAX_WRITE_BATCH", 2)
+    ticks = iter((0.0, 2.0))
+    budget = SemanticWorkBudget(deadline=1.0, _clock=lambda: next(ticks))
+
+    with pytest.raises(SemanticIndexDeadlineExceeded):
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
+            work_budget=budget,
+        )
+
+    with semantic_database(database, readonly=True) as connection:
+        paused = connection.execute(
+            """SELECT base_clone_complete,cursor_json FROM embedding_generations
+            WHERE generation_id=?""",
+            (candidate,),
+        ).fetchone()
+        paused_members = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_generation_members
+                WHERE generation_id=?""",
+                (candidate,),
+            ).fetchone()[0]
+        )
+    assert paused is not None
+    assert int(paused["base_clone_complete"]) == 0
+    assert paused_members == 2
+    paused_cursor = json.loads(str(paused["cursor_json"]))["base_clone"]
+    assert paused_cursor["protocol"] == "base-member-snapshot-v1"
+    assert paused_cursor["base_generation_id"] == baseline
+    assert paused_cursor["scanned_members"] == 2
+    assert paused_cursor["complete"] is False
+    assert budget.truncation_reason == "time_budget"
+
+    assert (
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
+        )
+        is None
+    )
+
+    with semantic_database(database, readonly=True) as connection:
+        resumed = connection.execute(
+            """SELECT base_clone_complete,cursor_json FROM embedding_generations
+            WHERE generation_id=?""",
+            (candidate,),
+        ).fetchone()
+        resumed_members = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_generation_members
+                WHERE generation_id=?""",
+                (candidate,),
+            ).fetchone()[0]
+        )
+    assert resumed is not None
+    assert int(resumed["base_clone_complete"]) == 1
+    assert resumed_members == 5
+    resumed_cursor = json.loads(str(resumed["cursor_json"]))["base_clone"]
+    assert resumed_cursor["scanned_members"] == 5
+    assert resumed_cursor["base_member_count"] == 5
+    assert resumed_cursor["complete"] is True
+
+
+def test_base_clone_rejects_a_changed_pinned_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model, baseline = _published_fixture_with_members(database, extra_members=2)
+    candidate = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="clone-pinned-v1",
+        provenance={"fixture": "clone-pinned-v1"},
+        materialize_base=False,
+        started_ns=120,
+    )
+    monkeypatch.setattr(semantic_generation_repository, "MAX_WRITE_BATCH", 1)
+    ticks = iter((0.0, 2.0))
+    budget = SemanticWorkBudget(deadline=1.0, _clock=lambda: next(ticks))
+    with pytest.raises(SemanticIndexDeadlineExceeded):
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
+            work_budget=budget,
+        )
+
+    _duplicate_generation_member_rows(database, baseline, count=1)
+
+    with pytest.raises(
+        SemanticStateError,
+        match="base snapshot changed during resumable clone",
+    ):
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
         )
 
 

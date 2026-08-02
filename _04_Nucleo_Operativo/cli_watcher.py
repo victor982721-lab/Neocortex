@@ -28,6 +28,7 @@ def watcher_config_from_args(args: argparse.Namespace) -> IncrementalWatcherConf
         error_backoff_initial_seconds=args.watch_error_backoff_initial_seconds,
         error_backoff_max_seconds=args.watch_error_backoff_max_seconds,
         error_backoff_multiplier=args.watch_error_backoff_multiplier,
+        portable_interval_seconds=args.watch_portable_interval_seconds,
     )
 
 

@@ -337,6 +337,36 @@ def _manifest_event_rows(
     ).fetchall()
 
 
+def _journal_is_available(journal: Mapping[str, object]) -> bool:
+    """Treat legacy v1 journals as available and v2 evidence explicitly."""
+
+    return journal.get("status", "available") == "available"
+
+
+def _journal_matches_framework(
+    journal: Mapping[str, object],
+    run_row: sqlite3.Row,
+) -> bool:
+    if not _journal_is_available(journal):
+        return all(
+            run_row[name] is None
+            for name in ("journal_volume", "journal_id", "start_usn", "end_usn")
+        )
+    if any(
+        run_row[name] is None
+        for name in ("journal_volume", "journal_id", "start_usn", "end_usn")
+    ):
+        return False
+    return all(
+        (
+            str(run_row["journal_volume"]) == journal["volume"],
+            str(run_row["journal_id"]) == journal["journal_id"],
+            int(run_row["start_usn"]) == journal["start_usn"],
+            int(run_row["end_usn"]) == journal["end_usn"],
+        )
+    )
+
+
 def _manifest_matches_framework(
     manifest: Mapping[str, object],
     run_row: sqlite3.Row,
@@ -375,10 +405,7 @@ def _manifest_matches_framework(
             int(run_row["inventory_attempts"]) == inventory["attempts"],
             int(run_row["reconciliation_records"])
             == inventory["reconciliation_records"],
-            str(run_row["journal_volume"]) == journal["volume"],
-            str(run_row["journal_id"]) == journal["journal_id"],
-            int(run_row["start_usn"]) == journal["start_usn"],
-            int(run_row["end_usn"]) == journal["end_usn"],
+            _journal_matches_framework(journal, run_row),
             str(run_row["inventory_policy_signature"]) == policy["signature"],
         )
     )
@@ -618,6 +645,8 @@ def _checkpoint_matches(
     inventory = _mapping(manifest["inventory"], label="manifest inventory")
     journal = _mapping(inventory["journal"], label="manifest journal")
     policy = _mapping(inventory["policy"], label="manifest policy")
+    if not _journal_is_available(journal):
+        return False
     return all(
         (
             checkpoint.valid,
@@ -824,6 +853,8 @@ def _probe_manifest_journal(
     journal: Mapping[str, object],
     journal_probe: JournalProbe | None,
 ) -> JournalStatus:
+    if not _journal_is_available(journal):
+        return "unavailable"
     cursor = JournalCursor(
         str(journal["volume"]),
         int(str(journal["journal_id"])),

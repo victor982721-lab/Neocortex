@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from _04_Nucleo_Operativo import knowledge_search
+from _04_Nucleo_Operativo import knowledge_search_content as content_implementation
 from _04_Nucleo_Operativo.knowledge_contracts import (
     EvidenceMethod,
     EvidenceRef,
@@ -151,6 +152,37 @@ def _resolved(*, source_kind: str = "pdf") -> ResolvedSearchHit:
         },
         source_status="done",
     )
+
+
+def test_semantic_report_explains_calibrated_retrieval_abstention() -> None:
+    ranking = SemanticRanking(
+        name="semantic_text",
+        hits=(),
+        resolved=(),
+        scanned=65,
+        complete=True,
+        provenance={
+            "retrieval_abstention": {
+                "query_abstained": True,
+                "policy_signature": "fixture-calibration-v1",
+            }
+        },
+    )
+
+    report = content_implementation._semantic_result_report(
+        "semantic_text",
+        ranking,
+        0,
+        candidate_limit=10,
+        clock=lambda: 150,
+        started_ns=100,
+        duration_ns=lambda clock, started: clock() - started,
+    )
+
+    assert report.available is True
+    assert report.complete is True
+    assert report.returned == 0
+    assert report.reason == "semantic_retrieval_abstained_below_calibrated_floor"
 
 
 def _candidate() -> KnowledgeCandidate:

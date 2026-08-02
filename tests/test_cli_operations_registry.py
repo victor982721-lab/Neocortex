@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -121,6 +120,7 @@ DIRECT_ARGUMENT_CASES = (
     ("audio_search", "run_audio_search", ("--audio-search", "query")),
     ("audio_doctor", "run_audio_doctor", ("--audio-doctor",)),
     ("code_status", "run_code_status", ("--code-status",)),
+    ("code_review", "run_code_review", ("--code-review",)),
     ("code_search", "run_code_search", ("--code-search", "query")),
     ("code_projects", "run_code_projects", ("--code-projects",)),
     (
@@ -268,4 +268,6 @@ def test_all_remains_incompatible_with_any_registered_direct_operation() -> None
     assert (
         str(raised.value) == "--all cannot be combined with direct query/doctor options"
     )
+
+
 # endregion [02]

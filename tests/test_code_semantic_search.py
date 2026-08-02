@@ -7,7 +7,9 @@
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
+import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable, Mapping, Sequence
@@ -22,6 +24,11 @@ from _04_Nucleo_Operativo import (
 from _04_Nucleo_Operativo.code_contracts import CodeRouteConfig, CodeSearchQuery
 from _04_Nucleo_Operativo.code_route import CodeRoute
 from _04_Nucleo_Operativo.code_search import search_code
+from _04_Nucleo_Operativo.code_semantic_links import (
+    CodeSemanticLinkError,
+    code_semantic_search_availability,
+    synchronize_code_embedding_links,
+)
 from _04_Nucleo_Operativo.semantic_models import (
     BackendEmbedding,
     EmbeddingModelSpec,
@@ -139,10 +146,10 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
         1,
         1,
     ).run()
-    with sqlite3.connect(state_path) as connection:
+    with closing(sqlite3.connect(state_path)) as connection:
         target = connection.execute(
             """SELECT f.volume_id || ':' || f.physical_file_id,v.version_id,
-            c.chunk_index,c.kind,c.start_line,c.end_line,s.qualified_name
+            c.chunk_index,c.kind,c.start_line,c.end_line,s.qualified_name,c.chunk_id
             FROM files f JOIN file_versions v ON v.version_id=f.current_version_id
             JOIN code_chunks c ON c.version_id=v.version_id
             LEFT JOIN symbols s ON s.symbol_id=c.symbol_id
@@ -156,8 +163,24 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
     target_start_line = int(target[4])
     target_end_line = int(target[5])
     target_symbol = None if target[6] is None else str(target[6])
+    target_chunk_id = int(target[7])
 
     (state_path.parent / "semantic.sqlite3").touch()
+    semantic_item_id = f"item:code:{source_identity}"
+    with closing(sqlite3.connect(state_path)) as connection:
+        connection.execute(
+            """INSERT INTO embedding_links(
+            chunk_id,semantic_item_id,model_signature,vector_space,generation_id,
+            active,provenance_json) VALUES(?,?,?,?,?,1,'{}')""",
+            (
+                target_chunk_id,
+                semantic_item_id,
+                "fixture-model-v1",
+                "fixture-space-v1",
+                4,
+            ),
+        )
+        connection.commit()
     resolved = SimpleNamespace(
         source_kind="code",
         source_identity=source_identity,
@@ -166,7 +189,9 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
         source_revision={"version_id": target_version_id},
         snippet="Validate SQLite access with PRAGMA quick_check",
         hit=SimpleNamespace(
+            item_id=semantic_item_id,
             indexed_model_signature="fixture-model-v1",
+            vector_space="fixture-space-v1",
             score=0.875,
             generation_id=4,
         ),
@@ -180,12 +205,15 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
             ),
         )
     )
-    monkeypatch.setattr(
-        semantic_service,
-        "search_semantic_index",
-        lambda *_args, **_kwargs: result,
-    )
+    search_kwargs: dict[str, object] = {}
 
+    def semantic_result(*_args, **kwargs):
+        search_kwargs.update(kwargs)
+        return result
+
+    monkeypatch.setattr(semantic_service, "search_semantic_index", semantic_result)
+
+    model_cache = tmp_path / "model-cache"
     hits = search_code(
         state_path,
         CodeSearchQuery(
@@ -194,7 +222,11 @@ def test_semantic_hits_resolve_to_current_rows_and_apply_filters(
             path="access.py",
             language="python",
         ),
+        semantic_model_cache=model_cache,
+        semantic_threads=2,
     )
+    assert search_kwargs["model_cache"] == model_cache
+    assert search_kwargs["threads"] == 2
     rejected = search_code(
         state_path,
         CodeSearchQuery(
@@ -302,6 +334,25 @@ def test_code_semantic_search_cancels_inside_exact_vector_scan(
         state_path.parent,
         source_kinds=("code",),
     )
+    assert not state_path.with_name(f"{state_path.name}-wal").exists()
+    assert not state_path.with_name(f"{state_path.name}-shm").exists()
+    with closing(sqlite3.connect(state_path)) as connection:
+        active_links = connection.execute(
+            """SELECT e.provenance_json FROM embedding_links e
+            WHERE e.active=1 ORDER BY e.chunk_id"""
+        ).fetchall()
+        current_chunks = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM code_chunks c JOIN file_versions v
+                ON v.version_id=c.version_id WHERE v.invalidated_ns IS NULL
+                AND trim(c.text)<>''"""
+            ).fetchone()[0]
+        )
+    assert len(active_links) == current_chunks > 0
+    assert all(
+        json.loads(str(row[0]))["link_protocol"] == "code-semantic-link-v1"
+        for row in active_links
+    )
 
     original_search = semantic_search_implementation.search_exact_page
     entered_vector_scan = False
@@ -341,6 +392,156 @@ def test_code_semantic_search_cancels_inside_exact_vector_scan(
     assert raised.value is cancellation
     assert entered_vector_scan
     assert repository_checkpoints == 2
+
+
+def test_code_semantic_links_publish_replay_and_follow_current_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "relay.py"
+    original = (
+        "def calculate_trip_threshold(current: float) -> float:\n"
+        "    return current * 1.25\n"
+    )
+    source.write_text(original, encoding="utf-8")
+    state_path = tmp_path / "state" / "code.sqlite3"
+    config = CodeRouteConfig(
+        state_path=state_path,
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+    )
+    CodeRoute(config, _Inventory((source,)), _FrameworkState(), 1, 1).run()
+    monkeypatch.setattr(
+        semantic_service,
+        "_backend",
+        lambda model, **_kwargs: _ConstantBackend(model),
+    )
+
+    first = semantic_service.index_text_embeddings(
+        state_path.parent,
+        source_kinds=("code",),
+    )
+    first_generation = first.generations[0].summary.generation_id
+    assert not state_path.with_name(f"{state_path.name}-wal").exists()
+    assert not state_path.with_name(f"{state_path.name}-shm").exists()
+    with closing(sqlite3.connect(state_path)) as connection:
+        first_links = connection.execute(
+            """SELECT chunk_id,semantic_item_id,model_signature,vector_space,
+            generation_id,active,provenance_json FROM embedding_links
+            ORDER BY chunk_id,model_signature,generation_id"""
+        ).fetchall()
+    assert first.complete
+    assert first_links
+    first_availability = code_semantic_search_availability(
+        state_path.parent,
+        verify_model_cache=False,
+    )
+    assert first_availability.available
+    assert first_availability.generation_id == first_generation
+    assert first_availability.current_links == len(first_links)
+    assert {int(row[4]) for row in first_links if int(row[5]) == 1} == {
+        first_generation
+    }
+
+    replay = semantic_service.index_text_embeddings(
+        state_path.parent,
+        source_kinds=("code",),
+    )
+    assert not state_path.with_name(f"{state_path.name}-wal").exists()
+    assert not state_path.with_name(f"{state_path.name}-shm").exists()
+    with closing(sqlite3.connect(state_path)) as connection:
+        replay_links = connection.execute(
+            """SELECT chunk_id,semantic_item_id,model_signature,vector_space,
+            generation_id,active,provenance_json FROM embedding_links
+            ORDER BY chunk_id,model_signature,generation_id"""
+        ).fetchall()
+    assert replay.complete
+    assert replay.generations[0].summary.generation_id == first_generation
+    assert replay.generations[0].queued == 0
+    assert replay.generations[0].embedded == 0
+    assert replay_links == first_links
+
+    changed = (
+        original
+        + "\ndef breaker_health(score: float) -> bool:\n    return score > 0.8\n"
+    )
+    source.write_text(changed, encoding="utf-8")
+    CodeRoute(config, _Inventory((source,)), _FrameworkState(), 2, 2).run()
+    stale_availability = code_semantic_search_availability(
+        state_path.parent,
+        verify_model_cache=False,
+    )
+    assert not stale_availability.available
+    assert stale_availability.reason == "no_current_default_profile_links"
+    with closing(sqlite3.connect(state_path)) as connection:
+        links_before_stale_sync = connection.execute(
+            """SELECT chunk_id,semantic_item_id,model_signature,vector_space,
+            generation_id,active,provenance_json FROM embedding_links
+            ORDER BY chunk_id,model_signature,generation_id"""
+        ).fetchall()
+    with pytest.raises(CodeSemanticLinkError, match="current Code row|unlinked"):
+        synchronize_code_embedding_links(
+            state_path.parent,
+            generation_id=first_generation,
+            model_signature=first.generations[0].summary.model_signature,
+        )
+    with closing(sqlite3.connect(state_path)) as connection:
+        assert (
+            connection.execute(
+                """SELECT chunk_id,semantic_item_id,model_signature,vector_space,
+            generation_id,active,provenance_json FROM embedding_links
+            ORDER BY chunk_id,model_signature,generation_id"""
+            ).fetchall()
+            == links_before_stale_sync
+        )
+
+    refreshed = semantic_service.index_text_embeddings(
+        state_path.parent,
+        source_kinds=("code",),
+    )
+    refreshed_generation = refreshed.generations[0].summary.generation_id
+    assert not state_path.with_name(f"{state_path.name}-wal").exists()
+    assert not state_path.with_name(f"{state_path.name}-shm").exists()
+    with closing(sqlite3.connect(state_path)) as connection:
+        active_generations = {
+            int(row[0])
+            for row in connection.execute(
+                "SELECT DISTINCT generation_id FROM embedding_links WHERE active=1"
+            )
+        }
+        active_current = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_links e
+                JOIN code_chunks c ON c.chunk_id=e.chunk_id
+                JOIN file_versions v ON v.version_id=c.version_id
+                JOIN files f ON f.current_version_id=v.version_id
+                WHERE e.active=1 AND f.status='current'
+                AND v.invalidated_ns IS NULL"""
+            ).fetchone()[0]
+        )
+        current_chunks = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM code_chunks c JOIN file_versions v
+                ON v.version_id=c.version_id WHERE v.invalidated_ns IS NULL
+                AND trim(c.text)<>''"""
+            ).fetchone()[0]
+        )
+        inactive_history = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM embedding_links WHERE active=0"
+            ).fetchone()[0]
+        )
+    assert refreshed.complete
+    assert refreshed_generation > first_generation
+    assert active_generations == {refreshed_generation}
+    assert active_current == current_chunks > 0
+    assert inactive_history == len(first_links)
+    assert source.read_text(encoding="utf-8") == changed
+    refreshed_availability = code_semantic_search_availability(
+        state_path.parent,
+        verify_model_cache=False,
+    )
+    assert refreshed_availability.available
+    assert refreshed_availability.generation_id == refreshed_generation
 
 
 # endregion [02]

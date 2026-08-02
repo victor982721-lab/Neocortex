@@ -20,6 +20,7 @@ from _02_Deduplicacion.inventory_scan import (
 )
 
 from .self_analysis import (
+    LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS,
     MAX_SELF_ANALYSIS_MANIFEST_BYTES,
     SELF_ANALYSIS_MANIFEST_SCHEMA,
     SELF_ANALYSIS_PROFILE_VERSION,
@@ -251,12 +252,9 @@ def _validate_run(manifest: Mapping[str, object]) -> None:
     manifest_integer(identity.get("birthtime_ns"), label="manifest root birthtime")
 
 
-def _validate_journal(inventory: Mapping[str, object]) -> None:
-    journal = manifest_mapping(
-        inventory.get("journal"),
-        label="manifest journal",
-        keys=frozenset({"volume", "journal_id", "start_usn", "end_usn"}),
-    )
+def _validate_available_journal(journal: Mapping[str, object]) -> None:
+    """Validate the shared cursor fields of an available journal."""
+
     manifest_text(journal.get("volume"), label="manifest journal volume")
     journal_id = manifest_text(journal.get("journal_id"), label="manifest journal id")
     if not journal_id.isascii() or not journal_id.isdecimal():
@@ -273,7 +271,49 @@ def _validate_journal(inventory: Mapping[str, object]) -> None:
         raise InvalidSelfAnalysisManifest("manifest journal cursor moved backwards")
 
 
-def _validate_inventory(manifest: Mapping[str, object]) -> None:
+def _validate_journal(
+    inventory: Mapping[str, object],
+    *,
+    schema: str,
+) -> None:
+    journal = manifest_mapping(
+        inventory.get("journal"),
+        label="manifest journal",
+    )
+    if schema in LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS:
+        if set(journal) != {"volume", "journal_id", "start_usn", "end_usn"}:
+            raise InvalidSelfAnalysisManifest(
+                "manifest journal has an incompatible shape"
+            )
+        _validate_available_journal(journal)
+        return
+    status = journal.get("status")
+    if status == "unavailable":
+        if set(journal) != {"status"}:
+            raise InvalidSelfAnalysisManifest(
+                "unavailable manifest journal has an incompatible shape"
+            )
+        if (
+            inventory.get("mode") != "full"
+            or inventory.get("attempts") != 1
+            or inventory.get("reconciliation_records") != 0
+        ):
+            raise InvalidSelfAnalysisManifest(
+                "unavailable manifest journal requires one unreconciled full scan"
+            )
+        return
+    if status != "available" or set(journal) != {
+        "status",
+        "volume",
+        "journal_id",
+        "start_usn",
+        "end_usn",
+    }:
+        raise InvalidSelfAnalysisManifest("manifest journal has an incompatible shape")
+    _validate_available_journal(journal)
+
+
+def _validate_inventory(manifest: Mapping[str, object], *, schema: str) -> None:
     inventory = manifest_mapping(
         manifest.get("inventory"),
         label="manifest inventory",
@@ -296,7 +336,7 @@ def _validate_inventory(manifest: Mapping[str, object]) -> None:
         inventory.get("reconciliation_records"),
         label="manifest reconciliation records",
     )
-    _validate_journal(inventory)
+    _validate_journal(inventory, schema=schema)
     policy = manifest_mapping(
         inventory.get("policy"),
         label="manifest inventory policy",
@@ -415,12 +455,16 @@ def decode_self_analysis_manifest(raw: object, byte_count: object) -> dict[str, 
     """Decode and validate one canonical, bounded manifest without live I/O."""
 
     manifest = _decode_bounded_json(raw, byte_count)
-    if manifest.get("schema") != SELF_ANALYSIS_MANIFEST_SCHEMA:
+    schema = manifest.get("schema")
+    if schema not in {
+        SELF_ANALYSIS_MANIFEST_SCHEMA,
+        *LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS,
+    }:
         raise InvalidSelfAnalysisManifest(
             "self-analysis manifest schema is unsupported"
         )
     _validate_run(manifest)
-    _validate_inventory(manifest)
+    _validate_inventory(manifest, schema=str(schema))
     _validate_code(manifest)
     _validate_safety(manifest)
     _validate_commands(manifest)

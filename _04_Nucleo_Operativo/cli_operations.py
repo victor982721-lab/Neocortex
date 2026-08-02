@@ -225,6 +225,7 @@ DIRECT_OPERATIONS: tuple[DirectOperation, ...] = (
         "audio_doctor", "run_audio_doctor", _AUDIO, module_name=".cli_audio"
     ),
     DirectOperation("code_status", "run_code_status", _CODE, module_name=".cli_code"),
+    DirectOperation("code_review", "run_code_review", _CODE, module_name=".cli_code"),
     DirectOperation(
         "code_search", "run_code_search", _CODE, _VALUE, module_name=".cli_code"
     ),

@@ -9,7 +9,17 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from .semantic_backends import EmbeddingBackend, reciprocal_rank_fusion
-from .semantic_config import clip_image_model, clip_text_model, multilingual_text_model
+from .semantic_config import (
+    SEMANTIC_PIPELINE_VERSION,
+    TEXT_MODEL_SIGNATURE,
+    TEXT_RETRIEVAL_CALIBRATION_BACKEND,
+    TEXT_RETRIEVAL_CALIBRATION_SIGNATURE,
+    TEXT_RETRIEVAL_SCORE_FLOORS,
+    clip_image_model,
+    clip_text_model,
+    multilingual_text_model,
+    text_retrieval_score_floor,
+)
 from .semantic_generation_worker import batches
 from .semantic_lexical import MAX_QUERY_CHARS, LexicalRanking, LexicalStatePaths
 from .semantic_models import (
@@ -19,6 +29,7 @@ from .semantic_models import (
     EmbeddingRole,
     ExactSearchQuery,
     ResolvedSearchHit,
+    SearchHit,
     fingerprint_text,
 )
 from .semantic_ontology import expand_domain_query
@@ -172,6 +183,160 @@ def semantic_ranking(
     )
 
 
+def _search_hit_key(hit: SearchHit) -> tuple[int, str, str, int]:
+    return hit.ref_id, hit.entity_id, hit.item_id, hit.generation_id
+
+
+def _retrieval_contract_provenance(
+    provenance: Mapping[str, object],
+) -> tuple[object, object, bool]:
+    """Resolve direct or exact-payload provenance without hiding conflicts."""
+
+    nested_value = provenance.get("payload_provenance")
+    nested = nested_value if isinstance(nested_value, Mapping) else {}
+
+    def resolve(name: str) -> tuple[object, bool]:
+        direct = provenance.get(name)
+        inherited = nested.get(name)
+        conflict = direct is not None and inherited is not None and direct != inherited
+        return (direct if direct is not None else inherited), conflict
+
+    backend, backend_conflict = resolve("backend")
+    pipeline, pipeline_conflict = resolve("pipeline")
+    return backend, pipeline, backend_conflict or pipeline_conflict
+
+
+def apply_text_retrieval_calibration(
+    ranking: SemanticRanking,
+    *,
+    selected_model: EmbeddingModelSpec,
+) -> SemanticRanking:
+    """Filter only exact-contract low-evidence PDF/Code text neighbours."""
+
+    calibration: dict[str, object] = {
+        "policy_signature": TEXT_RETRIEVAL_CALIBRATION_SIGNATURE,
+        "model_signature": TEXT_MODEL_SIGNATURE,
+        "pipeline": SEMANTIC_PIPELINE_VERSION,
+        "backend": TEXT_RETRIEVAL_CALIBRATION_BACKEND,
+        "score_floor_by_source_kind": dict(TEXT_RETRIEVAL_SCORE_FLOORS),
+        "score_interpretation": "cosine_similarity_retrieval_floor_not_probability",
+        "raw_hits": len(ranking.hits),
+    }
+    if selected_model.model_signature != TEXT_MODEL_SIGNATURE:
+        calibration.update(
+            {
+                "status": "model_not_calibrated",
+                "retained_hits": len(ranking.hits),
+                "rejected_hits": 0,
+                "query_abstained": False,
+            }
+        )
+        return replace(
+            ranking,
+            provenance={
+                **ranking.provenance,
+                "retrieval_abstention": calibration,
+            },
+        )
+
+    resolved_by_key = {_search_hit_key(value.hit): value for value in ranking.resolved}
+    retained_keys: set[tuple[int, str, str, int]] = set()
+    rejected_by_source: dict[str, int] = {}
+    uncalibrated_by_reason: dict[str, int] = {}
+    calibrated_hits = 0
+    for hit in ranking.hits:
+        key = _search_hit_key(hit)
+        resolved = resolved_by_key.get(key)
+        if resolved is None:
+            retained_keys.add(key)
+            uncalibrated_by_reason["source_unresolved"] = (
+                uncalibrated_by_reason.get("source_unresolved", 0) + 1
+            )
+            continue
+        backend, pipeline, provenance_conflict = _retrieval_contract_provenance(
+            hit.provenance
+        )
+        floor = (
+            None
+            if provenance_conflict
+            else text_retrieval_score_floor(
+                model_signature=hit.indexed_model_signature,
+                pipeline=pipeline,
+                backend=backend,
+                source_kind=resolved.source_kind,
+            )
+        )
+        if floor is None:
+            retained_keys.add(key)
+            if provenance_conflict:
+                reason = "provenance_contract_conflict"
+            elif hit.indexed_model_signature != TEXT_MODEL_SIGNATURE:
+                reason = "indexed_model_not_calibrated"
+            elif pipeline != SEMANTIC_PIPELINE_VERSION:
+                reason = "pipeline_not_calibrated"
+            elif backend != TEXT_RETRIEVAL_CALIBRATION_BACKEND:
+                reason = "backend_not_calibrated"
+            else:
+                reason = "source_kind_not_calibrated"
+            uncalibrated_by_reason[reason] = uncalibrated_by_reason.get(reason, 0) + 1
+            continue
+        calibrated_hits += 1
+        if hit.score >= floor:
+            retained_keys.add(key)
+            continue
+        rejected_by_source[resolved.source_kind] = (
+            rejected_by_source.get(resolved.source_kind, 0) + 1
+        )
+
+    retained_hits = tuple(
+        hit for hit in ranking.hits if _search_hit_key(hit) in retained_keys
+    )
+    retained_resolved = tuple(
+        value
+        for value in ranking.resolved
+        if _search_hit_key(value.hit) in retained_keys
+    )
+    rejected_hits = len(ranking.hits) - len(retained_hits)
+    uncalibrated_hits = sum(uncalibrated_by_reason.values())
+    if uncalibrated_hits and calibrated_hits:
+        status = "partial"
+    elif uncalibrated_hits:
+        status = "not_applicable"
+    else:
+        status = "applied"
+    query_abstained = (
+        bool(ranking.hits)
+        and calibrated_hits == len(ranking.hits)
+        and not retained_hits
+    )
+    calibration.update(
+        {
+            "status": status,
+            "calibrated_hits": calibrated_hits,
+            "uncalibrated_hits": uncalibrated_hits,
+            "uncalibrated_by_reason": uncalibrated_by_reason,
+            "retained_hits": len(retained_hits),
+            "rejected_hits": rejected_hits,
+            "rejected_by_source_kind": rejected_by_source,
+            "query_abstained": query_abstained,
+            "abstention_reason": (
+                "all_candidates_below_calibrated_source_floor"
+                if query_abstained
+                else None
+            ),
+        }
+    )
+    return replace(
+        ranking,
+        hits=retained_hits,
+        resolved=retained_resolved,
+        provenance={
+            **ranking.provenance,
+            "retrieval_abstention": calibration,
+        },
+    )
+
+
 def registered_model_available(
     database: Path,
     expected: EmbeddingModelSpec,
@@ -321,6 +486,10 @@ def text_search_rankings(
             "excluded_section_kind": SEMANTIC_TITLE_SECTION_KIND,
         },
         cancellation_check=cancellation_check,
+    )
+    body_ranking = apply_text_retrieval_calibration(
+        body_ranking,
+        selected_model=selected_model,
     )
     if evidence_mode or not include_title:
         return (body_ranking,)

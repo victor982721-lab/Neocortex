@@ -53,11 +53,13 @@ from .semantic_sources import (
 )
 from .semantic_schema import semantic_database
 from .semantic_state import (
+    generation_summary,
     prepare_embedding_generation,
     start_embedding_generation,
     update_embedding_generation_cursor,
 )
 from .semantic_work_budget import (
+    SemanticIndexDeadlineExceeded,
     SemanticWorkBudget,
     unlimited_semantic_work_budget,
 )
@@ -419,22 +421,33 @@ def index_text_embeddings(
             },
         )
 
-    reused_summary = prepare_embedding_generation(
-        database,
-        generation_id,
-        enumeration_complete=enumeration_complete,
-    )
-    if reused_summary is None:
-        result = generation_runner(
+    try:
+        reused_summary = prepare_embedding_generation(
             database,
             generation_id,
-            embedding_backend,
-            queued=queued,
+            enumeration_complete=enumeration_complete,
             work_budget=budget,
-            publish_if_complete=enumeration_complete,
+        )
+    except SemanticIndexDeadlineExceeded:
+        result = GenerationWorkResult(
+            generation_summary(database, generation_id),
+            queued,
+            0,
+            0,
+            0,
         )
     else:
-        result = GenerationWorkResult(reused_summary, 0, 0, 0, 0)
+        if reused_summary is None:
+            result = generation_runner(
+                database,
+                generation_id,
+                embedding_backend,
+                queued=queued,
+                work_budget=budget,
+                publish_if_complete=enumeration_complete,
+            )
+        else:
+            result = GenerationWorkResult(reused_summary, 0, 0, 0, 0)
     return SemanticIndexResult(
         database,
         selected_sources,

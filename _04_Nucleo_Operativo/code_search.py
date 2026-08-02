@@ -15,7 +15,7 @@ from .code_contracts import (
     CodeSearchQuery,
     CodeSearchRelation,
 )
-from .code_schema import connect_code_state
+from .code_schema import connect_code_state, readonly_code_database
 from .sqlite_cancellation import (
     CancellationCheck,
     SQLiteCancellationBridge,
@@ -529,10 +529,25 @@ def _semantic_rows(
     query: CodeSearchQuery,
     fetch_limit: int,
     cancellation: SQLiteCancellationBridge,
+    *,
+    model_cache: Path | None,
+    threads: int | None,
 ) -> tuple[_SearchRow, ...]:
     """Resolve optional text-vector hits back to current structured code rows."""
 
     if not query.text or not (code_database.parent / "semantic.sqlite3").is_file():
+        return ()
+    if not bool(
+        connection.execute(
+            """SELECT EXISTS(
+            SELECT 1 FROM embedding_links e
+            JOIN code_chunks c ON c.chunk_id=e.chunk_id
+            JOIN file_versions v ON v.version_id=c.version_id
+            JOIN files f ON f.current_version_id=v.version_id
+            WHERE e.active=1 AND f.status='current'
+            AND v.invalidated_ns IS NULL)"""
+        ).fetchone()[0]
+    ):
         return ()
     from .semantic_service import search_semantic_index
 
@@ -545,7 +560,9 @@ def _semantic_rows(
         include_text=True,
         include_images=False,
         include_lexical=False,
+        model_cache=model_cache,
         local_files_only=True,
+        threads=threads,
         cancellation_check=cancellation.checkpoint,
     )
     cancellation.checkpoint()
@@ -583,26 +600,50 @@ def _semantic_rows(
             or not 0 < version_id <= 9_223_372_036_854_775_807
         ):
             continue
+        semantic_item_id = resolved.hit.item_id
+        indexed_model_signature = resolved.hit.indexed_model_signature
+        vector_space = resolved.hit.vector_space
+        generation_id = resolved.hit.generation_id
+        if (
+            not isinstance(semantic_item_id, str)
+            or not semantic_item_id.strip()
+            or not isinstance(indexed_model_signature, str)
+            or not indexed_model_signature.strip()
+            or not isinstance(vector_space, str)
+            or not vector_space.strip()
+            or isinstance(generation_id, bool)
+            or not isinstance(generation_id, int)
+            or not 0 < generation_id <= 9_223_372_036_854_775_807
+        ):
+            continue
         row = connection.execute(
             f"""SELECT v.version_id,f.current_path,{_project_sql()},v.language,
             v.artifact_kind,s.qualified_name,s.signature,c.start_line,c.end_line,
             ?,v.size,v.mtime_ns,v.analysis_status,?
             FROM files f JOIN file_versions v ON v.version_id=f.current_version_id
             JOIN code_chunks c ON c.version_id=v.version_id
+            JOIN embedding_links e ON e.chunk_id=c.chunk_id
             LEFT JOIN symbols s ON s.symbol_id=c.symbol_id
             WHERE f.status='current' AND v.invalidated_ns IS NULL
             AND f.volume_id || ':' || f.physical_file_id=?
             AND v.version_id=? AND c.chunk_index=? AND c.kind=?
+            AND e.semantic_item_id=? AND e.model_signature=?
+            AND e.vector_space=? AND e.generation_id=? AND e.active=1
             AND {_COMMON_FILTER}
             LIMIT 1""",
             (
                 resolved.snippet or "",
-                f"semantic:{resolved.hit.indexed_model_signature}:"
-                f"{resolved.hit.score:.8f}:generation={resolved.hit.generation_id}",
+                f"semantic:{indexed_model_signature}:{resolved.hit.score:.8f}:"
+                f"generation={generation_id}:space={vector_space}:"
+                "calibration=uncalibrated",
                 resolved.source_identity,
                 version_id,
                 chunk_index,
                 chunk_kind,
+                semantic_item_id,
+                indexed_model_signature,
+                vector_space,
+                generation_id,
                 *_filter_parameters(query),
             ),
         ).fetchone()
@@ -629,6 +670,8 @@ def _add_search_cleanup_note(
 def _cleanup_search_connection(
     connection: sqlite3.Connection,
     primary_error: BaseException | None,
+    *,
+    close: bool = True,
 ) -> None:
     cleanup_error = primary_error
     should_rollback = False
@@ -655,17 +698,18 @@ def _cleanup_search_connection(
                     exc,
                     label="code search rollback cleanup",
                 )
-    try:
-        connection.close()
-    except BaseException as exc:
-        if cleanup_error is None:
-            cleanup_error = exc
-        else:
-            _add_search_cleanup_note(
-                cleanup_error,
-                exc,
-                label="code search connection close cleanup",
-            )
+    if close:
+        try:
+            connection.close()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+            else:
+                _add_search_cleanup_note(
+                    cleanup_error,
+                    exc,
+                    label="code search connection close cleanup",
+                )
     if primary_error is None and cleanup_error is not None:
         raise cleanup_error
 
@@ -674,13 +718,16 @@ def search_code(
     path: Path,
     query: CodeSearchQuery,
     *,
+    semantic_model_cache: Path | None = None,
+    semantic_threads: int | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> tuple[CodeSearchHit, ...]:
     """Return explained current hits using reciprocal-rank signal fusion.
 
-    ``semantic`` is deliberately not fabricated from lexical signals.  It
-    contributes only when a future vector provider has published active links;
-    exact and structural modes remain independently usable.
+    ``semantic`` is deliberately not fabricated from lexical signals. It
+    contributes only when the published Semantic head has an exact active link
+    to the current Code chunk; exact and structural modes remain independently
+    usable.
     """
 
     cancellation = SQLiteCancellationBridge(cancellation_check)
@@ -688,39 +735,50 @@ def search_code(
     modes = _mode_plan(query)
     fetch_limit = min(5000, max(query.limit * 8, 64))
     rankings: list[tuple[str, tuple[_SearchRow, ...]]] = []
-    connection = connect_code_state(path, readonly=True)
-    primary_error: BaseException | None = None
-    try:
-        connection.execute("BEGIN")
-        with sqlite_cancellation_scope(connection, cancellation):
-            for mode in modes:
-                if mode in {"literal", "fts", "path", "language"}:
-                    rows = _text_rows(connection, query, mode, fetch_limit)
-                elif mode in {"symbol", "definition", "signature", "complexity"}:
-                    rows = _symbol_rows(connection, query, mode, fetch_limit)
-                elif mode in {"reference", "import", "call"}:
-                    rows = _reference_rows(connection, query, mode, fetch_limit)
-                elif mode == "dependency":
-                    rows = _dependency_rows(connection, query, fetch_limit)
-                elif mode == "diagnostic":
-                    rows = _diagnostic_rows(connection, query, fetch_limit)
-                elif mode == "semantic":
-                    rows = _semantic_rows(
-                        path,
-                        connection,
-                        query,
-                        fetch_limit,
-                        cancellation,
-                    )
-                else:  # exhaustive guard for future modes
-                    raise AssertionError(f"unhandled code search mode: {mode}")
-                rankings.append((mode, rows))
-                cancellation.checkpoint()
-    except BaseException as exc:
-        primary_error = exc
-        raise
-    finally:
-        _cleanup_search_connection(connection, primary_error)
+    with readonly_code_database(
+        path,
+        connect=connect_code_state,
+        close_connection=False,
+    ) as connection:
+        primary_error: BaseException | None = None
+        try:
+            connection.execute("BEGIN")
+            with sqlite_cancellation_scope(connection, cancellation):
+                for mode in modes:
+                    if mode in {"literal", "fts", "path", "language"}:
+                        rows = _text_rows(connection, query, mode, fetch_limit)
+                    elif mode in {
+                        "symbol",
+                        "definition",
+                        "signature",
+                        "complexity",
+                    }:
+                        rows = _symbol_rows(connection, query, mode, fetch_limit)
+                    elif mode in {"reference", "import", "call"}:
+                        rows = _reference_rows(connection, query, mode, fetch_limit)
+                    elif mode == "dependency":
+                        rows = _dependency_rows(connection, query, fetch_limit)
+                    elif mode == "diagnostic":
+                        rows = _diagnostic_rows(connection, query, fetch_limit)
+                    elif mode == "semantic":
+                        rows = _semantic_rows(
+                            path,
+                            connection,
+                            query,
+                            fetch_limit,
+                            cancellation,
+                            model_cache=semantic_model_cache,
+                            threads=semantic_threads,
+                        )
+                    else:  # exhaustive guard for future modes
+                        raise AssertionError(f"unhandled code search mode: {mode}")
+                    rankings.append((mode, rows))
+                    cancellation.checkpoint()
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            _cleanup_search_connection(connection, primary_error)
 
     score: defaultdict[tuple[object, ...], float] = defaultdict(float)
     match_types: defaultdict[tuple[object, ...], list[str]] = defaultdict(list)

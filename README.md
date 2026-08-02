@@ -168,6 +168,40 @@ Neocortex --code-search "dónde se valida el acceso a SQLite" --code-search-mode
 Neocortex --pdf-search "transformador AND mantenimiento"
 ```
 
+### Código con recuperación semántica integrada
+
+Después de construir la ruta `code`, Semantic puede publicar embeddings de sus
+chunks y sincronizar el puente existente de Code en la misma operación:
+
+```powershell
+Neocortex --semantic-index text --semantic-source code
+Neocortex --code-search "dónde se valida el acceso a SQLite" --code-search-mode hybrid
+```
+
+La sincronización sólo acepta el head Semantic `ready` que acaba de publicarse y
+liga cada chunk vigente de Code con item, modelo, espacio vectorial y generación
+exactos. Un replay sin cambios no crea otra generación ni reescribe enlaces; si
+cambia una versión, los enlaces anteriores quedan inactivos como historial.
+`--code-status` informa enlaces activos, vigentes y obsoletos.
+
+Al terminar una publicación Code, el productor hace checkpoint y retira los
+sidecars reconstruibles sólo si el WAL quedó vacío. Si otro lector mantiene los
+handles abiertos, la corrida no invalida el estado publicado, pero el status
+quiescente se abstiene hasta que ese lector cierre y una corrida posterior pueda
+retirar los auxiliares.
+Los lectores operativos de una base quiescente usan una instantánea immutable
+con cercas antes/después, por lo que búsqueda y listado ya no crean `-wal` o
+`-shm`; si ya existe un writer activo, leen con SQLite read-only sin borrar ni
+cerrar auxiliares ajenos.
+
+La búsqueda `semantic` consume únicamente esos enlaces exactos. Si falta el head,
+la cobertura o el modelo local, declara `CODE_SEARCH_CHANNEL available=0` con la
+causa y el modo exclusivamente semántico devuelve `2`; `hybrid` conserva las
+señales léxicas y estructurales disponibles. El score es similitud no calibrada y
+sólo evidencia de recuperación: no autoriza clasificación ni mutación. El cache
+canónico es el del estado; `--semantic-model-cache DIRECTORIO` se reserva para
+un cache local explícito, por ejemplo en un laboratorio aislado.
+
 ### Autoanálisis protegido de código
 
 `--self-analysis` ejecuta sólo la ruta `code` sobre una raíz explícita en modo
@@ -181,6 +215,7 @@ $MiniRoot = Join-Path $Lab 'mini-root'
 $MiniState = Join-Path $Lab 'mini-state'
 Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
+Neocortex --state-directory $MiniState --code-review
 ```
 
 El primer comando escribe inventario y estado de código; no es una consulta de
@@ -189,6 +224,33 @@ o `-journal` junto a `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`,
 incluso vacío o desacoplado, causa abstención total con código `2` sin tocar el
 estado. Consulte [Autoanálisis protegido](docs/SELF_ANALYSIS.md) antes de usar
 el preset.
+
+Si el proceso no puede abrir el journal USN, el autoanálisis degrada a un
+recorrido completo portable. No publica checkpoint ni inventa cursor: el
+manifest registra `journal.status=unavailable`, el status nunca afirma
+`current=true` y la ruta code todavía reutiliza por caché los archivos sin
+cambios.
+
+`--code-review` convierte la publicación en una lista de mantenimiento
+explicable: como máximo 10 funciones Python confirmadas por complejidad o
+longitud, con un máximo de 2 por archivo, evidencia del analizador, callers
+estáticos resueltos y un digest determinista. Es una consulta estrictamente de
+sólo lectura. Los avisos heurísticos de código probablemente muerto se cuentan
+pero no se recomiendan hasta que su resolución de llamadas esté calibrada. Un
+snapshot full completado sin USN se etiqueta `publication_only`; un journal
+avanzado/discontinuo o un vínculo incompatible causa abstención con código `2`.
+
+La corrida normal usa el mismo baseline portable cuando USN no existe o deja
+de estar disponible: publica el snapshot completo con cursor nulo y las rutas
+comparan ese inventario contra sus caches. USN permanece como acelerador en
+Windows, no como requisito de corrección. `journal_usn_span=unavailable`
+distingue esa ejecución; las acciones continúan sujetas a sus revalidaciones
+de identidad, contenido y destino.
+El watcher aplica la misma política: USN despierta corridas cuando está
+disponible y, sin cursor compatible, programa inventarios normales portables a
+intervalos explícitos sin crear otro índice. Entre ciclos recarga el dueño
+durable mediante una instantánea immutable cercada, por lo que no recrea
+sidecars de Framework sobre una publicación quiescente.
 
 ### Knowledge Plane de sólo lectura
 

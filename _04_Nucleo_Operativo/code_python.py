@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -85,7 +85,9 @@ def _function_signature(
         arguments.append(value)
     elif node.args.kwonlyargs:
         arguments.append("*")
-    for argument, default in zip(node.args.kwonlyargs, node.args.kw_defaults, strict=True):
+    for argument, default in zip(
+        node.args.kwonlyargs, node.args.kw_defaults, strict=True
+    ):
         value = argument.arg
         annotation = _annotation(argument.annotation)
         if annotation:
@@ -160,8 +162,277 @@ def _complexity(node: ast.AST) -> int:
 # region [02] Python AST extraction
 
 
+@dataclass(frozen=True, slots=True)
+class _ImportBinding:
+    """One lexical import name that can qualify a call without guessing types."""
+
+    root: str
+    source_prefix: str
+    target_prefix: str
+    line: int
+
+
+@dataclass(slots=True)
+class _ScopeFacts:
+    """Bindings relevant to conservative import-call qualification."""
+
+    imports: dict[str, list[_ImportBinding]]
+    other_bindings: set[str]
+    global_names: set[str]
+    nonlocal_names: set[str]
+
+
+class _ScopeBindingCollector(ast.NodeVisitor):
+    """Collect one Python lexical scope without entering child scopes."""
+
+    def __init__(self) -> None:
+        self.facts = _ScopeFacts({}, set(), set(), set())
+
+    def _import(self, binding: _ImportBinding) -> None:
+        self.facts.imports.setdefault(binding.root, []).append(binding)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.facts.other_bindings.add(node.id)
+
+    def visit_Global(self, node: ast.Global) -> None:
+        self.facts.global_names.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:
+        self.facts.nonlocal_names.update(node.names)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            root = alias.asname or alias.name.split(".", 1)[0]
+            source_prefix = alias.asname or alias.name
+            target_prefix = alias.name.rsplit(".", 1)[-1]
+            self._import(
+                _ImportBinding(
+                    root=root,
+                    source_prefix=source_prefix,
+                    target_prefix=target_prefix,
+                    line=int(getattr(node, "lineno", 1)),
+                )
+            )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        module = node.module or ""
+        module_stem = module.rsplit(".", 1)[-1] if module else ""
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            local_name = alias.asname or alias.name
+            target_prefix = f"{module_stem}.{alias.name}" if module_stem else alias.name
+            self._import(
+                _ImportBinding(
+                    root=local_name,
+                    source_prefix=local_name,
+                    target_prefix=target_prefix,
+                    line=int(getattr(node, "lineno", 1)),
+                )
+            )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.facts.other_bindings.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.facts.other_bindings.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.facts.other_bindings.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        del node
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        del node
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        del node
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        del node
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        del node
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            self.facts.other_bindings.add(node.name)
+        self.generic_visit(node)
+
+
+def _argument_names(arguments: ast.arguments) -> set[str]:
+    values = {
+        argument.arg
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        )
+    }
+    if arguments.vararg is not None:
+        values.add(arguments.vararg.arg)
+    if arguments.kwarg is not None:
+        values.add(arguments.kwarg.arg)
+    return values
+
+
+def _scope_facts(
+    node: ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> _ScopeFacts:
+    collector = _ScopeBindingCollector()
+    if isinstance(node, ast.Module):
+        statements: Iterable[ast.AST] = node.body
+    elif isinstance(node, ast.Lambda):
+        collector.facts.other_bindings.update(_argument_names(node.args))
+        statements = (node.body,)
+    else:
+        collector.facts.other_bindings.update(_argument_names(node.args))
+        statements = node.body
+    for statement in statements:
+        collector.visit(statement)
+    excluded = collector.facts.global_names | collector.facts.nonlocal_names
+    collector.facts.other_bindings.difference_update(excluded)
+    for name in excluded:
+        collector.facts.imports.pop(name, None)
+    return collector.facts
+
+
+class _ImportCallHintVisitor(ast.NodeVisitor):
+    """Qualify call hints only when lexical import evidence is unambiguous."""
+
+    def __init__(self) -> None:
+        self.hints: dict[int, str] = {}
+        self.scopes: list[tuple[str, _ScopeFacts | None]] = []
+
+    def _binding_hint(self, expression: str, node: ast.Call) -> str | None:
+        root = expression.split(".", 1)[0]
+        top_kind = self.scopes[-1][0] if self.scopes else None
+        if top_kind in {"class", "comprehension"}:
+            return None
+        for kind, facts in reversed(self.scopes):
+            if kind == "comprehension":
+                return None
+            if kind == "class" or facts is None:
+                continue
+            if root in facts.global_names or root in facts.nonlocal_names:
+                return None
+            if root in facts.other_bindings:
+                return None
+            bindings = facts.imports.get(root, ())
+            matches: set[str] = set()
+            for binding in bindings:
+                if (
+                    kind == "module"
+                    and top_kind == "module"
+                    and binding.line > int(getattr(node, "lineno", 1))
+                ):
+                    continue
+                if expression == binding.source_prefix:
+                    matches.add(binding.target_prefix)
+                elif expression.startswith(binding.source_prefix + "."):
+                    matches.add(
+                        binding.target_prefix + expression[len(binding.source_prefix) :]
+                    )
+            if len(matches) == 1:
+                return matches.pop()
+            if bindings:
+                return None
+        return None
+
+    def _visit_function_header(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if default is not None:
+                self.visit(default)
+        for argument in (
+            *node.args.posonlyargs,
+            *node.args.args,
+            *node.args.kwonlyargs,
+        ):
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        if node.args.vararg is not None and node.args.vararg.annotation is not None:
+            self.visit(node.args.vararg.annotation)
+        if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+            self.visit(node.args.kwarg.annotation)
+        if node.returns is not None:
+            self.visit(node.returns)
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self.scopes.append(("module", _scope_facts(node)))
+        for statement in node.body:
+            self.visit(statement)
+        self.scopes.pop()
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        self._visit_function_header(node)
+        self.scopes.append(("function", _scope_facts(node)))
+        for statement in node.body:
+            self.visit(statement)
+        self.scopes.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if default is not None:
+                self.visit(default)
+        self.scopes.append(("function", _scope_facts(node)))
+        self.visit(node.body)
+        self.scopes.pop()
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for value in (*node.decorator_list, *node.bases):
+            self.visit(value)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        self.scopes.append(("class", None))
+        for statement in node.body:
+            self.visit(statement)
+        self.scopes.pop()
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        self.scopes.append(("comprehension", None))
+        self.generic_visit(node)
+        self.scopes.pop()
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+
+    def visit_Call(self, node: ast.Call) -> None:
+        expression = _expression_name(node.func)
+        if expression:
+            hint = self._binding_hint(expression, node)
+            if hint is not None and hint != expression:
+                self.hints[id(node)] = hint
+        self.generic_visit(node)
+
+
+def _import_bound_call_hints(tree: ast.Module) -> dict[int, str]:
+    visitor = _ImportCallHintVisitor()
+    visitor.visit(tree)
+    return visitor.hints
+
+
 class _PythonVisitor(ast.NodeVisitor):
-    def __init__(self, source: CodeFileInput, source_map: SourceMap, config: CodeRouteConfig):
+    def __init__(
+        self,
+        source: CodeFileInput,
+        source_map: SourceMap,
+        config: CodeRouteConfig,
+        call_target_hints: dict[int, str],
+    ):
         self.source = source
         self.source_map = source_map
         self.config = config
@@ -172,6 +443,7 @@ class _PythonVisitor(ast.NodeVisitor):
         self.metrics: list[MetricRecord] = []
         self.parents: list[tuple[str, str]] = []
         self.module_name = Path(source.snapshot.path).stem
+        self.call_target_hints = call_target_hints
 
     def _range(self, node: ast.AST) -> SourceRange:
         start_line = int(getattr(node, "lineno", 1))
@@ -235,7 +507,9 @@ class _PythonVisitor(ast.NodeVisitor):
         source_range = self._range(node)
         complexity = _complexity(node)
         decorators = tuple(
-            value for value in (_expression_name(item) for item in node.decorator_list) if value
+            value
+            for value in (_expression_name(item) for item in node.decorator_list)
+            if value
         )
         self.symbols.append(
             SymbolRecord(
@@ -255,9 +529,15 @@ class _PythonVisitor(ast.NodeVisitor):
                 },
             )
         )
-        self.metrics.append(MetricRecord("cyclomatic_complexity", complexity, qualified, True, "python-ast"))
+        self.metrics.append(
+            MetricRecord(
+                "cyclomatic_complexity", complexity, qualified, True, "python-ast"
+            )
+        )
         line_count = source_range.end_line - source_range.start_line + 1
-        self.metrics.append(MetricRecord("function_lines", line_count, qualified, True, "python-ast"))
+        self.metrics.append(
+            MetricRecord("function_lines", line_count, qualified, True, "python-ast")
+        )
         if complexity >= self.config.complexity_warning:
             self.diagnostics.append(
                 DiagnosticRecord(
@@ -269,7 +549,10 @@ class _PythonVisitor(ast.NodeVisitor):
                     tool_name="python-ast",
                     tool_version=sys.version.split()[0],
                     confirmed=True,
-                    metadata={"value": complexity, "threshold": self.config.complexity_warning},
+                    metadata={
+                        "value": complexity,
+                        "threshold": self.config.complexity_warning,
+                    },
                 )
             )
         if line_count >= self.config.function_lines_warning:
@@ -283,7 +566,10 @@ class _PythonVisitor(ast.NodeVisitor):
                     tool_name="python-ast",
                     tool_version=sys.version.split()[0],
                     confirmed=True,
-                    metadata={"value": line_count, "threshold": self.config.function_lines_warning},
+                    metadata={
+                        "value": line_count,
+                        "threshold": self.config.function_lines_warning,
+                    },
                 )
             )
         for decorator in node.decorator_list:
@@ -311,14 +597,18 @@ class _PythonVisitor(ast.NodeVisitor):
             value for value in (_expression_name(item) for item in node.bases) if value
         )
         decorators = tuple(
-            value for value in (_expression_name(item) for item in node.decorator_list) if value
+            value
+            for value in (_expression_name(item) for item in node.decorator_list)
+            if value
         )
         self.symbols.append(
             SymbolRecord(
                 kind="class",
                 name=node.name,
                 qualified_name=qualified,
-                signature=f"class {node.name}({', '.join(bases)})" if bases else f"class {node.name}",
+                signature=f"class {node.name}({', '.join(bases)})"
+                if bases
+                else f"class {node.name}",
                 source_range=self._range(node),
                 parent_qualified_name=self._current_qualified(),
                 visibility=self._visibility(node.name),
@@ -367,17 +657,38 @@ class _PythonVisitor(ast.NodeVisitor):
                 evidence="python-ast:import",
                 target_hint=alias.name,
             )
+            self._add_reference(
+                "import_binding",
+                alias.asname or alias.name.split(".", 1)[0],
+                node,
+                confirmed=True,
+                confidence=1.0,
+                evidence="python-ast:import-binding",
+                target_hint=alias.name.rsplit(".", 1)[-1],
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         module = "." * node.level + (node.module or "")
-        root = (node.module or "").split(".", 1)[0] or module
-        self.dependencies.append(
+        dependency_names: tuple[str, ...]
+        if node.level:
+            if node.module:
+                dependency_names = (module,)
+            else:
+                imported_modules = tuple(
+                    f"{module}{alias.name}" for alias in node.names if alias.name != "*"
+                )
+                dependency_names = imported_modules or (module,)
+        else:
+            dependency_names = ((node.module or "").split(".", 1)[0],)
+        self.dependencies.extend(
             DependencyRecord(
-                root,
+                name,
                 "python_relative_import" if node.level else "python_import",
                 source_range=self._range(node),
                 evidence="python-ast:import-from",
             )
+            for name in dependency_names
+            if name
         )
         for alias in node.names:
             target = f"{module}.{alias.name}".strip(".") if module else alias.name
@@ -390,16 +701,37 @@ class _PythonVisitor(ast.NodeVisitor):
                 evidence="python-ast:import-from",
                 target_hint=module or None,
             )
+            if alias.name != "*":
+                module_stem = (node.module or "").rsplit(".", 1)[-1]
+                canonical_target = (
+                    f"{module_stem}.{alias.name}" if module_stem else alias.name
+                )
+                self._add_reference(
+                    "import_binding",
+                    alias.asname or alias.name,
+                    node,
+                    confirmed=True,
+                    confidence=1.0,
+                    evidence="python-ast:import-binding",
+                    target_hint=canonical_target,
+                )
 
     def visit_Call(self, node: ast.Call) -> None:
+        expression = _expression_name(node.func)
+        target_hint = self.call_target_hints.get(id(node), expression)
+        import_bound = target_hint != expression
         self._add_reference(
             "call",
-            _expression_name(node.func),
+            expression,
             node.func,
             confirmed=True,
             confidence=0.9,
-            evidence="python-ast:call-expression",
-            target_hint=_expression_name(node.func),
+            evidence=(
+                "python-ast:call-expression-import-bound"
+                if import_bound
+                else "python-ast:call-expression"
+            ),
+            target_hint=target_hint,
         )
         self.generic_visit(node)
 
@@ -450,10 +782,14 @@ class _PythonVisitor(ast.NodeVisitor):
                 seen_names.add(name)
                 self.symbols.append(
                     SymbolRecord(
-                        kind="class_variable" if parent_kind == "class" else "module_variable",
+                        kind="class_variable"
+                        if parent_kind == "class"
+                        else "module_variable",
                         name=name,
                         qualified_name=self._qualified(name),
-                        signature=None if annotation is None else f"{name}: {_annotation(annotation)}",
+                        signature=None
+                        if annotation is None
+                        else f"{name}: {_annotation(annotation)}",
                         source_range=self._range(node),
                         parent_qualified_name=self._current_qualified(),
                         visibility=self._visibility(name),
@@ -470,9 +806,7 @@ def _bound_target_names(target: ast.expr) -> tuple[str, ...]:
         return _bound_target_names(target.value)
     if isinstance(target, (ast.Tuple, ast.List)):
         return tuple(
-            name
-            for element in target.elts
-            for name in _bound_target_names(element)
+            name for element in target.elts for name in _bound_target_names(element)
         )
     return ()
 
@@ -502,7 +836,8 @@ def _annotated_chunks(
         containing = [
             symbol
             for symbol in symbols
-            if symbol.source_range.start_line <= chunk.source_range.start_line
+            if symbol.source_range.start_line
+            <= chunk.source_range.start_line
             <= symbol.source_range.end_line
         ]
         owner = min(
@@ -530,7 +865,7 @@ class PythonAnalyzer:
     """Analyze valid Python with ``ast`` and degrade to searchable text on failure."""
 
     analyzer_id = "neocortex-python-ast"
-    analyzer_version = f"2|python-{sys.version_info.major}.{sys.version_info.minor}"
+    analyzer_version = f"5|python-{sys.version_info.major}.{sys.version_info.minor}"
     languages = frozenset({"python"})
 
     def analyze(self, source: CodeFileInput, config: CodeRouteConfig) -> CodeAnalysis:
@@ -590,7 +925,9 @@ class PythonAnalyzer:
                 dependencies=manifest_dependencies,
                 diagnostics=tuple(diagnostics),
                 metrics=(
-                    MetricRecord("line_count", len(source_map.lines), provenance="text"),
+                    MetricRecord(
+                        "line_count", len(source_map.lines), provenance="text"
+                    ),
                 ),
                 chunks=searchable_chunks(source.text, config.chunk_chars),
                 project_hints=hints,
@@ -598,7 +935,12 @@ class PythonAnalyzer:
                 **fingerprints,
             )
 
-        visitor = _PythonVisitor(source, source_map, config)
+        visitor = _PythonVisitor(
+            source,
+            source_map,
+            config,
+            _import_bound_call_hints(tree),
+        )
         visitor.visit(tree)
         module_range = source_map.offset_range(0, len(source.text))
         module_symbol = SymbolRecord(
@@ -639,12 +981,16 @@ class PythonAnalyzer:
         all_dependencies = tuple([*visitor.dependencies, *manifest_dependencies])
         all_diagnostics = tuple([*visitor.diagnostics, *manifest_diagnostics])
         all_symbols = tuple(symbols)
-        complexities = [item.complexity for item in all_symbols if item.complexity is not None]
+        complexities = [
+            item.complexity for item in all_symbols if item.complexity is not None
+        ]
         metrics = [
             *visitor.metrics,
             MetricRecord("line_count", len(source_map.lines), provenance="python-ast"),
             MetricRecord("symbol_count", len(all_symbols), provenance="python-ast"),
-            MetricRecord("reference_count", len(visitor.references), provenance="python-ast"),
+            MetricRecord(
+                "reference_count", len(visitor.references), provenance="python-ast"
+            ),
             MetricRecord(
                 "maximum_complexity",
                 max(complexities, default=0),

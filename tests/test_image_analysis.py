@@ -306,6 +306,61 @@ class ImageAnalysisTests(unittest.TestCase):
         decision = decide(features, evidence(7, 2, 23))
         self.assertEqual(decision.category, "grafico_ilustracion")
 
+    def test_transparent_asset_is_not_promoted_to_document_by_white_pixels(self):
+        features = replace(
+            BASE_FEATURES,
+            width=752,
+            height=684,
+            has_transparency=True,
+            alpha_fraction=0.687,
+            white_fraction=0.675,
+            light_fraction=0.699,
+            dark_fraction=0.033,
+            neutral_fraction=0.702,
+            colorfulness=0.149,
+            brightness_std=0.247,
+            entropy=3.393,
+            edge_fraction=0.035,
+            border_white_fraction=0.918,
+            long_horizontal_lines=0.005,
+            long_vertical_lines=0.004,
+            text_band_fraction=0.732,
+        )
+
+        self.assertFalse(
+            requires_document_verification(
+                Path("C:/root/office-icons.png"), Path("C:/root"), features
+            )
+        )
+        decision = decide(features, evidence(1, 1, 1), "office-icons.png")
+        self.assertNotEqual(decision.category, "documento_pagina")
+        self.assertFalse(decision.document_candidate.is_candidate)
+
+    def test_near_square_promotional_art_needs_more_than_page_like_pixels(self):
+        features = replace(
+            BASE_FEATURES,
+            width=640,
+            height=713,
+            has_transparency=True,
+            alpha_fraction=0.008,
+            white_fraction=0.082,
+            light_fraction=0.750,
+            dark_fraction=0.001,
+            neutral_fraction=0.770,
+            colorfulness=0.088,
+            brightness_std=0.124,
+            entropy=6.444,
+            edge_fraction=0.065,
+            border_white_fraction=0.059,
+            long_horizontal_lines=0.004,
+            long_vertical_lines=0.005,
+            text_band_fraction=0.746,
+        )
+
+        decision = decide(features, evidence(14, 12, 43), "promo.png")
+        self.assertEqual(decision.category, "grafico_ilustracion")
+        self.assertFalse(decision.document_candidate.is_candidate)
+
     def test_prescreen_skips_unstructured_photographic_pixels(self):
         features = replace(
             BASE_FEATURES,

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -58,6 +57,8 @@ _CHUNK_BYTES = 64 * 1024
 _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 _FILE_DISPOSITION_INFO_EX_CLASS = 21
 _FILE_DISPOSITION_FLAG_DELETE = 0x00000001
+_SECURITY_DESCRIPTOR_RELATIVE_HEADER_BYTES = 20
+_SE_DACL_AUTO_INHERITED = 0x0400
 
 
 class _FileId128(ctypes.Structure):
@@ -379,9 +380,25 @@ def _security_descriptor(handle: int, security_information: int) -> bytes:
         length = int(_advapi32.GetSecurityDescriptorLength(pointer))
         if length < 1:
             _raise_last_error()
-        return bytes(ctypes.string_at(pointer, length))
+        return _canonical_security_descriptor(bytes(ctypes.string_at(pointer, length)))
     finally:
         _kernel32.LocalFree(pointer)
+
+
+def _canonical_security_descriptor(descriptor: bytes) -> bytes:
+    """Ignore only Windows' non-semantic DACL auto-inheritance marker."""
+
+    if len(descriptor) < _SECURITY_DESCRIPTOR_RELATIVE_HEADER_BYTES:
+        raise ReleaseTransitionError(
+            "security descriptor is shorter than its relative header"
+        )
+    control = int.from_bytes(descriptor[2:4], "little")
+    canonical_control = control & ~_SE_DACL_AUTO_INHERITED
+    if canonical_control == control:
+        return descriptor
+    canonical = bytearray(descriptor)
+    canonical[2:4] = canonical_control.to_bytes(2, "little")
+    return bytes(canonical)
 
 
 class WindowsNtfsApi:
@@ -538,4 +555,6 @@ class WindowsNtfsApi:
         if error in {_ERROR_FILE_NOT_FOUND, _ERROR_PATH_NOT_FOUND}:
             return False
         raise _winerror(error)
+
+
 # endregion [02]

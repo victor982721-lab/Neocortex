@@ -1,15 +1,16 @@
 """Foreground incremental watcher driven by durable inventory checkpoints.
 
-USN batches are deliberately treated only as wake-up signals here.  The
-watcher never applies them or persists their in-memory cursor.  Every triggered
-cycle closes the signal reader and delegates reconciliation to a fresh
-``FrameworkOrchestrator`` run, then starts a new reader from the checkpoint
-that the integrated run committed.
+USN batches are deliberately treated only as optional Windows wake-up signals.
+When no durable USN cursor exists, the watcher schedules a portable integrated
+inventory pass instead of inventing another index or cursor.  Every cycle
+delegates reconciliation to a fresh ``FrameworkOrchestrator`` run and reloads
+the checkpoint that the integrated run committed.
 """
 
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -20,6 +21,7 @@ from typing import Literal, Protocol, runtime_checkable
 from _01_Enumeracion import (
     JournalCursor,
     JournalDiscontinuityError,
+    NtfsUsnError,
     UsnChangeBatch,
     UsnJournalReader,
 )
@@ -44,7 +46,13 @@ from .watcher_life_lease import WatcherLifeLease, WatcherLifeLeaseConflict
 # region [01] Public configuration and observability contracts
 
 BootstrapMode = Literal["if-needed", "always", "never"]
-WatcherRunReason = Literal["bootstrap", "changes", "journal-discontinuity"]
+WatcherRunReason = Literal[
+    "bootstrap",
+    "changes",
+    "journal-discontinuity",
+    "portable-poll",
+    "portable-fallback",
+]
 
 
 class WatcherAlreadyRunningError(RuntimeError):
@@ -66,6 +74,7 @@ class IncrementalWatcherConfig:
     error_backoff_initial_seconds: float = 1.0
     error_backoff_max_seconds: float = 60.0
     error_backoff_multiplier: float = 2.0
+    portable_interval_seconds: float = 300.0
 
     def __post_init__(self) -> None:
         if self.bootstrap not in {"if-needed", "always", "never"}:
@@ -92,6 +101,11 @@ class IncrementalWatcherConfig:
             )
         if self.error_backoff_multiplier < 1:
             raise ValueError("error_backoff_multiplier must be at least 1")
+        if (
+            not math.isfinite(self.portable_interval_seconds)
+            or self.portable_interval_seconds <= 0
+        ):
+            raise ValueError("portable_interval_seconds must be finite and positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +138,7 @@ class WatcherSummary:
     bootstrap_runs: int
     change_runs: int
     discontinuity_runs: int
+    portable_runs: int
     successful_runs: int
     failed_runs: int
     signal_batches: int
@@ -209,6 +224,7 @@ class _WatcherCounters:
     bootstrap_runs: int = 0
     change_runs: int = 0
     discontinuity_runs: int = 0
+    portable_runs: int = 0
     successful_runs: int = 0
     failed_runs: int = 0
     signal_batches: int = 0
@@ -228,7 +244,7 @@ class _WatcherCounters:
 
 
 class IncrementalWatcher:
-    """Observe USN activity and serialize non-destructive integrated runs.
+    """Observe filesystem activity and serialize non-destructive integrated runs.
 
     ``run_foreground`` owns the calling thread until ``request_cancellation`` is
     invoked.  No service, subprocess, persistent worker, or independent cursor
@@ -394,6 +410,22 @@ class IncrementalWatcher:
             owner.access_policy.root_birthtime_ns,
         )
         durable_cursor = binding.end_cursor
+        cursor_values = (
+            checkpoint.volume,
+            checkpoint.journal_id,
+            checkpoint.next_usn,
+        )
+        checkpoint_cursor_complete = all(value is not None for value in cursor_values)
+        checkpoint_cursor_absent = all(value is None for value in cursor_values)
+        cursor_binding_matches = (
+            durable_cursor is None and checkpoint_cursor_absent
+        ) or (
+            durable_cursor is not None
+            and checkpoint_cursor_complete
+            and checkpoint.volume == durable_cursor.volume
+            and checkpoint.journal_id == durable_cursor.journal_id
+            and checkpoint.next_usn == durable_cursor.next_usn
+        )
         if (
             owner.access_policy.mode != "normal"
             or os.path.normcase(os.fspath(owner.access_policy.root))
@@ -404,10 +436,7 @@ class IncrementalWatcher:
             or binding.scan_id != checkpoint.scan_id
             or checkpoint.inventory_policy_signature
             != self._boundary.exclusion_policy.signature
-            or durable_cursor is None
-            or checkpoint.volume != durable_cursor.volume
-            or checkpoint.journal_id != durable_cursor.journal_id
-            or checkpoint.next_usn != durable_cursor.next_usn
+            or not cursor_binding_matches
         ):
             self._emit(
                 "checkpoint-incompatible",
@@ -421,6 +450,12 @@ class IncrementalWatcher:
 
     @staticmethod
     def _cursor(checkpoint: InventoryCheckpoint) -> JournalCursor:
+        if (
+            checkpoint.volume is None
+            or checkpoint.journal_id is None
+            or checkpoint.next_usn is None
+        ):
+            raise ValueError("portable inventory publication has no USN cursor")
         return JournalCursor(
             checkpoint.volume,
             checkpoint.journal_id,
@@ -454,8 +489,10 @@ class IncrementalWatcher:
             counters.bootstrap_runs += 1
         elif reason == "changes":
             counters.change_runs += 1
-        else:
+        elif reason == "journal-discontinuity":
             counters.discontinuity_runs += 1
+        else:
+            counters.portable_runs += 1
 
         started_ns = self._time_ns()
         started = self._monotonic()
@@ -575,6 +612,7 @@ class IncrementalWatcher:
             bootstrap_runs=counters.bootstrap_runs,
             change_runs=counters.change_runs,
             discontinuity_runs=counters.discontinuity_runs,
+            portable_runs=counters.portable_runs,
             successful_runs=counters.successful_runs,
             failed_runs=counters.failed_runs,
             signal_batches=counters.signal_batches,
@@ -681,7 +719,7 @@ class IncrementalWatcher:
         successful_poll = [False]
         try:
             source = self._journal_source_factory(
-                checkpoint.volume,
+                cursor.volume,
                 cursor,
                 self.config.poll_timeout_seconds,
             )
@@ -718,6 +756,23 @@ class IncrementalWatcher:
                 backoff,
                 counters,
             )[0]
+        except (NtfsUsnError, OSError) as exc:
+            self._close_source(source)
+            source = None
+            counters.source_errors += 1
+            self._emit(
+                "source-portable-fallback",
+                "USN no disponible; se ejecutará inventario portable",
+                error_type=type(exc).__name__,
+                detail=str(exc),
+                checkpoint_usn=cursor.next_usn,
+            )
+            return self._run_with_recovery(
+                "portable-fallback",
+                cursor,
+                backoff,
+                counters,
+            )[0]
         except KeyboardInterrupt:
             self.request_cancellation()
             return backoff
@@ -733,6 +788,33 @@ class IncrementalWatcher:
             )
         finally:
             self._close_source(source)
+
+    def _observe_portable_checkpoint(
+        self,
+        backoff: float,
+        counters: _WatcherCounters,
+    ) -> float:
+        """Schedule one normal inventory pass without fabricating change signals."""
+
+        interval = self.config.portable_interval_seconds
+        self._emit(
+            "portable-source-started",
+            "Inventario portable programado desde checkpoint durable",
+            interval_seconds=interval,
+        )
+        if self._waiter is not None:
+            self._waiter(interval)
+        elif self._stop_event.wait(interval):
+            return backoff
+        if self._stop_event.is_set():
+            return backoff
+        counters.idle_polls += 1
+        return self._run_with_recovery(
+            "portable-poll",
+            None,
+            self.config.error_backoff_initial_seconds,
+            counters,
+        )[0]
 
     def _watch_loop(self, counters: _WatcherCounters) -> None:
         backoff = self.config.error_backoff_initial_seconds
@@ -764,7 +846,11 @@ class IncrementalWatcher:
                 bootstrap_pending = True
 
             if bootstrap_pending:
-                cursor = None if checkpoint is None else self._cursor(checkpoint)
+                cursor = (
+                    None
+                    if checkpoint is None or not checkpoint.journal_available
+                    else self._cursor(checkpoint)
+                )
                 backoff, succeeded = self._run_with_recovery(
                     "bootstrap",
                     cursor,
@@ -778,7 +864,10 @@ class IncrementalWatcher:
                 continue
 
             assert checkpoint is not None
-            backoff = self._observe_checkpoint(checkpoint, backoff, counters)
+            if checkpoint.journal_available:
+                backoff = self._observe_checkpoint(checkpoint, backoff, counters)
+            else:
+                backoff = self._observe_portable_checkpoint(backoff, counters)
 
     def run_foreground(self) -> WatcherSummary:
         """Run serially in the calling thread until cancellation is requested."""

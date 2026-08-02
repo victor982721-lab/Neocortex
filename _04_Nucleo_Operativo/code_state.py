@@ -34,9 +34,10 @@ from .sqlite_cancellation import (
 
 
 CODE_STATE_WRITE_BATCH = 512
-CODE_GRAPH_RESOLVER_SIGNATURE = "code-graph-resolver-v3"
+CODE_GRAPH_RESOLVER_SIGNATURE = "code-graph-resolver-v7"
 _GRAPH_COMPLETION_KEY = "code_graph_completion_v3"
 _GRAPH_FENCE_SCHEMA_VERSION = 1
+_MAX_RELATIVE_DEPENDENCY_NAME_BYTES = 4_096
 _DERIVED_DIAGNOSTIC_SOURCES = (
     "neocortex-project-resolver",
     "neocortex-project-graph",
@@ -89,6 +90,34 @@ def _json(value: object) -> str:
 
 def _identity(snapshot: FileSnapshot) -> tuple[str, str]:
     return f"{snapshot.volume_id:x}", f"{snapshot.file_id:x}"
+
+
+def _relative_import_candidate_paths(
+    source_path: str,
+    dependency_name: str,
+) -> tuple[str, ...]:
+    """Return lexical native paths for one analyzer-v3 relative import."""
+
+    if (
+        not dependency_name.startswith(".")
+        or len(dependency_name.encode("utf-8")) > _MAX_RELATIVE_DEPENDENCY_NAME_BYTES
+    ):
+        return ()
+    level = len(dependency_name) - len(dependency_name.lstrip("."))
+    module = dependency_name[level:]
+    parts = tuple(module.split(".")) if module else ()
+    if any(not part.isidentifier() for part in parts):
+        return ()
+    base = Path(source_path).parent
+    for _ in range(level - 1):
+        parent = base.parent
+        if parent == base:
+            return ()
+        base = parent
+    if not parts:
+        return (str(base / "__init__.py"),)
+    module_path = base.joinpath(*parts)
+    return (str(module_path.with_suffix(".py")), str(module_path / "__init__.py"))
 
 
 def _lastrowid(cursor: sqlite3.Cursor) -> int:
@@ -409,8 +438,9 @@ class CodeState:
 
         _validate_optional_raw_fingerprint(raw_xxh3_128, raw_xxh3_64_guard)
         volume_id, physical_file_id = _identity(snapshot)
+        derived_placeholders = ",".join("?" for _ in _DERIVED_DIAGNOSTIC_SOURCES)
         row = self.connection.execute(
-            """SELECT f.file_id,f.current_path,v.version_id,v.analysis_status,
+            f"""SELECT f.file_id,f.current_path,v.version_id,v.analysis_status,
             v.generated,v.vendored,v.size,v.mtime_ns,v.birthtime_ns,v.language,
             v.analyzer_id,v.analyzer_version,v.text_truncated,
             v.processing_signature,v.raw_xxh3_128,v.raw_xxh3_64_guard,
@@ -418,12 +448,13 @@ class CodeState:
                 AS symbol_count,
             (SELECT COUNT(*) FROM code_references r WHERE r.version_id=v.version_id)
                 AS reference_count,
-            (SELECT COUNT(*) FROM diagnostics d WHERE d.version_id=v.version_id)
+            (SELECT COUNT(*) FROM diagnostics d WHERE d.version_id=v.version_id
+                AND d.source NOT IN ({derived_placeholders}))
                 AS diagnostic_count
             FROM files f JOIN file_versions v ON v.version_id=f.current_version_id
             WHERE f.volume_id=? AND f.physical_file_id=? AND f.status='current'
             AND v.invalidated_ns IS NULL""",
-            (volume_id, physical_file_id),
+            (*_DERIVED_DIAGNOSTIC_SOURCES, volume_id, physical_file_id),
         ).fetchone()
         if row is None:
             return None
@@ -1160,9 +1191,7 @@ class CodeState:
                 self._assign_manifest_roots(framework_run_id)
                 self._infer_incomplete_projects(framework_run_id)
                 self._resolve_symbols_and_dependencies()
-                self._record_duplicate_relations(
-                    "raw_xxh3_128", "exact_duplicate", 1.0
-                )
+                self._record_duplicate_relations("raw_xxh3_128", "exact_duplicate", 1.0)
                 self._record_duplicate_relations(
                     "normalized_xxh3_128", "normalized_duplicate", 0.9
                 )
@@ -1392,6 +1421,279 @@ class CodeState:
             ELSE 'historical' END"""
         )
 
+    def _create_symbol_resolution_lookups(self) -> None:
+        """Build bounded current-symbol, module and submodule lookup tables."""
+
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_symbol_lookup(
+            lookup_kind TEXT NOT NULL,
+            lookup_value TEXT NOT NULL,
+            symbol_id INTEGER NOT NULL,
+            match_count INTEGER NOT NULL,
+            PRIMARY KEY(lookup_kind,lookup_value)) WITHOUT ROWID"""
+        )
+        self.connection.execute(
+            """INSERT INTO _nc_symbol_lookup(
+            lookup_kind,lookup_value,symbol_id,match_count)
+            SELECT 'qualified',s.qualified_name,MIN(s.symbol_id),COUNT(*)
+            FROM symbols s JOIN _nc_current_versions v
+                ON v.version_id=s.version_id
+            GROUP BY s.qualified_name"""
+        )
+        self.connection.execute(
+            """INSERT INTO _nc_symbol_lookup(
+            lookup_kind,lookup_value,symbol_id,match_count)
+            SELECT 'name',s.name,MIN(s.symbol_id),COUNT(*)
+            FROM symbols s JOIN _nc_current_versions v
+                ON v.version_id=s.version_id
+            GROUP BY s.name"""
+        )
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_internal_module_lookup(
+            name TEXT PRIMARY KEY,
+            version_id INTEGER NOT NULL,
+            match_count INTEGER NOT NULL) WITHOUT ROWID"""
+        )
+        internal_modules: dict[str, set[int]] = {}
+        internal_submodules: dict[tuple[str, str], set[int]] = {}
+        for version_id, current_path, module_name in self.connection.execute(
+            """SELECT v.version_id,f.current_path,s.name
+            FROM file_versions v JOIN files f ON f.current_version_id=v.version_id
+            JOIN symbols s ON s.version_id=v.version_id AND s.kind='module'
+            WHERE f.status='current' AND v.invalidated_ns IS NULL"""
+        ):
+            path = Path(str(current_path))
+            names = {str(module_name)}
+            if path.name.casefold() == "__init__.py":
+                names.add(path.parent.name)
+            else:
+                internal_submodules.setdefault(
+                    (path.parent.name, str(module_name)), set()
+                ).add(int(version_id))
+            for name in names:
+                if name:
+                    internal_modules.setdefault(name, set()).add(int(version_id))
+        for name, version_ids in sorted(internal_modules.items()):
+            self.connection.execute(
+                """INSERT INTO _nc_internal_module_lookup(
+                name,version_id,match_count) VALUES(?,?,?)""",
+                (name, min(version_ids), len(version_ids)),
+            )
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_internal_submodule_lookup(
+            package_name TEXT NOT NULL,
+            name TEXT NOT NULL,
+            version_id INTEGER NOT NULL,
+            match_count INTEGER NOT NULL,
+            PRIMARY KEY(package_name,name)) WITHOUT ROWID"""
+        )
+        for (package_name, name), version_ids in sorted(internal_submodules.items()):
+            self.connection.execute(
+                """INSERT INTO _nc_internal_submodule_lookup(
+                package_name,name,version_id,match_count) VALUES(?,?,?,?)""",
+                (package_name, name, min(version_ids), len(version_ids)),
+            )
+
+    def _resolve_scoped_reference_targets(self) -> None:
+        """Resolve unambiguous targets that belong to the source module."""
+
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_reference_targets(
+            reference_id INTEGER PRIMARY KEY,
+            symbol_id INTEGER NOT NULL) WITHOUT ROWID"""
+        )
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_scoped_reference_targets(
+            reference_id INTEGER PRIMARY KEY,
+            symbol_id INTEGER NOT NULL) WITHOUT ROWID"""
+        )
+        self.connection.execute(
+            """INSERT INTO _nc_scoped_reference_targets(
+            reference_id,symbol_id)
+            SELECT r.reference_id,MIN(target.symbol_id)
+            FROM code_references r
+            JOIN _nc_current_versions current
+                ON current.version_id=r.version_id
+            JOIN symbols source ON source.symbol_id=r.source_symbol_id
+            JOIN symbols module ON module.version_id=r.version_id
+                AND module.kind='module'
+            JOIN symbols target ON target.version_id=r.version_id
+            LEFT JOIN symbols target_parent
+                ON target_parent.symbol_id=target.parent_symbol_id
+            WHERE r.target_symbol_id IS NULL AND r.kind IN(
+                'call','inherits','implements_trait','decorator')
+            AND (
+                (r.evidence='python-ast:call-expression-import-bound'
+                    AND r.target_hint=target.qualified_name)
+                OR (
+                    r.evidence!='python-ast:call-expression-import-bound'
+                    AND (
+                        r.name=target.name
+                        OR substr(r.name,-(length(target.name)+1))
+                            ='.'||target.name
+                        OR r.target_hint=target.qualified_name
+                        OR r.target_hint=target.name
+                        OR substr(r.target_hint,-(length(target.name)+1))
+                            ='.'||target.name)))
+            AND (
+                (target.kind IN ('function','class')
+                    AND target.parent_symbol_id=module.symbol_id)
+                OR (target.kind='method' AND (
+                    (source.kind='class'
+                        AND target.parent_symbol_id=source.symbol_id)
+                    OR (source.kind IN ('method','nested_function')
+                        AND target.parent_symbol_id=source.parent_symbol_id)
+                    OR (target_parent.kind='class' AND (
+                        r.name=target_parent.name||'.'||target.name
+                        OR r.target_hint=target_parent.name||'.'||target.name
+                    ))
+                )))
+            GROUP BY r.reference_id
+            HAVING COUNT(DISTINCT target.symbol_id)=1"""
+        )
+        self.connection.execute(
+            """INSERT INTO _nc_reference_targets(reference_id,symbol_id)
+            SELECT reference_id,symbol_id
+            FROM _nc_scoped_reference_targets"""
+        )
+
+    def _resolve_import_bound_reexports(self) -> None:
+        """Follow one confirmed internal facade or package-submodule hop."""
+
+        self.connection.execute(
+            """CREATE TEMP TABLE _nc_reexport_reference_targets(
+            reference_id INTEGER PRIMARY KEY,
+            symbol_id INTEGER NOT NULL) WITHOUT ROWID"""
+        )
+        self.connection.execute(
+            """WITH import_calls AS (
+                SELECT r.reference_id,
+                    substr(r.target_hint,1,instr(r.target_hint,'.')-1)
+                        AS module_name,
+                    substr(r.target_hint,instr(r.target_hint,'.')+1)
+                        AS exported_path
+                FROM code_references r JOIN _nc_current_versions v
+                    ON v.version_id=r.version_id
+                WHERE r.target_symbol_id IS NULL AND r.kind='call'
+                AND r.evidence='python-ast:call-expression-import-bound'
+                AND instr(r.target_hint,'.')>0
+            ), export_parts AS (
+                SELECT reference_id,module_name,exported_path,
+                    CASE WHEN instr(exported_path,'.')=0
+                        THEN exported_path
+                        ELSE substr(exported_path,1,
+                            instr(exported_path,'.')-1) END AS exported_name,
+                    CASE WHEN instr(exported_path,'.')=0 THEN ''
+                        ELSE substr(exported_path,
+                            instr(exported_path,'.')) END AS member_suffix
+                FROM import_calls
+            )
+            INSERT INTO _nc_reexport_reference_targets(reference_id,symbol_id)
+            SELECT part.reference_id,MIN(q.symbol_id)
+            FROM export_parts part
+            JOIN _nc_internal_module_lookup module
+                ON module.name=part.module_name AND module.match_count=1
+            JOIN code_references binding ON binding.version_id=module.version_id
+                AND binding.kind='import_binding'
+                AND binding.name=part.exported_name
+                AND binding.target_hint IS NOT NULL
+            JOIN symbols binding_source
+                ON binding_source.symbol_id=binding.source_symbol_id
+                AND binding_source.kind='module'
+            JOIN _nc_symbol_lookup q ON q.lookup_kind='qualified'
+                AND q.lookup_value=binding.target_hint||part.member_suffix
+                AND q.match_count=1
+            GROUP BY part.reference_id
+            HAVING COUNT(DISTINCT q.symbol_id)=1"""
+        )
+        self.connection.execute(
+            """WITH import_calls AS (
+                SELECT r.reference_id,
+                    substr(r.target_hint,1,instr(r.target_hint,'.')-1)
+                        AS package_name,
+                    substr(r.target_hint,instr(r.target_hint,'.')+1)
+                        AS exported_path
+                FROM code_references r JOIN _nc_current_versions v
+                    ON v.version_id=r.version_id
+                WHERE r.target_symbol_id IS NULL AND r.kind='call'
+                AND r.evidence='python-ast:call-expression-import-bound'
+                AND instr(r.target_hint,'.')>0
+            ), export_parts AS (
+                SELECT reference_id,package_name,exported_path,
+                    CASE WHEN instr(exported_path,'.')=0
+                        THEN exported_path
+                        ELSE substr(exported_path,1,
+                            instr(exported_path,'.')-1) END AS exported_name,
+                    CASE WHEN instr(exported_path,'.')=0 THEN ''
+                        ELSE substr(exported_path,
+                            instr(exported_path,'.')) END AS member_suffix
+                FROM import_calls
+            )
+            INSERT INTO _nc_reexport_reference_targets(reference_id,symbol_id)
+            SELECT part.reference_id,MIN(q.symbol_id)
+            FROM export_parts part
+            JOIN _nc_internal_submodule_lookup submodule
+                ON submodule.package_name=part.package_name
+                AND submodule.name=part.exported_name
+                AND submodule.match_count=1
+            JOIN _nc_symbol_lookup q ON q.lookup_kind='qualified'
+                AND q.lookup_value=submodule.name||part.member_suffix
+                AND q.match_count=1
+            WHERE NOT EXISTS(
+                SELECT 1 FROM _nc_reexport_reference_targets existing
+                WHERE existing.reference_id=part.reference_id)
+            GROUP BY part.reference_id
+            HAVING COUNT(DISTINCT q.symbol_id)=1"""
+        )
+        self.connection.execute(
+            """INSERT INTO _nc_reference_targets(reference_id,symbol_id)
+            SELECT reexport.reference_id,reexport.symbol_id
+            FROM _nc_reexport_reference_targets reexport
+            WHERE NOT EXISTS(SELECT 1 FROM _nc_reference_targets existing
+                WHERE existing.reference_id=reexport.reference_id)"""
+        )
+
+    def _resolve_remaining_reference_targets(self) -> None:
+        """Apply the legacy exact qualified-or-unique-name resolver."""
+
+        self.connection.execute(
+            """INSERT INTO _nc_reference_targets(reference_id,symbol_id)
+            SELECT r.reference_id,
+                CASE
+                WHEN q.match_count=1 AND n.match_count IS NULL
+                    THEN q.symbol_id
+                WHEN n.match_count=1 AND q.match_count IS NULL
+                    THEN n.symbol_id
+                ELSE q.symbol_id END
+            FROM code_references r JOIN _nc_current_versions v
+                ON v.version_id=r.version_id
+            LEFT JOIN _nc_symbol_lookup q
+                ON q.lookup_kind='qualified'
+                AND q.lookup_value=r.target_hint
+            LEFT JOIN _nc_symbol_lookup n
+                ON n.lookup_kind='name' AND n.lookup_value=r.name
+                AND r.evidence!='python-ast:call-expression-import-bound'
+            WHERE r.target_symbol_id IS NULL AND r.kind IN(
+                'call','inherits','implements_trait','decorator')
+            AND NOT EXISTS(SELECT 1 FROM _nc_reference_targets scoped
+                WHERE scoped.reference_id=r.reference_id)
+            AND (
+                (q.match_count=1 AND n.match_count IS NULL)
+                OR (n.match_count=1 AND q.match_count IS NULL)
+                OR (q.match_count=1 AND n.match_count=1
+                    AND q.symbol_id=n.symbol_id))"""
+        )
+        self.connection.execute(
+            """UPDATE code_references AS r SET target_symbol_id=t.symbol_id
+            FROM _nc_reference_targets AS t
+            WHERE r.reference_id=t.reference_id"""
+        )
+        self.connection.execute(
+            """UPDATE code_references AS r SET target_version_id=s.version_id
+            FROM symbols AS s WHERE s.symbol_id=r.target_symbol_id
+            AND r.target_symbol_id IS NOT NULL"""
+        )
+
     def _resolve_symbols_and_dependencies(self) -> None:
         # Target bindings are graph-derived rather than parser facts.  The
         # lookup tables aggregate the current symbol population once in SQLite
@@ -1400,8 +1702,14 @@ class CodeState:
         # used by resolver v1: it resolves only when that union has one symbol.
         temporary_tables = (
             "_nc_unresolved_relative_versions",
+            "_nc_relative_dependency_targets",
+            "_nc_relative_dependency_candidates",
             "_nc_module_lookup",
+            "_nc_internal_module_lookup",
+            "_nc_internal_submodule_lookup",
+            "_nc_reexport_reference_targets",
             "_nc_reference_targets",
+            "_nc_scoped_reference_targets",
             "_nc_symbol_lookup",
             "_nc_current_versions",
         )
@@ -1444,70 +1752,10 @@ class CodeState:
                 AND version_id IN(SELECT version_id FROM _nc_current_versions)""",
                 _DERIVED_DIAGNOSTIC_SOURCES,
             )
-
-            self.connection.execute(
-                """CREATE TEMP TABLE _nc_symbol_lookup(
-                lookup_kind TEXT NOT NULL,
-                lookup_value TEXT NOT NULL,
-                symbol_id INTEGER NOT NULL,
-                match_count INTEGER NOT NULL,
-                PRIMARY KEY(lookup_kind,lookup_value)) WITHOUT ROWID"""
-            )
-            self.connection.execute(
-                """INSERT INTO _nc_symbol_lookup(
-                lookup_kind,lookup_value,symbol_id,match_count)
-                SELECT 'qualified',s.qualified_name,MIN(s.symbol_id),COUNT(*)
-                FROM symbols s JOIN _nc_current_versions v
-                    ON v.version_id=s.version_id
-                GROUP BY s.qualified_name"""
-            )
-            self.connection.execute(
-                """INSERT INTO _nc_symbol_lookup(
-                lookup_kind,lookup_value,symbol_id,match_count)
-                SELECT 'name',s.name,MIN(s.symbol_id),COUNT(*)
-                FROM symbols s JOIN _nc_current_versions v
-                    ON v.version_id=s.version_id
-                GROUP BY s.name"""
-            )
-            self.connection.execute(
-                """CREATE TEMP TABLE _nc_reference_targets(
-                reference_id INTEGER PRIMARY KEY,
-                symbol_id INTEGER NOT NULL) WITHOUT ROWID"""
-            )
-            self.connection.execute(
-                """INSERT INTO _nc_reference_targets(reference_id,symbol_id)
-                SELECT r.reference_id,
-                    CASE
-                    WHEN q.match_count=1 AND n.match_count IS NULL
-                        THEN q.symbol_id
-                    WHEN n.match_count=1 AND q.match_count IS NULL
-                        THEN n.symbol_id
-                    ELSE q.symbol_id END
-                FROM code_references r JOIN _nc_current_versions v
-                    ON v.version_id=r.version_id
-                LEFT JOIN _nc_symbol_lookup q
-                    ON q.lookup_kind='qualified'
-                    AND q.lookup_value=r.target_hint
-                LEFT JOIN _nc_symbol_lookup n
-                    ON n.lookup_kind='name' AND n.lookup_value=r.name
-                WHERE r.target_symbol_id IS NULL AND r.kind IN(
-                    'call','inherits','implements_trait','decorator')
-                AND (
-                    (q.match_count=1 AND n.match_count IS NULL)
-                    OR (n.match_count=1 AND q.match_count IS NULL)
-                    OR (q.match_count=1 AND n.match_count=1
-                        AND q.symbol_id=n.symbol_id))"""
-            )
-            self.connection.execute(
-                """UPDATE code_references AS r SET target_symbol_id=t.symbol_id
-                FROM _nc_reference_targets AS t
-                WHERE r.reference_id=t.reference_id"""
-            )
-            self.connection.execute(
-                """UPDATE code_references AS r SET target_version_id=s.version_id
-                FROM symbols AS s WHERE s.symbol_id=r.target_symbol_id
-                AND r.target_symbol_id IS NOT NULL"""
-            )
+            self._create_symbol_resolution_lookups()
+            self._resolve_scoped_reference_targets()
+            self._resolve_import_bound_reexports()
+            self._resolve_remaining_reference_targets()
 
             self.connection.execute(
                 """CREATE TEMP TABLE _nc_module_lookup(
@@ -1526,6 +1774,66 @@ class CodeState:
                 FROM _nc_current_versions AS v, _nc_module_lookup AS m
                 WHERE d.version_id=v.version_id AND d.name=m.name
                 AND d.resolved_version_id IS NULL"""
+            )
+
+            self.connection.execute(
+                """CREATE TEMP TABLE _nc_relative_dependency_candidates(
+                dependency_id INTEGER NOT NULL,
+                candidate_path TEXT NOT NULL COLLATE NOCASE,
+                PRIMARY KEY(dependency_id,candidate_path)) WITHOUT ROWID"""
+            )
+            relative_dependencies = self.connection.execute(
+                """SELECT d.dependency_id,f.current_path,d.name
+                FROM dependencies d
+                JOIN _nc_current_versions current
+                    ON current.version_id=d.version_id
+                JOIN file_versions v ON v.version_id=d.version_id
+                JOIN files f ON f.file_id=v.file_id
+                WHERE d.kind='python_relative_import'
+                AND d.resolved_version_id IS NULL
+                AND d.name GLOB '.*'
+                ORDER BY d.dependency_id"""
+            )
+            while True:
+                batch = relative_dependencies.fetchmany(CODE_STATE_WRITE_BATCH)
+                if not batch:
+                    break
+                candidates = tuple(
+                    (int(row[0]), candidate)
+                    for row in batch
+                    for candidate in _relative_import_candidate_paths(
+                        str(row[1]), str(row[2])
+                    )
+                )
+                if candidates:
+                    self.connection.executemany(
+                        """INSERT OR IGNORE INTO
+                        _nc_relative_dependency_candidates(
+                        dependency_id,candidate_path) VALUES(?,?)""",
+                        candidates,
+                    )
+            self.connection.execute(
+                """CREATE TEMP TABLE _nc_relative_dependency_targets(
+                dependency_id INTEGER PRIMARY KEY,
+                version_id INTEGER NOT NULL) WITHOUT ROWID"""
+            )
+            self.connection.execute(
+                """INSERT INTO _nc_relative_dependency_targets(
+                dependency_id,version_id)
+                SELECT candidates.dependency_id,MIN(files.current_version_id)
+                FROM _nc_relative_dependency_candidates candidates
+                JOIN files ON files.current_path=candidates.candidate_path
+                    COLLATE NOCASE AND files.status='current'
+                JOIN _nc_current_versions current
+                    ON current.version_id=files.current_version_id
+                GROUP BY candidates.dependency_id
+                HAVING COUNT(DISTINCT files.current_version_id)=1"""
+            )
+            self.connection.execute(
+                """UPDATE dependencies AS dependency
+                SET resolved_version_id=target.version_id
+                FROM _nc_relative_dependency_targets AS target
+                WHERE dependency.dependency_id=target.dependency_id"""
             )
 
             self.connection.execute(

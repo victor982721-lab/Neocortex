@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -190,6 +189,62 @@ def _set_unchanged_journal(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _prepare_unavailable_status(tmp_path: Path) -> _PreparedStatus:
+    root = tmp_path / "corpus"
+    state = tmp_path / "state"
+    root.mkdir()
+    state.mkdir()
+    (root / "source.py").write_text("VALUE = 1\n", encoding="utf-8")
+    inventory_policy = build_self_analysis_inventory_policy(root, state)
+    with DedupIndex(state / "dedup.sqlite3") as inventory:
+        scan = inventory.scan(root, exclusion_policy=inventory_policy)
+    access_policy = CorpusAccessPolicy.capture("analyze_only", root)
+    processing_signature = "code-v2:journal-unavailable"
+    with FrameworkState(state / "framework.sqlite3") as framework:
+        run_id = framework.begin_self_analysis_run(
+            access_policy,
+            None,
+            state_directory=state,
+            inventory_policy_signature=inventory_policy.signature,
+        )
+        assert framework.publish_initial_routing_snapshot(
+            run_id,
+            scan.scan_id,
+            0,
+            1,
+            "full",
+            0,
+        )
+        framework.begin_route_runs(run_id, ("code",))
+        framework.complete_route_run(
+            run_id,
+            "code",
+            {"processed": 1, "processing_signature": processing_signature},
+        )
+        framework.complete_self_analysis_run(
+            run_id,
+            None,
+            inventory_policy=inventory_policy,
+            code_processing_signature=processing_signature,
+            commands=_commands(root, state),
+        )
+    with CodeState(state / "code.sqlite3") as code:
+        analysis_run_id = code.begin_run(run_id, scan.scan_id, processing_signature)
+        code.complete_run(
+            analysis_run_id,
+            {"candidates": 1, "processed": 1, "cache_hits": 0, "errors": 0},
+            partial=False,
+        )
+    return _PreparedStatus(
+        root,
+        state,
+        run_id,
+        scan.scan_id,
+        analysis_run_id,
+        processing_signature,
+    )
+
+
 def _state_file_snapshot(state: Path) -> dict[str, tuple[object, ...]]:
     snapshot: dict[str, tuple[object, ...]] = {}
     for path in sorted(state.iterdir(), key=lambda item: item.name):
@@ -212,6 +267,35 @@ def _state_file_snapshot(state: Path) -> dict[str, tuple[object, ...]]:
             contents,
         )
     return snapshot
+
+
+def test_journal_free_manifest_is_valid_but_never_claimed_current(
+    tmp_path: Path,
+) -> None:
+    prepared = _prepare_unavailable_status(tmp_path)
+
+    def unexpected_probe(_cursor: JournalCursor) -> JournalStatus:
+        raise AssertionError("an unavailable journal must not be probed")
+
+    result = read_self_analysis_status(
+        prepared.state,
+        prepared.evidence,
+        journal_probe=unexpected_probe,
+    )
+
+    assert result is not None
+    assert result.manifest_status == "valid"
+    assert result.manifest is not None
+    assert result.manifest["inventory"]["journal"] == {  # type: ignore[index]
+        "status": "unavailable"
+    }
+    assert result.freshness.as_payload() == {
+        "root_identity_current": True,
+        "framework_link_current": True,
+        "inventory_checkpoint_current": False,
+        "journal_status": "unavailable",
+        "current": False,
+    }
 
 
 def test_code_status_json_exposes_valid_current_manifest_read_only(
@@ -887,7 +971,15 @@ def test_historical_manifest_decode_does_not_probe_filesystem(
             ),
         ).fetchone()
     assert row is not None and isinstance(row[0], str)
-    raw = row[0]
+    manifest = json.loads(row[0])
+    manifest["schema"] = "neocortex.self-analysis-manifest/v1"
+    manifest["inventory"]["journal"].pop("status")
+    raw = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
     def unexpected_realpath(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("historical decode must not resolve live paths")
@@ -898,4 +990,6 @@ def test_historical_manifest_decode_does_not_probe_filesystem(
 
     assert decoded["schema"] == "neocortex.self-analysis-manifest/v1"
     assert decoded["run"]["run_id"] == prepared_status.run_id  # type: ignore[index]
+
+
 # endregion [02]

@@ -33,6 +33,7 @@ from .semantic_repository_common import (
     _same_fingerprint,
 )
 from .semantic_schema import SemanticStateError, semantic_database
+from .semantic_work_budget import SemanticWorkBudget
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,15 +69,35 @@ class EmbeddingGenerationRebaseRequiredError(SemanticStateError):
 # region [05] Resumable generations and job queue
 
 
-def _clone_published_members(path: Path, generation_id: int) -> None:
-    """Resume a bounded copy of the base head's immutable member references."""
+_BASE_CLONE_CURSOR_PROTOCOL = "base-member-snapshot-v1"
 
-    after_member_id: int | None = None
+
+def _base_clone_cursor_int(
+    value: Mapping[str, object],
+    name: str,
+) -> int:
+    selected = value.get(name)
+    if isinstance(selected, bool) or not isinstance(selected, int) or selected < 0:
+        raise SemanticStateError(f"generation base clone cursor {name} is invalid")
+    return selected
+
+
+def _clone_published_members(
+    path: Path,
+    generation_id: int,
+    *,
+    work_budget: SemanticWorkBudget | None = None,
+) -> None:
+    """Resume a deadline-aware copy of one pinned immutable base snapshot."""
+
     while True:
+        if work_budget is not None:
+            work_budget.checkpoint()
         with semantic_database(path) as connection:
             connection.execute("BEGIN IMMEDIATE")
             generation = connection.execute(
-                """SELECT status,base_generation_id,base_clone_complete
+                """SELECT status,model_signature,base_generation_id,
+                    base_clone_complete,cursor_json
                 FROM embedding_generations WHERE generation_id=?""",
                 (generation_id,),
             ).fetchone()
@@ -88,36 +109,181 @@ def _clone_published_members(path: Path, generation_id: int) -> None:
                 )
             if bool(generation["base_clone_complete"]):
                 return
+            try:
+                cursor = json.loads(str(generation["cursor_json"]))
+            except (TypeError, ValueError) as exc:
+                raise SemanticStateError(
+                    "generation cursor is not valid JSON during base clone"
+                ) from exc
+            if not isinstance(cursor, dict):
+                raise SemanticStateError(
+                    "generation cursor is not an object during base clone"
+                )
             base_generation_id = generation["base_generation_id"]
             if base_generation_id is None:
+                cursor["base_clone"] = {
+                    "protocol": _BASE_CLONE_CURSOR_PROTOCOL,
+                    "base_generation_id": None,
+                    "after_member_id": 0,
+                    "last_member_id": 0,
+                    "base_member_count": 0,
+                    "scanned_members": 0,
+                    "complete": True,
+                }
                 connection.execute(
-                    "UPDATE embedding_generations SET base_clone_complete=1 "
+                    """UPDATE embedding_generations
+                    SET base_clone_complete=1,cursor_json=? """
                     "WHERE generation_id=? AND status='building'",
-                    (generation_id,),
+                    (canonical_json(cursor), generation_id),
                 )
                 return
-            if after_member_id is None:
-                cursor_row = connection.execute(
+            selected_base_id = int(base_generation_id)
+            base = connection.execute(
+                """SELECT status,model_signature FROM embedding_generations
+                WHERE generation_id=?""",
+                (selected_base_id,),
+            ).fetchone()
+            if base is None or str(base["status"]) != "ready":
+                raise SemanticStateError(
+                    "generation base snapshot is absent or not immutable-ready"
+                )
+            if str(base["model_signature"]) != str(generation["model_signature"]):
+                raise SemanticStateError(
+                    "generation base snapshot model differs from candidate"
+                )
+
+            raw_clone_cursor = cursor.get("base_clone")
+            if raw_clone_cursor is None:
+                snapshot = connection.execute(
+                    """SELECT COALESCE(MAX(member_id),0),COUNT(*)
+                    FROM embedding_generation_members WHERE generation_id=?""",
+                    (selected_base_id,),
+                ).fetchone()
+                existing = connection.execute(
                     """SELECT COALESCE(MAX(base_member_id),0)
                     FROM embedding_generation_members WHERE generation_id=?""",
                     (generation_id,),
                 ).fetchone()
-                after_member_id = int(cursor_row[0])
+                after_member_id = int(existing[0])
+                scanned_members = int(
+                    connection.execute(
+                        """SELECT COUNT(*) FROM embedding_generation_members
+                        WHERE generation_id=? AND member_id<=?""",
+                        (selected_base_id, after_member_id),
+                    ).fetchone()[0]
+                )
+                clone_cursor: dict[str, object] = {
+                    "protocol": _BASE_CLONE_CURSOR_PROTOCOL,
+                    "base_generation_id": selected_base_id,
+                    "after_member_id": after_member_id,
+                    "last_member_id": int(snapshot[0]),
+                    "base_member_count": int(snapshot[1]),
+                    "scanned_members": scanned_members,
+                    "complete": False,
+                }
+            else:
+                if not isinstance(raw_clone_cursor, dict):
+                    raise SemanticStateError(
+                        "generation base clone cursor is not an object"
+                    )
+                clone_cursor = dict(raw_clone_cursor)
+                if clone_cursor.get("protocol") != _BASE_CLONE_CURSOR_PROTOCOL:
+                    raise SemanticStateError(
+                        "generation base clone cursor protocol is incompatible"
+                    )
+                if (
+                    _base_clone_cursor_int(clone_cursor, "base_generation_id")
+                    != selected_base_id
+                ):
+                    raise SemanticStateError(
+                        "generation base clone cursor changed its base snapshot"
+                    )
+                after_member_id = _base_clone_cursor_int(
+                    clone_cursor,
+                    "after_member_id",
+                )
+                last_member_id = _base_clone_cursor_int(
+                    clone_cursor,
+                    "last_member_id",
+                )
+                base_member_count = _base_clone_cursor_int(
+                    clone_cursor,
+                    "base_member_count",
+                )
+                scanned_members = _base_clone_cursor_int(
+                    clone_cursor,
+                    "scanned_members",
+                )
+                if (
+                    after_member_id > last_member_id
+                    or scanned_members > base_member_count
+                    or not isinstance(clone_cursor.get("complete"), bool)
+                ):
+                    raise SemanticStateError(
+                        "generation base clone cursor bounds are invalid"
+                    )
+                observed_after = int(
+                    connection.execute(
+                        """SELECT COALESCE(MAX(base_member_id),0)
+                        FROM embedding_generation_members WHERE generation_id=?""",
+                        (generation_id,),
+                    ).fetchone()[0]
+                )
+                if observed_after > after_member_id:
+                    raise SemanticStateError(
+                        "generation base members advanced beyond their durable cursor"
+                    )
+
+            last_member_id = _base_clone_cursor_int(
+                clone_cursor,
+                "last_member_id",
+            )
+            base_member_count = _base_clone_cursor_int(
+                clone_cursor,
+                "base_member_count",
+            )
             rows = connection.execute(
                 """SELECT member_id,model_signature,entity_kind,entity_id,item_id,
                     item_revision_id,chunk_revision_id,payload_id,
                     content_xxh3_128,content_bytes,content_xxh3_64_guard,
                     provenance_json,updated_ns
                 FROM embedding_generation_members
-                WHERE generation_id=? AND member_id>?
+                WHERE generation_id=? AND member_id>? AND member_id<=?
                 ORDER BY member_id LIMIT ?""",
-                (int(base_generation_id), after_member_id, MAX_WRITE_BATCH),
+                (
+                    selected_base_id,
+                    after_member_id,
+                    last_member_id,
+                    MAX_WRITE_BATCH,
+                ),
             ).fetchall()
             if not rows:
+                observed_snapshot = connection.execute(
+                    """SELECT COALESCE(MAX(member_id),0),COUNT(*)
+                    FROM embedding_generation_members WHERE generation_id=?""",
+                    (selected_base_id,),
+                ).fetchone()
+                if (
+                    int(observed_snapshot[0]) != last_member_id
+                    or int(observed_snapshot[1]) != base_member_count
+                    or scanned_members != base_member_count
+                ):
+                    raise SemanticStateError(
+                        "generation base snapshot changed during resumable clone"
+                    )
+                clone_cursor.update(
+                    {
+                        "after_member_id": last_member_id,
+                        "scanned_members": base_member_count,
+                        "complete": True,
+                    }
+                )
+                cursor["base_clone"] = clone_cursor
                 connection.execute(
-                    "UPDATE embedding_generations SET base_clone_complete=1 "
+                    """UPDATE embedding_generations
+                    SET base_clone_complete=1,cursor_json=? """
                     "WHERE generation_id=? AND status='building'",
-                    (generation_id,),
+                    (canonical_json(cursor), generation_id),
                 )
                 return
             connection.executemany(
@@ -156,6 +322,25 @@ def _clone_published_members(path: Path, generation_id: int) -> None:
             # Advance by the scanned base page as well as by inserted rows so a
             # fully overridden page cannot make the resumable clone loop spin.
             after_member_id = int(rows[-1]["member_id"])
+            scanned_members += len(rows)
+            clone_cursor.update(
+                {
+                    "after_member_id": after_member_id,
+                    "scanned_members": scanned_members,
+                    "complete": False,
+                }
+            )
+            cursor["base_clone"] = clone_cursor
+            updated = connection.execute(
+                """UPDATE embedding_generations SET cursor_json=?
+                WHERE generation_id=? AND status='building'
+                  AND base_clone_complete=0""",
+                (canonical_json(cursor), generation_id),
+            )
+            if updated.rowcount != 1:
+                raise SemanticStateError(
+                    "generation changed while persisting its base clone cursor"
+                )
 
 
 def _published_head_id(
@@ -238,6 +423,7 @@ def start_embedding_generation(
     cursor: Mapping[str, object] | None = None,
     started_ns: int | None = None,
     materialize_base: bool = True,
+    work_budget: SemanticWorkBudget | None = None,
 ) -> int:
     """Return an existing compatible building generation or start a new one."""
 
@@ -313,7 +499,11 @@ def start_embedding_generation(
                 )
             generation_id = int(cursor_row.lastrowid)
     if materialize_base:
-        _clone_published_members(path, generation_id)
+        _clone_published_members(
+            path,
+            generation_id,
+            work_budget=work_budget,
+        )
     return generation_id
 
 
@@ -1729,8 +1919,25 @@ def update_embedding_generation_cursor(
 ) -> None:
     """Persist an explicit source-enumeration checkpoint for resumption."""
 
-    cursor_json = canonical_json(cursor)
     with semantic_database(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            """SELECT cursor_json FROM embedding_generations
+            WHERE generation_id=? AND status='building'""",
+            (generation_id,),
+        ).fetchone()
+        if existing is None:
+            raise SemanticStateError("generation is absent or no longer building")
+        try:
+            existing_cursor = json.loads(str(existing["cursor_json"]))
+        except (TypeError, ValueError) as exc:
+            raise SemanticStateError("generation cursor is not valid JSON") from exc
+        if not isinstance(existing_cursor, dict):
+            raise SemanticStateError("generation cursor is not a JSON object")
+        selected_cursor = dict(cursor)
+        if "base_clone" not in selected_cursor and "base_clone" in existing_cursor:
+            selected_cursor["base_clone"] = existing_cursor["base_clone"]
+        cursor_json = canonical_json(selected_cursor)
         result = connection.execute(
             "UPDATE embedding_generations SET cursor_json=? "
             "WHERE generation_id=? AND status='building'",
@@ -1986,6 +2193,7 @@ def prepare_embedding_generation(
     generation_id: int,
     *,
     enumeration_complete: bool,
+    work_budget: SemanticWorkBudget | None = None,
 ) -> GenerationSummary | None:
     """Materialize a deferred delta, or elide an exact fully enumerated replay.
 
@@ -2114,7 +2322,11 @@ def prepare_embedding_generation(
     if reused_summary is not None:
         return reused_summary
     if must_materialize:
-        _clone_published_members(path, generation_id)
+        _clone_published_members(
+            path,
+            generation_id,
+            work_budget=work_budget,
+        )
     return None
 
 

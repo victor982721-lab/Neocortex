@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -197,6 +196,7 @@ def test_self_analysis_completion_atomically_publishes_one_manifest(
             "attempts": 1,
             "reconciliation_records": 0,
             "journal": {
+                "status": "available",
                 "volume": cursor.volume,
                 "journal_id": str(cursor.journal_id),
                 "start_usn": cursor.next_usn,
@@ -409,4 +409,6 @@ def test_generic_finalizers_cannot_complete_self_analysis(tmp_path: Path) -> Non
             "SELECT status,completed_ns FROM initial_runs WHERE run_id=?",
             (run_id,),
         ).fetchone() == ("running", None)
+
+
 # endregion [02]

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -52,7 +51,7 @@ from .self_analysis_finalization import (
     SelfAnalysisRunEvidence,
     SelfAnalysisSafetyCounts,
 )
-from .sqlite_paths import existing_sqlite_uri, readonly_sqlite_uri
+from .sqlite_paths import existing_sqlite_uri
 # endregion [01]
 
 # region [02] Implementación
@@ -93,18 +92,18 @@ def read_latest_durable_inventory_owner(
     database: str | Path,
     root: Path,
 ) -> DurableInventoryOwner | None:
-    """Read the newest completed owner without creating or migrating state."""
+    """Read one quiescent owner without creating SQLite WAL sidecars."""
 
     database_path = Path(database)
     if not database_path.is_file():
         return None
-    connection = sqlite3.connect(
-        readonly_sqlite_uri(database_path),
-        uri=True,
-        timeout=60,
-    )
-    try:
-        connection.execute("PRAGMA query_only=ON")
+    # A normal ``mode=ro`` connection to a sidecar-free WAL database recreates
+    # an empty ``-wal`` plus ``-shm`` on Windows.  The watcher calls this reader
+    # between integrated runs, so use the fenced immutable snapshot contract:
+    # it both abstains from active state and preserves quiescence after reading.
+    from .self_analysis_status import quiescent_sqlite_database
+
+    with quiescent_sqlite_database(database_path, timeout_seconds=60) as connection:
         try:
             row = connection.execute(
                 """SELECT run_id,scan_id,corpus_access_mode,
@@ -122,8 +121,6 @@ def read_latest_durable_inventory_owner(
             if "no such table" in detail or "no such column" in detail:
                 return None
             raise
-    finally:
-        connection.close()
     if row is None:
         return None
     end_cursor = None
@@ -572,7 +569,7 @@ class FrameworkState:
     def begin_initial_run(
         self,
         root: Path,
-        cursor: JournalCursor,
+        cursor: JournalCursor | None,
         *,
         inventory_policy_signature: str | None = None,
     ) -> int:
@@ -585,6 +582,11 @@ class FrameworkState:
         ):
             raise ValueError("inventory policy signature must be trimmed and bounded")
         now = time.time_ns()
+        journal_values = (
+            (None, None, None)
+            if cursor is None
+            else (cursor.volume, str(cursor.journal_id), cursor.next_usn)
+        )
         with self._connection:
             result = self._connection.execute(
                 """INSERT INTO initial_runs(
@@ -598,9 +600,7 @@ class FrameworkState:
                     now,
                     os.getpid(),
                     now,
-                    cursor.volume,
-                    str(cursor.journal_id),
-                    cursor.next_usn,
+                    *journal_values,
                     policy.mode,
                     policy.root_device_id_hex,
                     policy.root_file_id_hex,
@@ -616,7 +616,7 @@ class FrameworkState:
     def begin_self_analysis_run(
         self,
         policy: CorpusAccessPolicy,
-        cursor: JournalCursor,
+        cursor: JournalCursor | None,
         *,
         state_directory: Path,
         inventory_policy_signature: str,
@@ -663,6 +663,11 @@ class FrameworkState:
         if intersects:
             raise ValueError("self-analysis root and state directory must be disjoint")
         now = time.time_ns()
+        journal_values = (
+            (None, None, None)
+            if cursor is None
+            else (cursor.volume, str(cursor.journal_id), cursor.next_usn)
+        )
         with self._connection:
             result = self._connection.execute(
                 """INSERT INTO initial_runs(
@@ -676,9 +681,7 @@ class FrameworkState:
                     now,
                     os.getpid(),
                     now,
-                    cursor.volume,
-                    str(cursor.journal_id),
-                    cursor.next_usn,
+                    *journal_values,
                     policy.mode,
                     policy.root_device_id_hex,
                     policy.root_file_id_hex,
@@ -802,14 +805,23 @@ class FrameworkState:
                 (phase, time.time_ns(), run_id),
             )
 
-    def update_run_start_cursor(self, run_id: int, cursor: JournalCursor) -> None:
+    def update_run_start_cursor(
+        self,
+        run_id: int,
+        cursor: JournalCursor | None,
+    ) -> None:
         """Persist the cursor that actually bounded inventory preparation."""
 
+        journal_values = (
+            (None, None, None)
+            if cursor is None
+            else (cursor.volume, str(cursor.journal_id), cursor.next_usn)
+        )
         with self._connection:
             updated = self._connection.execute(
                 "UPDATE initial_runs SET journal_volume=?,journal_id=?,start_usn=? "
                 "WHERE run_id=? AND status='running'",
-                (cursor.volume, str(cursor.journal_id), cursor.next_usn, run_id),
+                (*journal_values, run_id),
             )
             if updated.rowcount != 1:
                 raise RuntimeError(
@@ -1287,7 +1299,7 @@ class FrameworkState:
     def complete_self_analysis_run(
         self,
         run_id: int,
-        cursor: JournalCursor,
+        cursor: JournalCursor | None,
         *,
         inventory_policy: InventoryExclusionPolicy,
         code_processing_signature: str,
@@ -1391,7 +1403,13 @@ class FrameworkState:
                 WHERE run_id=? AND status='running'
                 AND run_kind='self_analysis' AND corpus_access_mode='analyze_only'
                 AND scan_id=?""",
-                (now, now, cursor.next_usn, run_id, run_evidence.scan_id),
+                (
+                    now,
+                    now,
+                    None if cursor is None else cursor.next_usn,
+                    run_id,
+                    run_evidence.scan_id,
+                ),
             )
             if updated.rowcount != 1:
                 raise RuntimeError("self-analysis completion lost its owner row")
@@ -1417,7 +1435,7 @@ class FrameworkState:
         self,
         run_id: int,
         scan_id: int,
-        cursor: JournalCursor,
+        cursor: JournalCursor | None,
         reconciliation_records: int,
         inventory_attempts: int,
         inventory_mode: str,
@@ -1429,6 +1447,14 @@ class FrameworkState:
             inventory_mode,
             0,
         )
+        if cursor is None and (
+            inventory_mode != "full"
+            or reconciliation_records != 0
+            or inventory_attempts != 1
+        ):
+            raise ValueError(
+                "portable inventory must publish one unreconciled full scan"
+            )
         with self._connection:
             result = self._connection.execute(
                 "UPDATE initial_runs SET completed_ns=?, status='completed', "
@@ -1440,7 +1466,7 @@ class FrameworkState:
                 (
                     time.time_ns(),
                     time.time_ns(),
-                    cursor.next_usn,
+                    None if cursor is None else cursor.next_usn,
                     run_id,
                     scan_id,
                     reconciliation_records,
@@ -1663,4 +1689,6 @@ class FrameworkState:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+
+
 # endregion [02]

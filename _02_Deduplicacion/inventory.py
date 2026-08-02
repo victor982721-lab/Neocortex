@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -97,12 +96,17 @@ class DedupIndex:
         if row is None:
             return None
         scan_id, volume, journal_id, next_usn, valid, policy_signature = row
+        journal_values = (volume, journal_id, next_usn)
+        if any(value is None for value in journal_values) and not all(
+            value is None for value in journal_values
+        ):
+            raise InventoryError("inventory publication has a partial USN cursor")
         return InventoryCheckpoint(
             root_path,
             int(scan_id),
-            str(volume),
-            int(journal_id),
-            int(next_usn),
+            None if volume is None else str(volume),
+            None if journal_id is None else int(journal_id),
+            None if next_usn is None else int(next_usn),
             bool(valid),
             (
                 None
@@ -182,6 +186,15 @@ class DedupIndex:
         self,
         checkpoint: InventoryCheckpoint,
     ) -> InventoryCheckpoint:
+        journal_values = (
+            checkpoint.volume,
+            checkpoint.journal_id,
+            checkpoint.next_usn,
+        )
+        if any(value is None for value in journal_values) and not all(
+            value is None for value in journal_values
+        ):
+            raise InventoryError("inventory publication has a partial USN cursor")
         root_path = os.path.abspath(checkpoint.root)
         scan_root, scan_signature = self._require_publishable_scan(checkpoint.scan_id)
         normalized_scan_root = os.path.abspath(os.fspath(scan_root))
@@ -234,7 +247,7 @@ class DedupIndex:
                 os.path.abspath(checkpoint.root),
                 checkpoint.scan_id,
                 checkpoint.volume,
-                str(checkpoint.journal_id),
+                (None if checkpoint.journal_id is None else str(checkpoint.journal_id)),
                 checkpoint.next_usn,
                 int(checkpoint.valid),
                 time.time_ns(),
@@ -996,4 +1009,6 @@ class DedupIndex:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         self.close()
+
+
 # endregion [02]

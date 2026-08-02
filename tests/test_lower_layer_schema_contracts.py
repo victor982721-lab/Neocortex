@@ -205,7 +205,7 @@ def test_dedup_migrates_each_historical_version_and_preserves_rows(
 
     initialize_inventory_schema(database)
 
-    assert _metadata(database) == {"preserved": "yes", "schema_version": "8"}
+    assert _metadata(database) == {"preserved": "yes", "schema_version": "9"}
     with sqlite3.connect(database) as connection:
         validate_inventory_schema(connection)
         if version in {2, 3, 5}:
@@ -256,8 +256,9 @@ def test_dedup_records_every_sequential_version_inside_migration(
     ]
     assert [
         f"'{version}'" in statement
-        for version, statement in zip(range(2, 9), updates, strict=True)
+        for version, statement in zip(range(2, 10), updates, strict=True)
     ] == [
+        True,
         True,
         True,
         True,
@@ -301,7 +302,7 @@ def test_dedup_rolls_back_all_steps_when_final_contract_fails(
 # region [03] Dedup read-only rejection and exact index semantics
 
 
-@pytest.mark.parametrize("raw_version", ("9", "08", "future"))
+@pytest.mark.parametrize("raw_version", ("10", "09", "future"))
 def test_dedup_rejects_unsupported_or_noncanonical_version_without_mutation(
     tmp_path: Path,
     raw_version: str,

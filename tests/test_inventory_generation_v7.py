@@ -117,7 +117,7 @@ def test_populated_v6_migration_preserves_rows_checkpoint_and_bytes(
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone() == ("8",)
+        ).fetchone() == ("9",)
         assert connection.execute(
             """SELECT scan_id,status,files_seen,bytes_seen,
             inventory_policy_signature FROM scans"""
@@ -463,4 +463,6 @@ def test_incremental_checkpoint_and_aggregates_commit_or_rollback_together(
         assert committed.bytes_seen == len(b"first") + len(b"second-file")
         assert index.file_count(scan.scan_id) == 2
         assert index.inventory_checkpoint(root) == advanced
+
+
 # endregion [02]

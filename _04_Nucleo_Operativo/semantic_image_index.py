@@ -48,6 +48,7 @@ from .semantic_state import (
     enqueue_text_chunk_jobs_bounded,
     finalize_semantic_item_refresh,
     finalize_text_chunk_refresh,
+    generation_summary,
     prepare_embedding_generation,
     publish_text_channel_revision,
     stage_semantic_items,
@@ -56,6 +57,7 @@ from .semantic_state import (
     update_embedding_generation_cursor,
 )
 from .semantic_work_budget import (
+    SemanticIndexDeadlineExceeded,
     SemanticWorkBudget,
     unlimited_semantic_work_budget,
 )
@@ -372,13 +374,23 @@ def index_image_embeddings(
                 ocr_generation_id,
                 cursor=paused_cursor,
             )
-    image_reused = prepare_embedding_generation(
-        database,
-        image_generation_id,
-        enumeration_complete=enumeration_complete,
-    )
-    generation_results = [
-        (
+    try:
+        image_reused = prepare_embedding_generation(
+            database,
+            image_generation_id,
+            enumeration_complete=enumeration_complete,
+            work_budget=budget,
+        )
+    except SemanticIndexDeadlineExceeded:
+        image_result = GenerationWorkResult(
+            generation_summary(database, image_generation_id),
+            image_queued,
+            0,
+            0,
+            0,
+        )
+    else:
+        image_result = (
             GenerationWorkResult(image_reused, 0, 0, 0, 0)
             if image_reused is not None
             else generation_runner(
@@ -390,7 +402,7 @@ def index_image_embeddings(
                 publish_if_complete=enumeration_complete,
             )
         )
-    ]
+    generation_results = [image_result]
     if ocr_generation_id is not None and text_backend is not None:
         if enumeration_complete:
             update_embedding_generation_cursor(
@@ -404,23 +416,35 @@ def index_image_embeddings(
                     "chunks": chunks_staged,
                 },
             )
-        ocr_reused = prepare_embedding_generation(
-            database,
-            ocr_generation_id,
-            enumeration_complete=enumeration_complete,
-        )
-        generation_results.append(
-            GenerationWorkResult(ocr_reused, 0, 0, 0, 0)
-            if ocr_reused is not None
-            else generation_runner(
+        try:
+            ocr_reused = prepare_embedding_generation(
                 database,
                 ocr_generation_id,
-                text_backend,
-                queued=ocr_queued,
                 work_budget=budget,
-                publish_if_complete=enumeration_complete,
+                enumeration_complete=enumeration_complete,
             )
-        )
+        except SemanticIndexDeadlineExceeded:
+            ocr_result = GenerationWorkResult(
+                generation_summary(database, ocr_generation_id),
+                ocr_queued,
+                0,
+                0,
+                0,
+            )
+        else:
+            ocr_result = (
+                GenerationWorkResult(ocr_reused, 0, 0, 0, 0)
+                if ocr_reused is not None
+                else generation_runner(
+                    database,
+                    ocr_generation_id,
+                    text_backend,
+                    queued=ocr_queued,
+                    work_budget=budget,
+                    publish_if_complete=enumeration_complete,
+                )
+            )
+        generation_results.append(ocr_result)
     return SemanticIndexResult(
         database,
         ("image", "image-ocr") if embed_ocr_text else ("image",),

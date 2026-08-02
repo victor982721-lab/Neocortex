@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -39,6 +38,7 @@ def _summary(
         bootstrap_runs=1,
         change_runs=2,
         discontinuity_runs=0,
+        portable_runs=1,
         successful_runs=3,
         failed_runs=failed_runs,
         signal_batches=2,
@@ -94,6 +94,15 @@ def test_watcher_timing_options_require_watch_and_remain_bounded() -> None:
     ):
         validate_arguments(invalid)
 
+    invalid_portable = build_parser().parse_args(
+        ("--watch", "--watch-portable-interval-seconds", "nan")
+    )
+    with pytest.raises(
+        SystemExit,
+        match="--watch-portable-interval-seconds must be between 1 and 86400",
+    ):
+        validate_arguments(invalid_portable)
+
 
 def test_watch_all_expands_the_normal_integrated_configuration() -> None:
     args = build_parser().parse_args(("--watch", "--all"))
@@ -132,6 +141,8 @@ def test_watch_dispatch_builds_normal_config_reports_and_bridges_cancellation(
             "8",
             "--watch-error-backoff-multiplier",
             "1.5",
+            "--watch-portable-interval-seconds",
+            "45",
         )
     )
     validate_arguments(args)
@@ -190,6 +201,7 @@ def test_watch_dispatch_builds_normal_config_reports_and_bridges_cancellation(
     assert watch_config.error_backoff_initial_seconds == 0.25
     assert watch_config.error_backoff_max_seconds == 8
     assert watch_config.error_backoff_multiplier == 1.5
+    assert watch_config.portable_interval_seconds == 45
     assert watcher_class.call_args.kwargs["progress"] is progress
     bridge_class.assert_called_once_with(fake_watcher.request_cancellation)
 
@@ -224,4 +236,6 @@ def test_watch_dispatch_returns_error_for_retained_watcher_failures(tmp_path) ->
         ),
     ):
         assert dispatch_direct(args) == 2
+
+
 # endregion [02]

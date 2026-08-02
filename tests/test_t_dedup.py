@@ -75,12 +75,14 @@ class PlannerTests(unittest.TestCase):
                 )
             }
             connection.close()
-            self.assertEqual(version, "8")
+            self.assertEqual(version, "9")
             self.assertIn("planned_duplicate_groups", tables)
             self.assertIn("planned_duplicate_members", tables)
             self.assertIn("inventory_checkpoints", tables)
 
-    def test_schema_three_fixture_invalidates_the_old_inventory_checkpoint(self) -> None:
+    def test_schema_three_fixture_invalidates_the_old_inventory_checkpoint(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "state.db"
             with closing(sqlite3.connect(database)) as connection:
@@ -120,7 +122,7 @@ class PlannerTests(unittest.TestCase):
                 version = connection.execute(
                     "SELECT value FROM metadata WHERE key='schema_version'"
                 ).fetchone()[0]
-            self.assertEqual(version, "8")
+            self.assertEqual(version, "9")
 
     def test_reuses_inventory_checkpoint_and_advances_it_with_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

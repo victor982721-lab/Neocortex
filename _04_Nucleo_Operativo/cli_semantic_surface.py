@@ -211,6 +211,13 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
     semantic_actions = len(
         selected_direct_operations(args, family=DirectOperationFamily.SEMANTIC)
     )
+    code_semantic_search = bool(
+        args.code_search is not None
+        and any(
+            mode in {"semantic", "hybrid"}
+            for mode in tuple(args.code_search_mode or ("hybrid",))
+        )
+    )
     if semantic_actions > 1:
         raise SystemExit("semantic direct actions are mutually exclusive")
     _validate_semantic_values(args)
@@ -232,7 +239,13 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         "semantic_max_new_jobs",
         "semantic_time_budget_seconds",
     }
-    if not semantic_actions and optional_names.intersection(explicit):
+    code_search_options = (
+        {"semantic_model_cache", "semantic_threads"} if code_semantic_search else set()
+    )
+    unsupported_without_semantic_action = (
+        optional_names.intersection(explicit) - code_search_options
+    )
+    if not semantic_actions and unsupported_without_semantic_action:
         raise SystemExit("semantic options require one semantic direct action")
     text_scope = args.semantic_index in {"text", "all"} or args.semantic_plan in {
         "text",
@@ -279,6 +292,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         or args.semantic_index is not None
         or args.semantic_search is not None
         or args.semantic_classify is not None
+        or code_semantic_search
     )
     if {"semantic_model_cache", "semantic_threads"}.intersection(
         explicit

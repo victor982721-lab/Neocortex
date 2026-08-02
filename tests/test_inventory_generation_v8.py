@@ -107,7 +107,7 @@ def test_fresh_v8_persists_policy_signature_and_is_idempotent(
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone() == ("8",)
+        ).fetchone() == ("9",)
         assert connection.execute(
             "SELECT inventory_policy_signature FROM scans WHERE scan_id=?",
             (scan.scan_id,),
@@ -133,7 +133,7 @@ def test_v7_to_v8_preserves_rows_and_bytes_but_invalidates_checkpoint(
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone() == ("8",)
+        ).fetchone() == ("9",)
         assert connection.execute(
             """SELECT scan_id,status,files_seen,bytes_seen,
             inventory_policy_signature FROM scans"""
@@ -203,4 +203,6 @@ def test_checkpoint_rejects_a_signature_that_differs_from_its_scan(
                 )
             )
         assert index.inventory_checkpoint(root) is None
+
+
 # endregion [02]

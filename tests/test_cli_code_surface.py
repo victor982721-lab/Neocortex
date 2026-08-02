@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -161,6 +160,14 @@ EXPECTED_CODE_ACTIONS = (
         "code_status",
         "show bounded code database, analyzer and index status",
     ),
+    _expected_flag(
+        "--code-review",
+        "code_review",
+        (
+            "show a deterministic read-only top-10 maintenance shortlist from "
+            "published self-analysis"
+        ),
+    ),
     _expected_store(
         "--code-search",
         "code_search",
@@ -248,6 +255,8 @@ EXPECTED_CODE_HELP = (
     "                        retain vendored artifacts in structural analysis\n"
     "  --retry-code-errors   retry unchanged partial or failed code observations\n"
     "  --code-status         show bounded code database, analyzer and index status\n"
+    "  --code-review         show a deterministic read-only top-10 maintenance\n"
+    "                        shortlist from published self-analysis\n"
     "  --code-search QUERY\n"
     "  --code-search-mode "
     "{literal,fts,path,language,symbol,definition,reference,import,dependency,call,"
@@ -379,4 +388,6 @@ def test_code_validation_error_precedence_remains_stable(
         validate_arguments(args)
 
     assert str(raised.value) == message
+
+
 # endregion [02]

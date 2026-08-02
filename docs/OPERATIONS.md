@@ -42,9 +42,11 @@ auditoría integral no son el punto de partida.
 
 3. Confirme la raíz exacta y que no sea un symlink, junction o punto de
    reanálisis.
-4. Para enumeración NTFS/USN, use un volumen NTFS local y los permisos de lectura
-   requeridos. Las rutas UNC y otros sistemas de archivos no ofrecen el mismo
-   contrato.
+4. El recorrido portable funciona sin USN. Para probar su acelerador opcional,
+   use un volumen NTFS local y los permisos de lectura ya disponibles; no eleve
+   la corrida cotidiana sólo para habilitarlo. Las rutas UNC y otros sistemas de
+   archivos no ofrecen identidad/USN equivalentes, pero sí pueden usar el
+   baseline portable si cumplen el resto de las protecciones de la raíz.
 5. Antes de una actualización, migración o acción sobre archivos, siga
    [RECOVERY.md](RECOVERY.md).
 
@@ -126,6 +128,21 @@ ellas, causa abstención total con código `2` sin tocar el estado. Consulte
 [SELF_ANALYSIS.md](SELF_ANALYSIS.md) para preflight, policy/firma, puerta
 incremental, manifest y conteos cero.
 
+La ruta Code hace checkpoint al publicar y retira sidecars vacíos de forma
+segura. Si un lector externo conserva handles sobre ellos, el run completado
+permanece válido, pero el status seguirá absteniéndose hasta que el lector
+cierre y una corrida posterior pueda limpiar los auxiliares.
+Una búsqueda o listado sobre una base quiescente usa `immutable=1` con cercas y
+no crea sidecars; si ya hay un writer activo usa read-only convencional y nunca
+borra ni hace checkpoint de auxiliares ajenos.
+
+No eleve el proceso sólo para habilitar USN en este preset. Si el journal no es
+accesible, el autoanálisis recorre la raíz completa, no publica checkpoint y
+declara `journal_status=unavailable`; el replay todavía debe demostrar hits de
+caché y cero bytes de código releídos. La operación normal también puede
+recorrer y publicar un snapshot portable; el checkpoint conserva sus tres
+campos USN en `NULL` y las rutas reutilizan caches por identidad/metadata.
+
 Sólo un cambio al autoanálisis o un cierre de release requiere un smoke de la
 raíz canónica. En ese caso analiza `%USERPROFILE%\Neocortex\Repository` con un
 estado externo nuevo bajo
@@ -203,6 +220,7 @@ Opciones y valores predeterminados:
 | `--watch-error-backoff-initial-seconds` | `1` | Puede ser cero. |
 | `--watch-error-backoff-max-seconds` | `60` | No menor que el inicial. |
 | `--watch-error-backoff-multiplier` | `2` | Mínimo 1. |
+| `--watch-portable-interval-seconds` | `300` | De 1 a 86 400; sólo gobierna el recorrido normal cuando no hay USN. |
 
 Ejemplo con política explícita para una ruta ya aprobada:
 
@@ -217,7 +235,13 @@ Neocortex --root $Root --watch --route pdf `
 El watcher rechaza `--apply`, `--route-only`, `--resume-run` y
 `--candidate-run`. Los cambios USN actúan como señales para nuevas corridas;
 no convierten el journal en un backup ni prueban por sí solos que una
-exploración parcial sea completa.
+exploración parcial sea completa. Sin cursor USN compatible, espera el intervalo
+portable y ejecuta la corrida integrada normal: el inventario vuelve a recorrer
+la raíz, mientras las rutas reutilizan sus caches por identidad y versión. No se
+crea un cursor sintético, un datastore ni un indexador paralelo.
+La recarga del owner durable entre ciclos usa una instantánea immutable cercada:
+no crea `framework.sqlite3-wal/-shm` sobre una publicación quiescente y se
+abstiene con el backoff normal si detecta un writer o sidecars activos.
 
 Durante toda su vida adquiere un lease del sistema operativo por la combinación
 canónica de raíz y directorio de estado. El archivo
@@ -293,10 +317,11 @@ El fastpath del grafo sólo aplica a una corrida completa de `code`, sin
 `--code-max-count` ni filtros de selección. Primero se ejecuta `mark_missing`;
 si no hubo invalidaciones ni trabajo nuevo, todos los candidatos fueron hits
 compatibles con el runtime y el run completo inmediatamente anterior publicó el
-fence tipado exacto con `resolver_signature=code-graph-resolver-v3`, se reutiliza
+fence tipado exacto con `resolver_signature=code-graph-resolver-v4`, se reutiliza
 el conteo de proyectos. Esa versión resuelve símbolos y dependencias mediante
-conjuntos temporales indexados y sincroniza los labels FTS distintos en una
-pasada, no con una consulta o actualización por relación o versión. Una
+conjuntos temporales indexados, prioriza ámbito local y rutas relativas exactas,
+y sincroniza los labels FTS distintos en una pasada, no con una consulta o
+actualización por relación o versión. Una
 base existente sin fence, un run intermedio, un manifest/move o cualquier
 evidencia malformada fuerzan `finalize_graph` y reconstruyen membresías y FTS.
 
@@ -329,7 +354,9 @@ durables nuevos o reactivados y 900 segundos. El presupuesto es compartido por
 texto, imagen y OCR; `all` no reinicia el reloj entre modalidades. Los replays
 exactos no consumen los límites de items o jobs, pero todavía enumeran la fuente
 en O(n); cuando no hay cambios reutilizan el head publicado sin clonarlo. Una
-generación con altas, bajas o cambios todavía materializa su base en O(n).
+generación con altas, bajas o cambios todavía materializa su base en O(n), pero
+el clon avanza por páginas con cursor durable, high-watermark fijado y deadline
+compartido; al reanudar no repite el prefijo ya confirmado.
 
 El texto se ajusta con el tokenizador real antes de persistir cada job y el
 backend rechaza truncamiento. Cada fuente confirma staging por lotes; fallo,
@@ -510,10 +537,12 @@ downgrade de base atribuible a Knowledge; cualquier otra migración o cambio de
 estado realizado por comandos distintos conserva su propio contrato de
 recuperación.
 
-La fuente `0.7.2` declara framework v20 y Dedup v8. Framework 19→20 preserva
+La fuente `0.7.2` declara framework v20 y Dedup v9. Framework 19→20 preserva
 filas legacy como `normal`; Dedup 7→8 agrega la firma cruda de inventario a los
 scans, conserva scans/archivos/bytes e invalida checkpoints sin firma en vez de
-inventar evidencia. Ninguna migración ofrece downgrade. Abra bases vivas sólo
+inventar evidencia. Dedup 8→9 conserva esas publicaciones y permite que
+`volume`, `journal_id` y `next_usn` sean todos `NULL` o todos presentes, para
+separar publicación de aceleración USN. Ninguna migración ofrece downgrade. Abra bases vivas sólo
 con el runtime versionado validado; el rollback exige paquete compatible y
 backup completo, nunca editar `schema_version`.
 

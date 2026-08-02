@@ -20,12 +20,41 @@ from neocortex.sqlite_schema_lifecycle import (
 from .errors import InventoryError
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _SCHEMA_LABEL = "dedup inventory"
 _METADATA_DDL = """
 CREATE TABLE metadata (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
+) WITHOUT ROWID
+"""
+_V8_CHECKPOINT_DDL = """
+CREATE TABLE inventory_checkpoints (
+    root TEXT PRIMARY KEY COLLATE NOCASE,
+    scan_id INTEGER NOT NULL,
+    volume TEXT NOT NULL,
+    journal_id TEXT NOT NULL,
+    next_usn INTEGER NOT NULL,
+    valid INTEGER NOT NULL CHECK(valid IN (0,1)),
+    updated_ns INTEGER NOT NULL,
+    FOREIGN KEY(scan_id) REFERENCES scans(scan_id) ON DELETE RESTRICT
+) WITHOUT ROWID
+"""
+_CURRENT_CHECKPOINT_DDL = """
+CREATE TABLE inventory_checkpoints (
+    root TEXT PRIMARY KEY COLLATE NOCASE,
+    scan_id INTEGER NOT NULL,
+    volume TEXT,
+    journal_id TEXT,
+    next_usn INTEGER,
+    valid INTEGER NOT NULL CHECK(valid IN (0,1)),
+    updated_ns INTEGER NOT NULL,
+    FOREIGN KEY(scan_id) REFERENCES scans(scan_id) ON DELETE RESTRICT,
+    CHECK(
+        (volume IS NULL AND journal_id IS NULL AND next_usn IS NULL)
+        OR
+        (volume IS NOT NULL AND journal_id IS NOT NULL AND next_usn IS NOT NULL)
+    )
 ) WITHOUT ROWID
 """
 _CURRENT_DDL = (
@@ -50,18 +79,7 @@ _CURRENT_DDL = (
         inventory_policy_signature TEXT
     )
     """,
-    """
-    CREATE TABLE inventory_checkpoints (
-        root TEXT PRIMARY KEY COLLATE NOCASE,
-        scan_id INTEGER NOT NULL,
-        volume TEXT NOT NULL,
-        journal_id TEXT NOT NULL,
-        next_usn INTEGER NOT NULL,
-        valid INTEGER NOT NULL CHECK(valid IN (0,1)),
-        updated_ns INTEGER NOT NULL,
-        FOREIGN KEY(scan_id) REFERENCES scans(scan_id) ON DELETE RESTRICT
-    ) WITHOUT ROWID
-    """,
+    _CURRENT_CHECKPOINT_DDL,
     """
     CREATE TABLE files (
         scan_id INTEGER NOT NULL,
@@ -134,10 +152,16 @@ _CURRENT_DDL = (
     """,
 )
 
-# The first seven v8 statements own generation publication; later statements
+# The first seven v9 statements own generation publication; later statements
 # are unchanged cache/plan objects shared with v6 and v7. Explicit legacy
 # builders let migrations abstain on unknown source structures.
 _CURRENT_SHARED_DDL_START = 7
+_V8_GENERATIONAL_DDL = (
+    _METADATA_DDL,
+    _CURRENT_DDL[1],
+    _V8_CHECKPOINT_DDL,
+    *_CURRENT_DDL[3:_CURRENT_SHARED_DDL_START],
+)
 _V7_GENERATIONAL_DDL = (
     _METADATA_DDL,
     """
@@ -159,7 +183,8 @@ _V7_GENERATIONAL_DDL = (
             CHECK(status IN ('building','complete','partial'))
     )
     """,
-    *_CURRENT_DDL[2:_CURRENT_SHARED_DDL_START],
+    _V8_CHECKPOINT_DDL,
+    *_CURRENT_DDL[3:_CURRENT_SHARED_DDL_START],
 )
 _V6_GENERATIONAL_DDL = (
     _METADATA_DDL,
@@ -371,6 +396,11 @@ def _build_v7_schema(connection: sqlite3.Connection) -> None:
     _execute_ddl(connection, _CURRENT_DDL[_CURRENT_SHARED_DDL_START:])
 
 
+def _build_v8_schema(connection: sqlite3.Connection) -> None:
+    _execute_ddl(connection, _V8_GENERATIONAL_DDL)
+    _execute_ddl(connection, _CURRENT_DDL[_CURRENT_SHARED_DDL_START:])
+
+
 @lru_cache(maxsize=1)
 def _metadata_contract() -> SQLiteSchemaContract:
     return schema_contract_from_builder(_build_metadata_schema)
@@ -378,7 +408,7 @@ def _metadata_contract() -> SQLiteSchemaContract:
 
 @lru_cache(maxsize=1)
 def inventory_schema_contract() -> SQLiteSchemaContract:
-    """Return the exact structural contract for inventory schema v8."""
+    """Return the exact structural contract for inventory schema v9."""
 
     return schema_contract_from_builder(_build_current_schema)
 
@@ -393,6 +423,11 @@ def _inventory_v7_schema_contract() -> SQLiteSchemaContract:
     return schema_contract_from_builder(_build_v7_schema)
 
 
+@lru_cache(maxsize=1)
+def _inventory_v8_schema_contract() -> SQLiteSchemaContract:
+    return schema_contract_from_builder(_build_v8_schema)
+
+
 def _validate_metadata(connection: sqlite3.Connection) -> None:
     validate_sqlite_schema_contract(
         connection,
@@ -402,7 +437,7 @@ def _validate_metadata(connection: sqlite3.Connection) -> None:
 
 
 def validate_inventory_schema(connection: sqlite3.Connection) -> None:
-    """Validate every persistent v8 table and index without changing state."""
+    """Validate every persistent v9 table and index without changing state."""
 
     validate_sqlite_schema_contract(
         connection,
@@ -549,7 +584,7 @@ def _migrate_six_to_seven(connection: sqlite3.Connection) -> None:
                           WHERE f.scan_id=scans.scan_id)
         THEN 'complete' ELSE 'partial' END"""
     )
-    connection.execute(_CURRENT_DDL[2])
+    connection.execute(_V8_CHECKPOINT_DDL)
     connection.execute(_CURRENT_DDL[3])
     connection.execute(
         """INSERT INTO files(
@@ -651,6 +686,44 @@ def _migrate_seven_to_eight(connection: sqlite3.Connection) -> None:
         raise InventoryError("dedup inventory v8 foreign-key validation failed")
 
 
+def _migrate_eight_to_nine(connection: sqlite3.Connection) -> None:
+    """Decouple snapshot publication from the optional USN acceleration cursor."""
+
+    validate_sqlite_schema_contract(
+        connection,
+        _inventory_v8_schema_contract(),
+        label=f"{_SCHEMA_LABEL} v8 migration source",
+        exact=True,
+    )
+    checkpoint_count = int(
+        connection.execute("SELECT COUNT(*) FROM inventory_checkpoints").fetchone()[0]
+    )
+    connection.execute(
+        "ALTER TABLE inventory_checkpoints RENAME TO inventory_checkpoints_v8"
+    )
+    connection.execute(_CURRENT_CHECKPOINT_DDL)
+    connection.execute(
+        """INSERT INTO inventory_checkpoints(
+        root,scan_id,volume,journal_id,next_usn,valid,updated_ns)
+        SELECT root,scan_id,volume,journal_id,next_usn,valid,updated_ns
+        FROM inventory_checkpoints_v8"""
+    )
+    if (
+        int(
+            connection.execute("SELECT COUNT(*) FROM inventory_checkpoints").fetchone()[
+                0
+            ]
+        )
+        != checkpoint_count
+    ):
+        raise InventoryError(
+            "dedup inventory v9 publication count changed during migration"
+        )
+    connection.execute("DROP TABLE inventory_checkpoints_v8")
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise InventoryError("dedup inventory v9 foreign-key validation failed")
+
+
 _MIGRATIONS = {
     1: _migrate_one_to_two,
     2: _migrate_two_to_three,
@@ -659,6 +732,7 @@ _MIGRATIONS = {
     5: _migrate_five_to_six,
     6: _migrate_six_to_seven,
     7: _migrate_seven_to_eight,
+    8: _migrate_eight_to_nine,
 }
 
 

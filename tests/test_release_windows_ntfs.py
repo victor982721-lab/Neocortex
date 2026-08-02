@@ -326,6 +326,25 @@ def test_ntfs_module_has_one_way_dag_bounded_size_and_no_path_delete() -> None:
     assert "SetFileInformationByHandle" in sources[1]
 
 
+def test_security_descriptor_canonicalization_is_exact_and_idempotent() -> None:
+    native = importlib.import_module(_NATIVE_MODULE_NAME)
+    descriptor = bytes((1, 0, 0x04, 0x84, *range(16), 0xAA, 0x55))
+
+    canonical = native._canonical_security_descriptor(descriptor)
+
+    assert canonical[:2] == descriptor[:2]
+    assert canonical[2:4] == bytes((0x04, 0x80))
+    assert canonical[4:] == descriptor[4:]
+    assert native._canonical_security_descriptor(canonical) == canonical
+
+
+def test_security_descriptor_canonicalization_rejects_short_header() -> None:
+    native = importlib.import_module(_NATIVE_MODULE_NAME)
+
+    with pytest.raises(ReleaseTransitionError, match="relative header"):
+        native._canonical_security_descriptor(bytes(19))
+
+
 def test_snapshot_by_handle_captures_exact_identity_content_acl_and_topology(
     ntfs_module: ModuleType,
     ntfs_case: _NtfsCase,
@@ -1631,4 +1650,6 @@ def test_real_ops_integrate_with_w1_promote_replay_and_rollback_stub(
     assert len(native.calls) == 2
     assert transition_launcher(rollback_request, ops=ops, native=native) == rolled_back
     assert len(native.calls) == 2
+
+
 # endregion [02]
