@@ -71,11 +71,11 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
 - Base publicada al iniciar este corte: `main` en
-  `f0096ab31089d250f8a00cf01e7fc67f1f71f2fa`, idéntico a `origin/main` tras
-  fusionar el PR #6.
-- El checkout fuente es `0.7.2`. El cierre del hotspot Semantic se rastrea en
-  el PR #7; su implementación base es
-  `67dc0c3aa51e70db33f862404390ed9d8c63a3cc`. La igualdad final entre `main` y
+  `6cd127984acbeeb8a88905ea308295913df5cf53`, idéntico a `origin/main` tras
+  fusionar el PR #7.
+- El checkout fuente es `0.7.2`. El cierre del hotspot Knowledge context se
+  rastrea en el PR #8; su implementación base es
+  `aef3513e799f156b3bb49192bce2f024b3d7e997`. La igualdad final entre `main` y
   `origin/main` se verifica después del merge porque el commit no puede
   autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
