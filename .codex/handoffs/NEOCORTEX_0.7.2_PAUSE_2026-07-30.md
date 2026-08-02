@@ -59,9 +59,11 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Base publicada al iniciar este corte: `main` en
   `26941857487f9837b0f3256d7a606a24ca4c9916`, idéntico a `origin/main` tras
   fusionar el PR #5.
-- El checkout fuente es `0.7.2`; el Actionability Gate se prepara en
-  `codex/neocortex-actionability-gate`. Su commit/merge final debe verificarse
-  en Git porque este handoff forma parte de ese mismo corte.
+- El checkout fuente es `0.7.2`. El Actionability Gate se rastrea en el PR #6;
+  su implementación base es
+  `edbbf8d07313262e119f02d90b56d833f7c675f6`. La igualdad final entre `main` y
+  `origin/main` se verifica después del merge porque el commit no puede
+  autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
