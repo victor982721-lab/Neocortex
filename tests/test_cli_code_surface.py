@@ -164,9 +164,17 @@ EXPECTED_CODE_ACTIONS = (
         "--code-review",
         "code_review",
         (
-            "show a deterministic read-only top-10 maintenance shortlist from "
-            "published self-analysis"
+            "show deterministic read-only maintenance recommendations and the "
+            "underlying hotspot ranking"
         ),
+    ),
+    _expected_store(
+        "--code-review-limit",
+        "code_review_limit",
+        default=10,
+        type_name="int",
+        metavar="N",
+        help_text=("inspect 1 to 50 raw hotspots; values above 10 require --code-json"),
     ),
     _expected_store(
         "--code-publication-diff",
@@ -264,8 +272,11 @@ EXPECTED_CODE_HELP = (
     "                        retain vendored artifacts in structural analysis\n"
     "  --retry-code-errors   retry unchanged partial or failed code observations\n"
     "  --code-status         show bounded code database, analyzer and index status\n"
-    "  --code-review         show a deterministic read-only top-10 maintenance\n"
-    "                        shortlist from published self-analysis\n"
+    "  --code-review         show deterministic read-only maintenance\n"
+    "                        recommendations and the underlying hotspot ranking\n"
+    "  --code-review-limit N\n"
+    "                        inspect 1 to 50 raw hotspots; values above 10 require\n"
+    "                        --code-json\n"
     "  --code-publication-diff BASELINE_STATE\n"
     "                        compare the current completed Code publication with a\n"
     "                        baseline state without writing either owner\n"
@@ -383,6 +394,14 @@ def test_code_explicit_aliases_and_abbreviation_policy_remain_stable() -> None:
         (
             ("--code-reconstruct-strategy", "branches", "--code-json"),
             "--code-reconstruct-strategy requires --code-reconstruct",
+        ),
+        (
+            ("--code-review-limit", "11"),
+            "--code-review-limit requires --code-review",
+        ),
+        (
+            ("--code-review", "--code-review-limit", "11"),
+            "--code-review-limit above 10 requires --code-json",
         ),
         (
             ("--code-status", "--code-json", "--route", "code", "--apply"),

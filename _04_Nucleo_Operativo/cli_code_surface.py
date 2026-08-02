@@ -79,9 +79,16 @@ def register_code_arguments(
         "--code-review",
         action="store_true",
         help=(
-            "show a deterministic read-only top-10 maintenance shortlist from "
-            "published self-analysis"
+            "show deterministic read-only maintenance recommendations and the "
+            "underlying hotspot ranking"
         ),
+    )
+    code.add_argument(
+        "--code-review-limit",
+        type=int,
+        default=10,
+        metavar="N",
+        help=("inspect 1 to 50 raw hotspots; values above 10 require --code-json"),
     )
     code.add_argument(
         "--code-publication-diff",
@@ -146,6 +153,21 @@ def register_code_arguments(
 # region [03] Stable validation and error precedence
 
 
+def _validate_code_review_limit(args: argparse.Namespace) -> None:
+    if not 1 <= args.code_review_limit <= 50:
+        raise SystemExit("--code-review-limit must be between 1 and 50")
+
+
+def _validate_code_review_selection(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
+    if "code_review_limit" in explicit and not args.code_review:
+        raise SystemExit("--code-review-limit requires --code-review")
+    if args.code_review and args.code_review_limit > 10 and not args.code_json:
+        raise SystemExit("--code-review-limit above 10 requires --code-json")
+
+
 def validate_code_arguments(args: argparse.Namespace) -> None:
     """Validate Code route and direct selections in the established order."""
 
@@ -166,6 +188,7 @@ def validate_code_arguments(args: argparse.Namespace) -> None:
             raise SystemExit("--code-search cannot exceed 4096 characters")
     if not 1 <= args.code_search_limit <= 1000:
         raise SystemExit("--code-search-limit must be between 1 and 1000")
+    _validate_code_review_limit(args)
     if args.code_min_complexity is not None and args.code_min_complexity < 0:
         raise SystemExit("--code-min-complexity cannot be negative")
     if args.code_search_mode and len(set(args.code_search_mode)) != len(
@@ -174,6 +197,7 @@ def validate_code_arguments(args: argparse.Namespace) -> None:
         raise SystemExit("--code-search-mode values cannot be duplicated")
 
     explicit = set(getattr(args, "_explicit_options", ()))
+    _validate_code_review_selection(args, explicit)
     search_options = {
         "code_search_mode",
         "code_search_limit",

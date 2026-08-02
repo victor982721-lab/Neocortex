@@ -26,12 +26,21 @@ del rango 2 al 39. Una muestra portable de 40 `probable_dead_symbol` encontró
 36 usos demostrables, un contrato externo y tres candidatos de revisión; la
 señal falla el gate de 0.90 y permanece suprimida.
 
-El siguiente corte rc14 cierra el primer hotspot accionable producido por ese
+El corte rc14 cierra el primer hotspot accionable producido por ese
 ranking. `knowledge_search.execute_knowledge_search` pasa de 416 líneas y
 complejidad 75 a un orquestador de 26 líneas; las fases conservan seams, orden,
 cancelación, telemetría y completitud. El diff rc12→rc14 retira exactamente ese
 hotspot, no añade ninguno y conserva cero resoluciones nuevas, corregidas o
 perdidas sobre las calls comunes.
+
+El corte focal rc16 añade el Actionability Gate al consumidor read-only. El
+contrato `neocortex.code-review/v2` conserva el ranking bruto, pero antepone
+hasta tres recomendaciones `act_now`, separa callers de producción/pruebas,
+clasifica la construcción y expone riesgo, contratos y validación sugerida. En
+la publicación real rc16 el validator del rango bruto 1 queda en
+`characterize_first`; `_queue_job_rows_bounded`, rango bruto 2, es la primera
+recomendación. Un rc15 intermedio fue rechazado porque el propio gate creó un
+hotspot; la partición final lo retiró antes de aceptar el candidato.
 
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
@@ -47,12 +56,12 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada de esta continuación: `main` en
-  `147a500cc659b859e9eb997d261f9912b97ef847`, idéntico a `origin/main` tras
-  fusionar el PR #4.
-- El checkout fuente es `0.7.2`; el cierre del hotspot Knowledge se prepara en
-  `codex/neocortex-knowledge-search-hotspot`. Su commit/merge final debe
-  verificarse en Git porque este handoff forma parte de ese mismo corte.
+- Base publicada al iniciar este corte: `main` en
+  `26941857487f9837b0f3256d7a606a24ca4c9916`, idéntico a `origin/main` tras
+  fusionar el PR #5.
+- El checkout fuente es `0.7.2`; el Actionability Gate se prepara en
+  `codex/neocortex-actionability-gate`. Su commit/merge final debe verificarse
+  en Git porque este handoff forma parte de ese mismo corte.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
@@ -212,6 +221,21 @@ ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
 
+### Candidato focal `rc16` — Actionability Gate
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc16-actionability\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `152ADFA1B9EA0EA501CF974980BC8099C0030685FA5949FF04F1F3D2CB864A25`;
+- 1 329 688 bytes, 271 miembros y `ZipFile.testzip()` limpio; los dos módulos
+  nuevos de actionability/modelos están presentes;
+- `Neocortex 0.7.2`, `pip check` limpio e imports confirmados desde el
+  `site-packages` del venv rc16;
+- el launcher instalado emitió `neocortex.code-review/v2`, 50 findings y tres
+  recomendaciones, sin cambiar el SHA-256 de ninguna SQLite ni crear sidecars;
+- este runtime no se promovió al launcher estable.
+
 ### Candidato focal `rc14` — cierre de hotspot Knowledge
 
 Wheel:
@@ -365,6 +389,28 @@ Publicación del refactor rc14:
   dos auxiliares y empeoró 185→186. La segunda partición eliminó ambos y cerró
   185→184; no se publicó ese wheel como resultado final.
 
+Publicación del Actionability Gate rc16:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc16-actionability-state`.
+
+- piloto explícitamente acotado: 525 archivos inventariados, 46 directorios
+  excluidos, 515 candidatos procesados, 8 932 466 bytes, 14 785 símbolos,
+  81 229 referencias, 201 diagnósticos, un proyecto y cero errores; el límite
+  explícito conservó correctamente el run como `partial`;
+- segunda corrida: 0 procesados/515 cache hits y publicación `completed`; el
+  replay final repitió 515/515 cache hits, cero bytes y cero ms de lectura,
+  análisis, persistencia y grafo;
+- review de 50 findings: tres recomendaciones y digest estable
+  `be6eb7aafddd34270136ad7b1093e468`; la primera es
+  `semantic_generation_repository._queue_job_rows_bounded` (rango bruto 2),
+  seguida de `_derive_context_graph` y `_lookup_catalog`;
+- diff rc14→rc16, digest `75d3349478676823776bf37740091e64`:
+  184 hotspots comunes, cero añadidos, retirados o con evidencia cambiada;
+  58 200 calls comunes, 39 856 aún no resueltas, 18 344 resueltas sin cambio y
+  cero resoluciones corregidas o perdidas;
+- rc15 fue rechazado al añadir el hotspot
+  `code_review_actionability._construction`. La partición rc16 lo retiró y
+  restauró exactamente la evidencia de hotspots de rc14.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -506,6 +552,10 @@ ausentes y su candidate limit, no evidencia inventada.
   `279 passed`, `2 subtests`; la barrera focal previa aprobó `80 passed`.
   Ruff/format limpios en 11 archivos y Mypy sin errores en los cinco módulos
   fuente del corte.
+- Actionability Gate v2, CLI, diff, persistencia y autoanálisis: `190 passed`;
+  la regresión focal aprobó `38 passed`. Ruff/format limpios en ocho archivos y
+  Mypy sin errores en los cinco módulos fuente. Wheel rc16 íntegro, `pip check`
+  limpio y review read-only con cero cambios SQLite/sidecars.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -528,18 +578,22 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar el siguiente resultado accionable, no el primer score bruto.** El
-   rango 1 actual, `GoldenCase._validate_required_feature`, está etiquetado
-   `defer/validator`; continuar con el rango 2 accionable
+1. **Cerrar la primera recomendación `act_now`.** El rango bruto 1 actual,
+   `GoldenCase._validate_required_feature`, es
+   `validator/characterize_first`; continuar con el rango 2 accionable
    `semantic_generation_repository._queue_job_rows_bounded`, preservando
    transacción, high-watermark, deadline y reanudación.
-2. **Demostrar la mejora con rc15.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc14; exigir caída neta de hotspots, cero
-   pérdidas de resolución y replay 100 % cache hit.
-3. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
+2. **Demostrar la mejora con rc17.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc16; exigir retirar el hotspot objetivo sin
+   añadir otro, cero pérdidas de resolución y replay 100 % cache hit.
+3. **Ampliar comparabilidad sólo desde una necesidad medida.** Si rc17 revela
+   una brecha de decisión, evolucionar Publication Diff para comparar
+   `hotspot_id`, actionability y rol de callers, y añadir una vista por módulo;
+   no cambiar el ranking antes de esa evidencia.
+4. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
    callbacks, registries y contratos que ya explican los 37 falsos positivos;
    repetir la misma muestra y mantener la señal suprimida hasta pasar el gate.
-4. **Retomar otras fronteras después.** Imagen, calibración Semantic, soak del
+5. **Retomar otras fronteras después.** Imagen, calibración Semantic, soak del
    watcher y promoción del launcher siguen pendientes, pero quedan detrás del
    objetivo vigente de mejorar el autoanálisis. El estable permanece en 0.7.1
    hasta autorización explícita de promoción.

@@ -256,7 +256,10 @@ def run_code_review(args: argparse.Namespace) -> int:
     from .code_review import review_code_state
 
     try:
-        result = review_code_state(args.state_directory)
+        result = review_code_state(
+            args.state_directory,
+            limit=args.code_review_limit,
+        )
     except (OSError, sqlite3.Error, RuntimeError, ValueError) as exc:
         return _error("code-review", exc)
     if args.code_json:
@@ -273,7 +276,8 @@ def run_code_review(args: argparse.Namespace) -> int:
     _print_console_line(
         f"CODE_REVIEW status=ready freshness={result.snapshot.freshness} "
         f"current={int(result.snapshot.current)} findings={len(result.findings)} "
-        f"ranking={result.ranking} digest={result.digest.xxh3_128}"
+        f"recommendations={len(result.recommendations)} ranking={result.ranking} "
+        f"actionability={result.actionability_version} digest={result.digest.xxh3_128}"
     )
     _print_console_line(
         f"CODE_REVIEW_COVERAGE python_files={result.coverage.current_python_files} "
@@ -283,12 +287,32 @@ def run_code_review(args: argparse.Namespace) -> int:
         f"resolved_calls={result.coverage.resolved_call_edges}/"
         f"{result.coverage.call_edges}"
     )
+    if result.recommendation_status == "abstained":
+        _print_console_line(
+            "CODE_REVIEW_RECOMMENDATION status=abstained "
+            f"reason={result.recommendation_reason}"
+        )
+    for recommendation in result.recommendations:
+        _print_console_line(
+            "CODE_REVIEW_RECOMMENDATION status=ready "
+            f"recommendation_rank={recommendation.recommendation_rank} "
+            f"hotspot_rank={recommendation.hotspot_rank} "
+            f"construction={recommendation.construction} "
+            f"risk={recommendation.change_risk} "
+            f"production_callers={recommendation.production_callers} "
+            f"test_callers={recommendation.test_callers} "
+            f"path={json.dumps(recommendation.path, ensure_ascii=True)} "
+            f"symbol={json.dumps(recommendation.symbol, ensure_ascii=True)}"
+        )
     for finding in result.findings:
         _print_console_line(
             f"CODE_REVIEW_FINDING rank={finding.rank} "
             f"score_bp={finding.score_basis_points} category={finding.category} "
+            f"construction={finding.construction} "
+            f"actionability={finding.actionability} risk={finding.change_risk} "
             f"complexity={finding.complexity} lines={finding.function_lines} "
-            f"callers={finding.resolved_static_callers} "
+            f"production_callers={finding.impact.production_callers} "
+            f"test_callers={finding.impact.test_callers + finding.impact.fixture_callers} "
             f"path={json.dumps(finding.path, ensure_ascii=True)} "
             f"symbol={json.dumps(finding.symbol, ensure_ascii=True)} "
             f"line={finding.start_line}"

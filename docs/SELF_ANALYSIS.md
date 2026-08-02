@@ -175,12 +175,15 @@ No crea bases, no migra, no hace checkpoint y no modifica código ni estado.
 ```powershell
 Neocortex --state-directory $State --code-review
 Neocortex --state-directory $State --code-review --code-json
+Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v1` selecciona sólo diagnósticos Python
-confirmados `high_complexity` y `long_function`. Enumera hasta 10 000 hotspots,
-ordena con enteros deterministas y devuelve como máximo 10, primero uno por
-archivo y luego un segundo hasta completar. La puntuación es:
+El contrato `neocortex.code-review/v2` conserva dos capas. `findings` selecciona
+sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
+enumera hasta 10 000 hotspots y mantiene el ranking v2 auditable. Devuelve 10
+por defecto, primero uno por archivo y luego un segundo hasta completar;
+`--code-review-limit` admite de 1 a 50 y exige JSON por encima de 10. La
+puntuación bruta no cambió:
 
 ```text
 complexity_bp
@@ -188,10 +191,23 @@ complexity_bp
 + 250 * min(callers_estáticos_resueltos, 20)
 ```
 
-Cada razón conserva rango, firma, fingerprints del archivo, versión del
-analizador, valor/umbral y hasta tres callers resueltos. El score prioriza
-inspección; no representa probabilidad, riesgo calibrado ni autorización para
-refactorizar. Cero hallazgos es una respuesta válida y exitosa.
+Cada finding conserva rango, firma, fingerprints del archivo, versión del
+analizador, valor/umbral y hasta tres callers resueltos. Separa callers y
+módulos consumidores de producción, pruebas, fixtures, herramientas y
+compatibilidad. `hotspot_id` identifica establemente la evidencia física y el
+símbolo; `finding_id` identifica la interpretación bajo versiones concretas de
+ranking y actionability.
+
+`recommendations` filtra como máximo tres `act_now` mediante
+`python-maintenance-actionability-v1`. La clasificación determinista distingue
+algoritmos, builders, classifiers, initializers, lifecycle, orquestadores,
+persistencia, recuperación, reglas y validators. Builders se difieren;
+validators, reglas e invariantes exigen caracterización; y una construcción no
+reconocida devuelve `insufficient_evidence`. Cada recomendación enumera riesgo,
+evidencia exacta, contratos a preservar y validación sugerida. El score bruto y
+todos los hotspots siguen disponibles: esta capa no es ground truth humano ni
+autoriza modificar código. Cero hallazgos o cero `act_now` son respuestas
+válidas; en el segundo caso `recommendation_status=abstained` explica la brecha.
 
 `probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
 portable de 40 entre los 246 candidatos de rc11 encontró 36 usos demostrables,
@@ -218,6 +234,13 @@ validadores, reglas, algoritmos y orquestadores. El ranking v2 elevó la
 `Precision@10` provisional de 0.60 a 0.70 y dejó iguales P@20, P@30 y P@40;
 `build_parser` pasó del rango 2 al 39. Es revisión estática reproducible, no
 ground truth humano, y el score sigue sin representar riesgo calibrado.
+
+La regresión temporal rc14 retira `execute_knowledge_search`: el rango bruto 1,
+`GoldenCase._validate_required_feature`, queda como
+`validator/characterize_first`, mientras
+`semantic_generation_repository._queue_job_rows_bounded` se convierte en la
+primera recomendación `act_now`. La siguiente publicación no vista debe volver
+a medir ese gate; el resultado rc14 no demuestra calibración universal.
 
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible

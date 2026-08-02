@@ -143,11 +143,14 @@ Cada propietario exige un snapshot SQLite immutable y sidecar-free. Cualquier
 `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`, o una cerca inestable en
 cualquiera de ellas, causa abstención total con código `2` sin tocar el estado.
 
-`--code-review` consume esa publicación sin volver a analizar la raíz. Emite
-como máximo 10 hotspots Python confirmados, con un máximo de 2 por archivo, y
-explica métricas, umbrales, analyzer, callers estáticos, limitaciones y digest.
-No admite `--apply`, `--route` ni otra operación directa. Use `--code-json` para
-el envelope `neocortex.code-review/v1`. Un snapshot full completado con USN
+`--code-review` consume esa publicación sin volver a analizar la raíz. El
+envelope `neocortex.code-review/v2` conserva hasta 10 hotspots brutos por
+defecto y antepone hasta tres recomendaciones `act_now`. Separa callers de
+producción, pruebas, fixtures, herramientas y compatibilidad; informa tipo de
+construcción, riesgo, contratos y validación sugerida, y se abstiene ante
+evidencia insuficiente. `--code-review-limit N --code-json` permite inspeccionar
+entre 1 y 50 hotspots; valores mayores a 10 exigen JSON. No admite `--apply`,
+`--route` ni otra operación directa. Un snapshot full completado con USN
 indisponible sigue siendo consultable como `freshness=publication_only` y
 `current=false`; journal avanzado/discontinuo, manifest inválido o vínculo de
 raíz/framework incompatible devuelve `2` sin crear estado.

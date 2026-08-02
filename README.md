@@ -232,11 +232,14 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable: como máximo 10 funciones Python confirmadas por complejidad o
-longitud, con un máximo de 2 por archivo, evidencia del analizador, callers
-estáticos resueltos y un digest determinista. Es una consulta estrictamente de
-sólo lectura. Los avisos heurísticos de código probablemente muerto se cuentan
-pero no se recomiendan hasta que su resolución de llamadas esté calibrada. Un
+explicable. Conserva el ranking bruto de 10 hotspots por defecto, pero antepone
+como máximo tres recomendaciones `act_now`: clasifica producción, pruebas,
+fixtures y herramientas; distingue builders, validators, reglas, persistencia,
+recuperación y orquestación; y conserva riesgo, contratos y validación sugerida.
+`--code-review-limit N --code-json` amplía de 1 a 50 la vista auditable. La
+consulta es estrictamente read-only y se abstiene si no puede reconocer una
+construcción prudente. Los avisos heurísticos de código probablemente muerto se
+cuentan pero no se recomiendan hasta calibrar su resolución de llamadas. Un
 snapshot full completado sin USN se etiqueta `publication_only`; un journal
 avanzado/discontinuo o un vínculo incompatible causa abstención con código `2`.
 
