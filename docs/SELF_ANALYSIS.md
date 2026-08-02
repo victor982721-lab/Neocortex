@@ -239,8 +239,12 @@ La regresión temporal rc14 retira `execute_knowledge_search`: el rango bruto 1,
 `GoldenCase._validate_required_feature`, queda como
 `validator/characterize_first`, mientras
 `semantic_generation_repository._queue_job_rows_bounded` se convierte en la
-primera recomendación `act_now`. La siguiente publicación no vista debe volver
-a medir ese gate; el resultado rc14 no demuestra calibración universal.
+primera recomendación `act_now`. rc17 aplica esa recomendación: el orquestador
+de persistencia baja de 302 líneas/complejidad 44 a 47/3. El diff rc16→rc17
+retira sólo ese hotspot, no añade otro, no cambia evidencia común y conserva
+cero resoluciones corregidas o perdidas. El replay instalado obtuvo 515/515
+cache hits y cero trabajo de análisis/grafo. Esta secuencia valida el gate sobre
+un cambio posterior, pero no demuestra calibración universal.
 
 La consulta exige manifest válido, último run Code completado e identidades de
 raíz/framework ligadas. Un snapshot full terminado con journal no disponible

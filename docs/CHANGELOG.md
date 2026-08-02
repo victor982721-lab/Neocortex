@@ -57,6 +57,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   contratos y validación. `--code-review-limit` expone de 1 a 50 resultados en
   JSON; builders, validators, reglas y evidencia desconocida no se promueven
   por score. Los avisos `probable_dead_symbol` permanecen suprimidos.
+- Partición transaccional de `_queue_job_rows_bounded`: el orquestador conserva
+  orden, presupuesto de jobs, lazy base-member reuse y reanudación, pero delega
+  carga, selección, rebind y escrituras a fases acotadas sin commits internos.
+  La regresión post-upsert demuestra rollback del slice y el autoanálisis rc17
+  reduce el símbolo de 302 líneas/complejidad 44 a 47/3 sin hotspot sustituto.
 - Fixture reproducible de actionability para el primer top 10, con labels
   provisionales `actionable`/`defer`, score recalculado y `Precision@10`
   explícitamente no humana antes de modificar pesos o añadir detectores.
