@@ -524,20 +524,98 @@ def _generation_model(
     return _load_model(connection, str(row["model_signature"]))
 
 
-def _queue_job_rows_bounded(
+@dataclass(frozen=True, slots=True)
+class _QueueJobContext:
+    generation_id: int
+    model_signature: str
+    entity_kind: SemanticEntityKind
+    role: EmbeddingRole
+    max_attempts: int
+    now_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class _QueueSelection:
+    rows: tuple[sqlite3.Row, ...]
+    force_pending_ids: tuple[str, ...]
+    new_jobs: int
+    complete: bool
+    rebound_members: int
+
+
+_REBIND_GENERATION_MEMBER_SQL = """INSERT INTO embedding_generation_members(
+    generation_id,model_signature,entity_kind,entity_id,item_id,
+    item_revision_id,chunk_revision_id,payload_id,
+    content_xxh3_128,content_bytes,content_xxh3_64_guard,
+    provenance_json,updated_ns,base_member_id)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
+ON CONFLICT(generation_id,entity_kind,entity_id) DO UPDATE SET
+    item_id=excluded.item_id,
+    item_revision_id=excluded.item_revision_id,
+    chunk_revision_id=excluded.chunk_revision_id,
+    payload_id=excluded.payload_id,
+    content_xxh3_128=excluded.content_xxh3_128,
+    content_bytes=excluded.content_bytes,
+    content_xxh3_64_guard=excluded.content_xxh3_64_guard,
+    provenance_json=excluded.provenance_json,
+    updated_ns=excluded.updated_ns,
+    base_member_id=NULL"""
+
+
+_UPSERT_EMBEDDING_JOB_SQL = """INSERT INTO embedding_jobs(
+        generation_id,model_signature,role,entity_kind,entity_id,item_id,
+        content_xxh3_128,content_bytes,content_xxh3_64_guard,status,
+        max_attempts,available_ns,created_ns,updated_ns)
+    VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)
+    ON CONFLICT(generation_id,entity_kind,entity_id) DO UPDATE SET
+        item_id=excluded.item_id,
+        content_xxh3_128=excluded.content_xxh3_128,
+        content_bytes=excluded.content_bytes,
+        content_xxh3_64_guard=excluded.content_xxh3_64_guard,
+        status=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN 'pending' ELSE embedding_jobs.status END,
+        attempts=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN 0 ELSE embedding_jobs.attempts END,
+        max_attempts=excluded.max_attempts,
+        available_ns=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN excluded.available_ns ELSE embedding_jobs.available_ns END,
+        lease_owner=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN NULL ELSE embedding_jobs.lease_owner END,
+        lease_until_ns=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN NULL ELSE embedding_jobs.lease_until_ns END,
+        error_type=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN NULL ELSE embedding_jobs.error_type END,
+        error_message=CASE WHEN
+            embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
+            embedding_jobs.content_bytes<>excluded.content_bytes OR
+            embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
+            THEN NULL ELSE embedding_jobs.error_message END,
+        updated_ns=excluded.updated_ns"""
+
+
+def _queue_entity_rows(
     connection: sqlite3.Connection,
-    *,
-    generation_id: int,
-    model: EmbeddingModelSpec,
     entity_kind: SemanticEntityKind,
-    role: EmbeddingRole,
     identifiers: tuple[str, ...],
-    max_attempts: int,
-    now_ns: int,
-    max_new_jobs: int | None,
-) -> EnqueueJobBatchResult:
-    if max_new_jobs is not None and max_new_jobs < 0:
-        raise ValueError("max_new_jobs cannot be negative")
+) -> tuple[sqlite3.Row, ...]:
     placeholders = ",".join("?" for _ in identifiers)
     if entity_kind is SemanticEntityKind.TEXT_CHUNK:
         rows = connection.execute(
@@ -555,12 +633,18 @@ def _queue_job_rows_bounded(
                 AND item_id IN ({placeholders})""",
             identifiers,
         ).fetchall()
-    found = {str(row["entity_id"]) for row in rows}
-    missing = set(identifiers).difference(found)
+    rows_by_id = {str(row["entity_id"]): row for row in rows}
+    missing = set(identifiers).difference(rows_by_id)
     if missing:
         raise KeyError(f"unknown, inactive or payload-less entities: {sorted(missing)}")
-    rows_by_id = {str(row["entity_id"]): row for row in rows}
-    ordered_rows = tuple(rows_by_id[identifier] for identifier in identifiers)
+    return tuple(rows_by_id[identifier] for identifier in identifiers)
+
+
+def _queue_generation(
+    connection: sqlite3.Connection,
+    generation_id: int,
+    model_signature: str,
+) -> sqlite3.Row:
     generation = connection.execute(
         """SELECT status,model_signature,base_generation_id,base_clone_complete
         FROM embedding_generations WHERE generation_id=?""",
@@ -570,55 +654,235 @@ def _queue_job_rows_bounded(
         raise KeyError(f"unknown embedding generation {generation_id}")
     if str(generation["status"]) != "building":
         raise SemanticStateError(f"generation {generation_id} is not building")
-    if str(generation["model_signature"]) != model.model_signature:
+    if str(generation["model_signature"]) != model_signature:
         raise ValueError("embedding generation model does not match queued entities")
-    existing_rows = connection.execute(
+    return generation
+
+
+def _queue_existing_jobs(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    identifiers: tuple[str, ...],
+) -> dict[str, sqlite3.Row]:
+    placeholders = ",".join("?" for _ in identifiers)
+    rows = connection.execute(
         f"""SELECT job_id,entity_id,status,content_xxh3_128,content_bytes,
-            content_xxh3_64_guard FROM embedding_jobs
-            WHERE generation_id=? AND entity_kind=?
-              AND entity_id IN ({placeholders})""",
-        (generation_id, entity_kind.value, *identifiers),
-    ).fetchall()
-    existing = {str(row["entity_id"]): row for row in existing_rows}
-    member_rows = connection.execute(
-        f"""SELECT member_id,model_signature,entity_kind,entity_id,item_id,
-            item_revision_id,chunk_revision_id,payload_id,content_xxh3_128,
-            content_bytes,content_xxh3_64_guard,provenance_json,updated_ns,
-            base_member_id
-        FROM embedding_generation_members
+        content_xxh3_64_guard FROM embedding_jobs
         WHERE generation_id=? AND entity_kind=?
           AND entity_id IN ({placeholders})""",
-        (generation_id, entity_kind.value, *identifiers),
+        (context.generation_id, context.entity_kind.value, *identifiers),
     ).fetchall()
-    members = {str(row["entity_id"]): row for row in member_rows}
-    if (
-        not bool(generation["base_clone_complete"])
-        and generation["base_generation_id"] is not None
-    ):
-        missing_members = tuple(
-            identifier for identifier in identifiers if identifier not in members
+    return {str(row["entity_id"]): row for row in rows}
+
+
+def _member_rows(
+    connection: sqlite3.Connection,
+    generation_id: int,
+    entity_kind: SemanticEntityKind,
+    identifiers: tuple[str, ...],
+) -> tuple[sqlite3.Row, ...]:
+    placeholders = ",".join("?" for _ in identifiers)
+    return tuple(
+        connection.execute(
+            f"""SELECT member_id,model_signature,entity_kind,entity_id,item_id,
+                item_revision_id,chunk_revision_id,payload_id,content_xxh3_128,
+                content_bytes,content_xxh3_64_guard,provenance_json,updated_ns,
+                base_member_id
+            FROM embedding_generation_members
+            WHERE generation_id=? AND entity_kind=?
+              AND entity_id IN ({placeholders})""",
+            (generation_id, entity_kind.value, *identifiers),
+        ).fetchall()
+    )
+
+
+def _queue_generation_members(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    generation: sqlite3.Row,
+    identifiers: tuple[str, ...],
+) -> dict[str, sqlite3.Row]:
+    members = {
+        str(row["entity_id"]): row
+        for row in _member_rows(
+            connection,
+            context.generation_id,
+            context.entity_kind,
+            identifiers,
         )
-        if missing_members:
-            base_placeholders = ",".join("?" for _ in missing_members)
-            base_rows = connection.execute(
-                f"""SELECT member_id,model_signature,entity_kind,entity_id,item_id,
-                    item_revision_id,chunk_revision_id,payload_id,
-                    content_xxh3_128,content_bytes,content_xxh3_64_guard,
-                    provenance_json,updated_ns,base_member_id
-                FROM embedding_generation_members
-                WHERE generation_id=? AND entity_kind=?
-                  AND entity_id IN ({base_placeholders})""",
-                (
-                    int(generation["base_generation_id"]),
-                    entity_kind.value,
-                    *missing_members,
-                ),
-            ).fetchall()
-            members.update(
-                (str(row["entity_id"]), row)
-                for row in base_rows
-                if str(row["entity_id"]) not in members
-            )
+    }
+    if (
+        bool(generation["base_clone_complete"])
+        or generation["base_generation_id"] is None
+    ):
+        return members
+    missing = tuple(
+        identifier for identifier in identifiers if identifier not in members
+    )
+    if not missing:
+        return members
+    base_rows = _member_rows(
+        connection,
+        int(generation["base_generation_id"]),
+        context.entity_kind,
+        missing,
+    )
+    members.update(
+        (str(row["entity_id"]), row)
+        for row in base_rows
+        if str(row["entity_id"]) not in members
+    )
+    return members
+
+
+def _snapshot_queue_revisions(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    row: sqlite3.Row,
+    item_revisions: dict[str, int],
+) -> tuple[int, int | None]:
+    item_id = str(row["item_id"])
+    item_revision_id = item_revisions.get(item_id)
+    if item_revision_id is None:
+        item_revision_id = _snapshot_item_revision(connection, item_id, context.now_ns)
+        item_revisions[item_id] = item_revision_id
+    chunk_revision_id = (
+        _snapshot_chunk_revision(connection, row, context.now_ns)
+        if context.entity_kind is SemanticEntityKind.TEXT_CHUNK
+        else None
+    )
+    return item_revision_id, chunk_revision_id
+
+
+def _same_item_identity(
+    connection: sqlite3.Connection,
+    prior_item_revision_id: int,
+    item_revision_id: int,
+) -> bool:
+    rows = connection.execute(
+        """SELECT item_revision_id,source_kind,source_identity,identity_version
+        FROM semantic_item_revisions WHERE item_revision_id IN (?,?)""",
+        (prior_item_revision_id, item_revision_id),
+    ).fetchall()
+    identities = {
+        int(identity["item_revision_id"]): (
+            str(identity["source_kind"]),
+            str(identity["source_identity"]),
+            str(identity["identity_version"]),
+        )
+        for identity in rows
+    }
+    return (
+        identities.get(prior_item_revision_id) == identities.get(item_revision_id)
+        and identities.get(item_revision_id) is not None
+    )
+
+
+def _finish_existing_job(
+    connection: sqlite3.Connection,
+    prior: sqlite3.Row | None,
+    now_ns: int,
+) -> None:
+    if prior is None or str(prior["status"]) == "done":
+        return
+    connection.execute(
+        """UPDATE embedding_jobs SET status='done',lease_owner=NULL,
+            lease_until_ns=NULL,error_type=NULL,error_message=NULL,
+            updated_ns=? WHERE job_id=?""",
+        (now_ns, int(prior["job_id"])),
+    )
+
+
+def _rebind_generation_member(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    row: sqlite3.Row,
+    member: sqlite3.Row,
+    item_revision_id: int,
+    chunk_revision_id: int | None,
+    prior: sqlite3.Row | None,
+) -> None:
+    connection.execute(
+        _REBIND_GENERATION_MEMBER_SQL,
+        (
+            context.generation_id,
+            str(member["model_signature"]),
+            context.entity_kind.value,
+            str(row["entity_id"]),
+            str(row["item_id"]),
+            item_revision_id,
+            chunk_revision_id,
+            int(member["payload_id"]),
+            str(member["content_xxh3_128"]),
+            int(member["content_bytes"]),
+            str(member["content_xxh3_64_guard"]),
+            str(member["provenance_json"]),
+            context.now_ns,
+        ),
+    )
+    if prior is not None:
+        connection.execute(
+            """UPDATE embedding_jobs SET status='done',lease_owner=NULL,
+                lease_until_ns=NULL,error_type=NULL,error_message=NULL,
+                updated_ns=? WHERE job_id=?""",
+            (context.now_ns, int(prior["job_id"])),
+        )
+
+
+def _reuse_generation_member(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    row: sqlite3.Row,
+    prior: sqlite3.Row | None,
+    member: sqlite3.Row | None,
+    item_revisions: dict[str, int],
+) -> tuple[bool, bool]:
+    if member is None or not _same_fingerprint(member, _fingerprint_from_row(row)):
+        return False, False
+    item_revision_id, chunk_revision_id = _snapshot_queue_revisions(
+        connection,
+        context,
+        row,
+        item_revisions,
+    )
+    prior_item_revision_id = int(member["item_revision_id"])
+    prior_chunk_revision_id = (
+        None
+        if member["chunk_revision_id"] is None
+        else int(member["chunk_revision_id"])
+    )
+    if (
+        item_revision_id == prior_item_revision_id
+        and chunk_revision_id == prior_chunk_revision_id
+    ):
+        _finish_existing_job(connection, prior, context.now_ns)
+        return True, False
+    if chunk_revision_id != prior_chunk_revision_id or not _same_item_identity(
+        connection,
+        prior_item_revision_id,
+        item_revision_id,
+    ):
+        return False, False
+    _rebind_generation_member(
+        connection,
+        context,
+        row,
+        member,
+        item_revision_id,
+        chunk_revision_id,
+        prior,
+    )
+    return True, True
+
+
+def _select_queue_rows(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    ordered_rows: tuple[sqlite3.Row, ...],
+    existing: Mapping[str, sqlite3.Row],
+    members: Mapping[str, sqlite3.Row],
+    max_new_jobs: int | None,
+) -> _QueueSelection:
     item_revisions: dict[str, int] = {}
     selected_rows: list[sqlite3.Row] = []
     force_pending_ids: list[str] = []
@@ -627,105 +891,17 @@ def _queue_job_rows_bounded(
     for row in ordered_rows:
         entity_id = str(row["entity_id"])
         prior = existing.get(entity_id)
-        member = members.get(entity_id)
-        if member is not None and _same_fingerprint(
-            member,
-            _fingerprint_from_row(row),
-        ):
-            item_id = str(row["item_id"])
-            item_revision_id = item_revisions.get(item_id)
-            if item_revision_id is None:
-                item_revision_id = _snapshot_item_revision(
-                    connection,
-                    item_id,
-                    now_ns,
-                )
-                item_revisions[item_id] = item_revision_id
-            chunk_revision_id = (
-                _snapshot_chunk_revision(connection, row, now_ns)
-                if entity_kind is SemanticEntityKind.TEXT_CHUNK
-                else None
-            )
-            prior_item_revision_id = int(member["item_revision_id"])
-            prior_chunk_revision_id = (
-                None
-                if member["chunk_revision_id"] is None
-                else int(member["chunk_revision_id"])
-            )
-            if item_revision_id == prior_item_revision_id and (
-                chunk_revision_id == prior_chunk_revision_id
-            ):
-                if prior is not None and str(prior["status"]) != "done":
-                    connection.execute(
-                        """UPDATE embedding_jobs SET status='done',lease_owner=NULL,
-                            lease_until_ns=NULL,error_type=NULL,error_message=NULL,
-                            updated_ns=? WHERE job_id=?""",
-                        (now_ns, int(prior["job_id"])),
-                    )
-                continue
-            identity_rows = connection.execute(
-                """SELECT item_revision_id,source_kind,source_identity,
-                    identity_version FROM semantic_item_revisions
-                WHERE item_revision_id IN (?,?)""",
-                (prior_item_revision_id, item_revision_id),
-            ).fetchall()
-            identities = {
-                int(identity["item_revision_id"]): (
-                    str(identity["source_kind"]),
-                    str(identity["source_identity"]),
-                    str(identity["identity_version"]),
-                )
-                for identity in identity_rows
-            }
-            if (
-                chunk_revision_id == prior_chunk_revision_id
-                and identities.get(prior_item_revision_id)
-                == identities.get(item_revision_id)
-                and identities.get(item_revision_id) is not None
-            ):
-                connection.execute(
-                    """INSERT INTO embedding_generation_members(
-                        generation_id,model_signature,entity_kind,entity_id,item_id,
-                        item_revision_id,chunk_revision_id,payload_id,
-                        content_xxh3_128,content_bytes,content_xxh3_64_guard,
-                        provenance_json,updated_ns,base_member_id)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)
-                    ON CONFLICT(generation_id,entity_kind,entity_id) DO UPDATE SET
-                        item_id=excluded.item_id,
-                        item_revision_id=excluded.item_revision_id,
-                        chunk_revision_id=excluded.chunk_revision_id,
-                        payload_id=excluded.payload_id,
-                        content_xxh3_128=excluded.content_xxh3_128,
-                        content_bytes=excluded.content_bytes,
-                        content_xxh3_64_guard=excluded.content_xxh3_64_guard,
-                        provenance_json=excluded.provenance_json,
-                        updated_ns=excluded.updated_ns,
-                        base_member_id=NULL""",
-                    (
-                        generation_id,
-                        str(member["model_signature"]),
-                        entity_kind.value,
-                        entity_id,
-                        item_id,
-                        item_revision_id,
-                        chunk_revision_id,
-                        int(member["payload_id"]),
-                        str(member["content_xxh3_128"]),
-                        int(member["content_bytes"]),
-                        str(member["content_xxh3_64_guard"]),
-                        str(member["provenance_json"]),
-                        now_ns,
-                    ),
-                )
-                if prior is not None:
-                    connection.execute(
-                        """UPDATE embedding_jobs SET status='done',lease_owner=NULL,
-                            lease_until_ns=NULL,error_type=NULL,error_message=NULL,
-                            updated_ns=? WHERE job_id=?""",
-                        (now_ns, int(prior["job_id"])),
-                    )
-                rebound_members += 1
-                continue
+        reused, rebound = _reuse_generation_member(
+            connection,
+            context,
+            row,
+            prior,
+            members.get(entity_id),
+            item_revisions,
+        )
+        if reused:
+            rebound_members += int(rebound)
+            continue
         changed = prior is None or not _same_fingerprint(
             prior,
             _fingerprint_from_row(row),
@@ -737,94 +913,113 @@ def _queue_job_rows_bounded(
         if prior is not None and not changed:
             force_pending_ids.append(entity_id)
         new_jobs += int(changed)
+    return _QueueSelection(
+        tuple(selected_rows),
+        tuple(force_pending_ids),
+        new_jobs,
+        complete,
+        rebound_members,
+    )
+
+
+def _upsert_queue_jobs(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    rows: tuple[sqlite3.Row, ...],
+) -> None:
     connection.executemany(
-        """INSERT INTO embedding_jobs(
-                generation_id,model_signature,role,entity_kind,entity_id,item_id,
-                content_xxh3_128,content_bytes,content_xxh3_64_guard,status,
-                max_attempts,available_ns,created_ns,updated_ns)
-            VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?,?,?)
-            ON CONFLICT(generation_id,entity_kind,entity_id) DO UPDATE SET
-                item_id=excluded.item_id,
-                content_xxh3_128=excluded.content_xxh3_128,
-                content_bytes=excluded.content_bytes,
-                content_xxh3_64_guard=excluded.content_xxh3_64_guard,
-                status=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN 'pending' ELSE embedding_jobs.status END,
-                attempts=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN 0 ELSE embedding_jobs.attempts END,
-                max_attempts=excluded.max_attempts,
-                available_ns=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN excluded.available_ns ELSE embedding_jobs.available_ns END,
-                lease_owner=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN NULL ELSE embedding_jobs.lease_owner END,
-                lease_until_ns=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN NULL ELSE embedding_jobs.lease_until_ns END,
-                error_type=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN NULL ELSE embedding_jobs.error_type END,
-                error_message=CASE WHEN
-                    embedding_jobs.content_xxh3_128<>excluded.content_xxh3_128 OR
-                    embedding_jobs.content_bytes<>excluded.content_bytes OR
-                    embedding_jobs.content_xxh3_64_guard<>excluded.content_xxh3_64_guard
-                    THEN NULL ELSE embedding_jobs.error_message END,
-                updated_ns=excluded.updated_ns""",
+        _UPSERT_EMBEDDING_JOB_SQL,
         (
             (
-                generation_id,
-                model.model_signature,
-                role.value,
-                entity_kind.value,
+                context.generation_id,
+                context.model_signature,
+                context.role.value,
+                context.entity_kind.value,
                 str(row["entity_id"]),
                 str(row["item_id"]),
                 str(row["content_xxh3_128"]),
                 int(row["content_bytes"]),
                 str(row["content_xxh3_64_guard"]),
-                max_attempts,
-                now_ns,
-                now_ns,
-                now_ns,
+                context.max_attempts,
+                context.now_ns,
+                context.now_ns,
+                context.now_ns,
             )
-            for row in selected_rows
+            for row in rows
         ),
     )
-    if force_pending_ids:
-        force_placeholders = ",".join("?" for _ in force_pending_ids)
-        connection.execute(
-            f"""UPDATE embedding_jobs SET status='pending',attempts=0,
-                available_ns=?,lease_owner=NULL,lease_until_ns=NULL,
-                error_type=NULL,error_message=NULL,updated_ns=?
-            WHERE generation_id=? AND entity_kind=?
-              AND entity_id IN ({force_placeholders})""",
-            (
-                now_ns,
-                now_ns,
-                generation_id,
-                entity_kind.value,
-                *force_pending_ids,
-            ),
-        )
+
+
+def _reset_queue_jobs_pending(
+    connection: sqlite3.Connection,
+    context: _QueueJobContext,
+    entity_ids: tuple[str, ...],
+) -> None:
+    if not entity_ids:
+        return
+    placeholders = ",".join("?" for _ in entity_ids)
+    connection.execute(
+        f"""UPDATE embedding_jobs SET status='pending',attempts=0,
+            available_ns=?,lease_owner=NULL,lease_until_ns=NULL,
+            error_type=NULL,error_message=NULL,updated_ns=?
+        WHERE generation_id=? AND entity_kind=?
+          AND entity_id IN ({placeholders})""",
+        (
+            context.now_ns,
+            context.now_ns,
+            context.generation_id,
+            context.entity_kind.value,
+            *entity_ids,
+        ),
+    )
+
+
+def _queue_job_rows_bounded(
+    connection: sqlite3.Connection,
+    *,
+    generation_id: int,
+    model: EmbeddingModelSpec,
+    entity_kind: SemanticEntityKind,
+    role: EmbeddingRole,
+    identifiers: tuple[str, ...],
+    max_attempts: int,
+    now_ns: int,
+    max_new_jobs: int | None,
+) -> EnqueueJobBatchResult:
+    if max_new_jobs is not None and max_new_jobs < 0:
+        raise ValueError("max_new_jobs cannot be negative")
+    context = _QueueJobContext(
+        generation_id,
+        model.model_signature,
+        entity_kind,
+        role,
+        max_attempts,
+        now_ns,
+    )
+    ordered_rows = _queue_entity_rows(connection, entity_kind, identifiers)
+    generation = _queue_generation(connection, generation_id, model.model_signature)
+    existing = _queue_existing_jobs(connection, context, identifiers)
+    members = _queue_generation_members(
+        connection,
+        context,
+        generation,
+        identifiers,
+    )
+    selection = _select_queue_rows(
+        connection,
+        context,
+        ordered_rows,
+        existing,
+        members,
+        max_new_jobs,
+    )
+    _upsert_queue_jobs(connection, context, selection.rows)
+    _reset_queue_jobs_pending(connection, context, selection.force_pending_ids)
     return EnqueueJobBatchResult(
-        len(selected_rows),
-        new_jobs,
-        complete,
-        rebound_members,
+        len(selection.rows),
+        selection.new_jobs,
+        selection.complete,
+        selection.rebound_members,
     )
 
 

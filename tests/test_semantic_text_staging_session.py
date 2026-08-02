@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from _04_Nucleo_Operativo import semantic_text_index
+from _04_Nucleo_Operativo import semantic_generation_repository, semantic_text_index
 from _04_Nucleo_Operativo.semantic_chunking import (
     TextChunkingConfig,
     iter_text_chunks,
@@ -469,6 +469,28 @@ def test_fault_rolls_back_current_slice_and_never_publishes(
         fail_enqueue,
     )
     with pytest.raises(error_type, match="injected staging fault"):
+        _stage(database, generation_id, _records(1))
+
+    assert _counts(database) == (0, 0, 0)
+    _assert_building_unpublished(database, generation_id)
+
+
+def test_internal_queue_phase_failure_rolls_back_current_slice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    generation_id = _generation(database)
+
+    def fail_after_job_upsert(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected post-upsert queue fault")
+
+    monkeypatch.setattr(
+        semantic_generation_repository,
+        "_reset_queue_jobs_pending",
+        fail_after_job_upsert,
+    )
+    with pytest.raises(RuntimeError, match="injected post-upsert queue fault"):
         _stage(database, generation_id, _records(1))
 
     assert _counts(database) == (0, 0, 0)

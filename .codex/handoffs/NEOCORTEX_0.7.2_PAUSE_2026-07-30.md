@@ -42,6 +42,13 @@ la publicación real rc16 el validator del rango bruto 1 queda en
 recomendación. Un rc15 intermedio fue rechazado porque el propio gate creó un
 hotspot; la partición final lo retiró antes de aceptar el candidato.
 
+El corte rc17 cierra la primera recomendación emitida por ese gate.
+`semantic_generation_repository._queue_job_rows_bounded` pasa de 302 líneas y
+complejidad 44 a un orquestador transaccional de 47/3. Las fases extraídas no
+hacen commit y conservan orden, límite de jobs nuevos, reutilización lazy de la
+base, rebind de metadata y reanudación. El diff rc16→rc17 retira sólo ese
+hotspot, añade cero y conserva cero resoluciones corregidas o perdidas.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -57,11 +64,11 @@ completo fue el código del propio repositorio, sobre estado aislado.
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
 - Base publicada al iniciar este corte: `main` en
-  `26941857487f9837b0f3256d7a606a24ca4c9916`, idéntico a `origin/main` tras
-  fusionar el PR #5.
-- El checkout fuente es `0.7.2`. El Actionability Gate se rastrea en el PR #6;
-  su implementación base es
-  `edbbf8d07313262e119f02d90b56d833f7c675f6`. La igualdad final entre `main` y
+  `f0096ab31089d250f8a00cf01e7fc67f1f71f2fa`, idéntico a `origin/main` tras
+  fusionar el PR #6.
+- El checkout fuente es `0.7.2`. El cierre del hotspot Semantic se rastrea en
+  el PR #7; su implementación base es
+  `67dc0c3aa51e70db33f862404390ed9d8c63a3cc`. La igualdad final entre `main` y
   `origin/main` se verifica después del merge porque el commit no puede
   autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
@@ -222,6 +229,22 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc17` — cierre de hotspot Semantic queue
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc17-semantic-queue\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `3EEB5A7CEC59A5441F7CE0EA540A8F1BC615A0FC1397483F1E9BC7CAB7988608`;
+- 1 330 500 bytes, 271 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e import de
+  `semantic_generation_repository.py` confirmado desde el `site-packages` del
+  venv rc17; el símbolo instalado ocupa 47 líneas;
+- el venv focal usa `--system-site-packages`; verifica este wheel, no sustituye
+  la validación full hermética de rc5;
+- el launcher instalado reprodujo review/diff sin cambiar ninguna SQLite ni
+  crear sidecars. Este runtime no se promovió al launcher estable.
 
 ### Candidato focal `rc16` — Actionability Gate
 
@@ -413,6 +436,26 @@ Publicación del Actionability Gate rc16:
   `code_review_actionability._construction`. La partición rc16 lo retiró y
   restauró exactamente la evidencia de hotspots de rc14.
 
+Publicación del refactor Semantic rc17:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc17-semantic-queue-state`.
+
+- piloto acotado: 525 archivos, 46 directorios excluidos, 515 candidatos,
+  8 939 566 bytes, 14 813 símbolos, 81 253 referencias, 199 diagnósticos, un
+  proyecto y cero errores; la corrida explícitamente limitada permaneció
+  `partial` como exige el contrato;
+- tras incorporar la regresión, la publicación final contiene 14 815 símbolos
+  y 81 264 referencias. El replay desde el wheel rc17 obtuvo 0 procesados/515
+  cache hits, cero bytes y cero ms de lectura, análisis, persistencia y grafo;
+- review de 50 findings: digest
+  `aca6e380664ca2c1947288f6b88a7b74`; el objetivo ya no aparece y la primera
+  recomendación pasa a `knowledge_context._derive_context_graph`;
+- diff rc16→rc17, digest `0f7857652222f06dd0943b1cc0027c30`:
+  hotspots 184→183, 183 comunes, cero añadidos/cambiados y sólo el objetivo
+  retirado; 58 063 calls comunes, 39 769 aún no resueltas, 18 294 resueltas sin
+  cambio y cero resoluciones nuevas, corregidas o perdidas;
+- las consultas review/diff conservaron idénticos todos los SHA-256 SQLite y
+  dejaron cero sidecars.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -558,6 +601,11 @@ ausentes y su candidate limit, no evidencia inventada.
   la regresión focal aprobó `38 passed`. Ruff/format limpios en ocho archivos y
   Mypy sin errores en los cinco módulos fuente. Wheel rc16 íntegro, `pip check`
   limpio y review read-only con cero cambios SQLite/sidecars.
+- Refactor Semantic queue: línea base `53 passed`, barrera focal final
+  `54 passed` y barrera integrada `194 passed`. La regresión inyecta un fallo
+  después del upsert y comprueba rollback completo del slice. Ruff/format y
+  Mypy limpios; wheel rc17, procedencia del import, replay, hashes y sidecars
+  verificados.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -580,15 +628,15 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar la primera recomendación `act_now`.** El rango bruto 1 actual,
-   `GoldenCase._validate_required_feature`, es
-   `validator/characterize_first`; continuar con el rango 2 accionable
-   `semantic_generation_repository._queue_job_rows_bounded`, preservando
-   transacción, high-watermark, deadline y reanudación.
-2. **Demostrar la mejora con rc17.** Repetir autoanálisis y
-   `--code-publication-diff` contra rc16; exigir retirar el hotspot objetivo sin
+1. **Cerrar la siguiente recomendación `act_now`.** El rango bruto 1,
+   `GoldenCase._validate_required_feature`, permanece
+   `validator/characterize_first`; continuar con
+   `knowledge_context._derive_context_graph`, preservando comportamiento
+   determinista y semántica de casos límite.
+2. **Demostrar la mejora con rc18.** Repetir autoanálisis y
+   `--code-publication-diff` contra rc17; exigir retirar el hotspot objetivo sin
    añadir otro, cero pérdidas de resolución y replay 100 % cache hit.
-3. **Ampliar comparabilidad sólo desde una necesidad medida.** Si rc17 revela
+3. **Ampliar comparabilidad sólo desde una necesidad medida.** Si rc18 revela
    una brecha de decisión, evolucionar Publication Diff para comparar
    `hotspot_id`, actionability y rol de callers, y añadir una vista por módulo;
    no cambiar el ranking antes de esa evidencia.
