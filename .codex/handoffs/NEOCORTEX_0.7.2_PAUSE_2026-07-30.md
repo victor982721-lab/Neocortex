@@ -81,6 +81,24 @@ tres bordes antes de publicar: el pool ya no depende de `--code-review-limit`,
 las calls repetidas se colapsan antes del límite de pares y el rol de un bridge
 se clasifica relativo a su project root.
 
+El corte rc21 cierra la raíz siguiente emitida por ese paquete.
+`knowledge_exact.lookup_exact` pasa de 191 líneas/complejidad 35 a un
+orquestador de 27/2. La selección de scopes, reportes unsupported, despacho por
+owner, presupuesto compartido y materialización quedaron en fases privadas; la
+mayor ocupa 49 líneas/complejidad 12. Una caracterización byte-estable sobre los
+tres owners reales fijó API, orden de términos, ejecución
+`inventory → code → catalog` aun con scopes y snapshot desordenados, reportes,
+timings, provenance y bytes de las tres bases primarias. La regresión restringe
+cualquier efecto de filesystem al WAL/SHM que SQLite administra al leer un owner
+ya configurado en WAL; no lo presenta como una instantánea quiescente sin
+sidecars. También quedó explícito que el presupuesto es global y que la
+cancelación conserva la misma excepción. El diff rc20→rc21
+retira sólo `lookup_exact`, añade y cambia cero hotspots y conserva cero
+resoluciones nuevas, corregidas o perdidas. La siguiente raíz pasa a
+`semantic_image_index.index_image_embeddings`, con
+`semantic_generation_repository._clone_published_members` únicamente como
+guarda contractual alcanzable a dos saltos.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -95,11 +113,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada al iniciar rc20: `main` en
-  `770cc335e7006168be100904623d600fa0d301a7`, idéntico a `origin/main` tras
-  fusionar el PR #10.
-- El checkout fuente es `0.7.2`. rc20 se desarrolla en
-  `codex/rc20-code-review-work-packages`; el identificador final del PR queda en
+- Base publicada al iniciar rc21: `main` en
+  `82b91477c3b2978e1a24a7074379d209f5bc2b82`, idéntico a `origin/main`.
+- El checkout fuente es `0.7.2`. rc21 se desarrolla en
+  `codex/rc21-knowledge-exact-lookup-package`; el identificador final del PR queda en
   la historia de Git/GitHub después de publicarlo. La
   igualdad final entre `main` y `origin/main` se verifica después del merge
   porque el commit no puede autorreferenciar su propio hash desde este handoff.
@@ -261,6 +278,22 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc21` — cierre de `lookup_exact`
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc21-knowledge-exact-orchestration\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `91066E02F35EC922F142D57A3218DC7E0E18F90AC2419254C94A16F99555E15E`;
+- 1 340 108 bytes, 274 miembros y `ZipFile.testzip()` limpio;
+- `Neocortex 0.7.2`, `pip check` limpio e import de `knowledge_exact.py`
+  confirmado desde `site-packages`; fuente e instalación comparten SHA-256
+  `9CAFC6AC48574BA4EDA7E3A0F49C20E5A55641EF5C81B95B489D5C89F7C939A9`;
+- el launcher instalado completó piloto 30/30, publicación 522 candidatos con
+  30 hits reutilizados y replay 522/522, sin bytes ni tiempo de lectura,
+  análisis, persistencia o grafo. Este runtime no se promovió al launcher
+  estable.
 
 ### Candidato focal `rc20` — paquetes de mantenimiento y taxonomy
 
@@ -613,6 +646,26 @@ Publicación del planner y refactor taxonomy rc20:
   sidecars. `current=false` conserva la limitación explícita y honesta de un
   journal no disponible en una consulta read-only.
 
+Publicación del refactor exacto rc21:
+`C:\Users\Victor\Neocortex\Laboratory\code-review-self-analysis-20260802-rc21-knowledge-exact-orchestration-state`.
+
+- piloto acotado a 30 archivos en 2.98 s, 336 símbolos, 1 375 referencias,
+  siete diagnósticos y cero errores; la finalización procesó 492 entradas y
+  reutilizó las 30 del piloto;
+- publicación completa: 532 archivos, 46 directorios excluidos, 522 candidatos,
+  15 034 símbolos, 81 751 referencias, 192 diagnósticos, un proyecto y cero
+  errores; replay posterior 522/522 cache hits con cero bytes y cero ms en las
+  cuatro fases Code;
+- review v3 byte-estable: digest `29a9aa1f9cbb0931f4c8009aa458eb28`,
+  471/471 Python completos, 178 hotspots, 59 289 calls y 18 768 resueltas;
+- diff rc20→rc21, digest `38df89a20e6493770c634d3f44b1604b`:
+  178 hotspots comunes, uno retirado, cero añadidos/cambiados; 58 084 calls
+  comunes, 39 914 aún no resueltas, 18 170 resueltas sin cambio y cero
+  resoluciones nuevas, corregidas o perdidas;
+- review y diff conservaron idénticos todos los SHA-256 SQLite de rc20 y rc21 y
+  dejaron cero sidecars. `current=false` permanece como
+  `freshness=publication_only` por `journal_status=unavailable`.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -782,6 +835,11 @@ ausentes y su candidate limit, no evidencia inventada.
   barrera amplia aprobó 786 casos y aisló 17 rechazos causados por una frontera
   temporal mal alineada; la repetición de los tres archivos completos bajo el
   laboratorio correcto aprobó `38 passed`, incluidos los 17 rechazados.
+- Refactor de `lookup_exact` rc21: caracterización previa y posterior
+  byte-estable; barrera focal `68 passed`, consumidores Knowledge `149 passed`,
+  Ruff/format y Mypy limpios. Wheel rc21, procedencia, piloto 30, publicación,
+  diff formal read-only y replay 522/522 quedaron verificados; ningún helper
+  alcanzó el umbral de hotspot.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -805,10 +863,11 @@ ausentes y su candidate limit, no evidencia inventada.
 ## Próximos pasos, en orden
 
 1. **Caracterizar el siguiente paquete.** Evaluar
-   `knowledge_exact.lookup_exact` preservando orden de owners y términos,
-   presupuesto global, cobertura, API pública, provenance y lectura estricta;
-   fijar fixtures exactos antes de tocar su partición.
-2. **Demostrar el siguiente cambio contra rc20.** Usar el work-package planner,
+   `semantic_image_index.index_image_embeddings` y usar
+   `semantic_generation_repository._clone_published_members` sólo como guarda
+   contractual. Fijar antes de editar orden de fases, cancelación, completitud,
+   atomicidad transaccional, reintento/reanudación y trabajo acotado.
+2. **Demostrar el siguiente cambio contra rc21.** Usar el work-package planner,
    repetir autoanálisis y `--code-publication-diff`; exigir retirar el objetivo
    sin añadir/cambiar hotspots, cero pérdidas/correcciones de resolución y replay
    100 % cache hit.

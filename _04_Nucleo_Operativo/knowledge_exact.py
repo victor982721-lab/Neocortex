@@ -2692,52 +2692,55 @@ def _unavailable_reports(
     ]
 
 
-def lookup_exact(
-    paths: KnowledgeStatePaths,
-    snapshot: KnowledgeSnapshot,
+@dataclass(frozen=True, slots=True)
+class _ExactLookupScopes:
+    inventory_path: tuple[str, ...] | None
+    code_path: tuple[str, ...] | None
+    catalog_source: tuple[str, ...] | None
+    catalog_path: tuple[str, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ExactLookupContext:
+    paths: KnowledgeStatePaths
+    snapshot: KnowledgeSnapshot
+    request: ExactLookupRequest
+    control: _QueryControl
+    scopes: _ExactLookupScopes
+    clock: Callable[[], int]
+
+
+def _exact_lookup_scopes(request: ExactLookupRequest) -> _ExactLookupScopes:
+    inventory_path = _inventory_path_scope(request.source_kinds, request.formats)
+    code_path = _code_path_scope(request.source_kinds, request.formats)
+    catalog_source, catalog_path = _catalog_row_scopes(
+        request.source_kinds,
+        request.formats,
+    )
+    return _ExactLookupScopes(
+        inventory_path,
+        code_path,
+        catalog_source,
+        catalog_path,
+    )
+
+
+def _unsupported_exact_reports(
     request: ExactLookupRequest,
-    *,
-    cancellation_check: Callable[[], None] | None = None,
-    clock_ns: Callable[[], int] | None = None,
-) -> ExactLookupResult:
-    """Resolve typed exact terms without creating or mutating owner state."""
-
-    control = _QueryControl(
-        request.max_observed_rows,
-        request.max_sqlite_steps,
-        cancellation_check,
-    )
-    control.checkpoint()
-    matches: list[ExactEvidenceMatch] = []
-    reports: list[ExactOwnerReport] = []
-    owner_timings: list[ExactOwnerTiming] = []
-    clock = clock_ns or time.perf_counter_ns
-    inventory_path_scope = _inventory_path_scope(
-        request.source_kinds,
-        request.formats,
-    )
-    code_path_scope = _code_path_scope(request.source_kinds, request.formats)
-    catalog_source_scope, catalog_path_scope = _catalog_row_scopes(
-        request.source_kinds,
-        request.formats,
-    )
-
-    serial_terms = tuple(
-        term for term in request.terms if term.kind is ExactLookupKind.SERIAL
-    )
-    for term in serial_terms:
-        reports.append(
-            _report(
-                "knowledge",
-                term,
-                ExactLookupStatus.UNSUPPORTED,
-                executed=False,
-                available=False,
-                reason="serial_field_not_contractual_in_phase1_owners",
-            )
+    selected_owners: frozenset[str],
+) -> list[ExactOwnerReport]:
+    reports = [
+        _report(
+            "knowledge",
+            term,
+            ExactLookupStatus.UNSUPPORTED,
+            executed=False,
+            available=False,
+            reason="serial_field_not_contractual_in_phase1_owners",
         )
-
-    selected_owners = frozenset(request.owner_scope)
+        for term in request.terms
+        if term.kind is ExactLookupKind.SERIAL
+    ]
     for term in request.terms:
         if term.kind is ExactLookupKind.SERIAL:
             continue
@@ -2756,93 +2759,128 @@ def lookup_exact(
                     reason="exact_term_has_no_owner_in_requested_scope",
                 )
             )
+    return reports
 
+
+def _global_budget_reports(
+    owner_name: str,
+    terms: Sequence[ExactLookupTerm],
+) -> list[ExactOwnerReport]:
+    return [
+        _report(
+            owner_name,
+            term,
+            ExactLookupStatus.PARTIAL,
+            executed=False,
+            available=True,
+            truncated=True,
+            reason="exact_global_work_budget_exhausted",
+        )
+        for term in terms
+    ]
+
+
+def _read_exact_owner(
+    context: _ExactLookupContext,
+    owner_name: str,
+    owner: OwnerSnapshot,
+    terms: Sequence[ExactLookupTerm],
+) -> tuple[list[ExactEvidenceMatch], list[ExactOwnerReport]]:
+    if owner_name == "inventory":
+        return _lookup_inventory(
+            context.paths.inventory,
+            owner,
+            terms,
+            context.control,
+            context.request.limit,
+            context.scopes.inventory_path,
+        )
+    if owner_name == "code":
+        return _lookup_code(
+            context.paths.code,
+            owner,
+            terms,
+            context.control,
+            context.request.limit,
+            context.scopes.code_path,
+        )
+    return _lookup_catalog(
+        context.paths.catalog,
+        owner,
+        terms,
+        context.control,
+        context.request.limit,
+        context.scopes.catalog_source,
+        context.scopes.catalog_path,
+    )
+
+
+def _execute_exact_owner(
+    context: _ExactLookupContext,
+    owner_name: str,
+    terms: Sequence[ExactLookupTerm],
+) -> tuple[list[ExactEvidenceMatch], list[ExactOwnerReport], ExactOwnerTiming]:
+    started_ns = context.clock()
+    owner = _snapshot_owner(context.snapshot, owner_name)
+    if owner is None or owner.state is not OwnerAvailability.AVAILABLE:
+        reports = _unavailable_reports(owner_name, owner, terms)
+        matches: list[ExactEvidenceMatch] = []
+    elif context.control.remaining_rows <= 0 or (
+        context.control.remaining_steps < SQLITE_PROGRESS_INTERVAL
+    ):
+        reports = _global_budget_reports(owner_name, terms)
+        matches = []
+    else:
+        matches, reports = _read_exact_owner(context, owner_name, owner, terms)
+    timing = ExactOwnerTiming(
+        owner_name,
+        tuple(report.name for report in reports),
+        _duration_ns(context.clock, started_ns),
+        any(report.executed for report in reports),
+    )
+    return matches, reports, timing
+
+
+def _lookup_exact_owners(
+    context: _ExactLookupContext,
+    selected_owners: frozenset[str],
+) -> tuple[
+    list[ExactEvidenceMatch],
+    list[ExactOwnerReport],
+    list[ExactOwnerTiming],
+]:
+    matches: list[ExactEvidenceMatch] = []
+    reports: list[ExactOwnerReport] = []
+    timings: list[ExactOwnerTiming] = []
     for owner_name, supported_kinds in _OWNER_KINDS:
         if owner_name not in selected_owners:
             continue
-        terms = tuple(term for term in request.terms if term.kind in supported_kinds)
+        terms = tuple(
+            term for term in context.request.terms if term.kind in supported_kinds
+        )
         if not terms:
             continue
-        started_ns = clock()
-        owner = _snapshot_owner(snapshot, owner_name)
-        if owner is None or owner.state is not OwnerAvailability.AVAILABLE:
-            owner_reports = _unavailable_reports(owner_name, owner, terms)
-            reports.extend(owner_reports)
-            owner_timings.append(
-                ExactOwnerTiming(
-                    owner_name,
-                    tuple(report.name for report in owner_reports),
-                    _duration_ns(clock, started_ns),
-                    False,
-                )
-            )
-            continue
-        if control.remaining_rows <= 0 or (
-            control.remaining_steps < SQLITE_PROGRESS_INTERVAL
-        ):
-            owner_reports = [
-                _report(
-                    owner_name,
-                    term,
-                    ExactLookupStatus.PARTIAL,
-                    executed=False,
-                    available=True,
-                    truncated=True,
-                    reason="exact_global_work_budget_exhausted",
-                )
-                for term in terms
-            ]
-            reports.extend(owner_reports)
-            owner_timings.append(
-                ExactOwnerTiming(
-                    owner_name,
-                    tuple(report.name for report in owner_reports),
-                    _duration_ns(clock, started_ns),
-                    False,
-                )
-            )
-            continue
-        if owner_name == "inventory":
-            owner_matches, owner_reports = _lookup_inventory(
-                paths.inventory,
-                owner,
-                terms,
-                control,
-                request.limit,
-                inventory_path_scope,
-            )
-        elif owner_name == "code":
-            owner_matches, owner_reports = _lookup_code(
-                paths.code,
-                owner,
-                terms,
-                control,
-                request.limit,
-                code_path_scope,
-            )
-        else:
-            owner_matches, owner_reports = _lookup_catalog(
-                paths.catalog,
-                owner,
-                terms,
-                control,
-                request.limit,
-                catalog_source_scope,
-                catalog_path_scope,
-            )
+        owner_matches, owner_reports, timing = _execute_exact_owner(
+            context,
+            owner_name,
+            terms,
+        )
         matches.extend(owner_matches)
         reports.extend(owner_reports)
-        owner_timings.append(
-            ExactOwnerTiming(
-                owner_name,
-                tuple(report.name for report in owner_reports),
-                _duration_ns(clock, started_ns),
-                any(report.executed for report in owner_reports),
-            )
-        )
+        timings.append(timing)
+    return matches, reports, timings
 
-    control.checkpoint()
-    term_order = {term.term_id: index for index, term in enumerate(request.terms)}
+
+def _materialize_exact_result(
+    context: _ExactLookupContext,
+    matches: Sequence[ExactEvidenceMatch],
+    reports: Sequence[ExactOwnerReport],
+    owner_timings: Sequence[ExactOwnerTiming],
+) -> ExactLookupResult:
+    context.control.checkpoint()
+    term_order = {
+        term.term_id: index for index, term in enumerate(context.request.terms)
+    }
     owner_order = {name: index for index, (name, _) in enumerate(_OWNER_KINDS)}
     ordered_matches = sorted(
         matches,
@@ -2853,36 +2891,64 @@ def lookup_exact(
             match.evidence.evidence_id,
         ),
     )
-    visible_matches = tuple(ordered_matches[: request.limit])
-    locally_omitted = sum(report.omitted_matches for report in reports)
-    omitted = locally_omitted + max(
+    visible_matches = tuple(ordered_matches[: context.request.limit])
+    omitted = sum(report.omitted_matches for report in reports) + max(
         0,
         len(ordered_matches) - len(visible_matches),
     )
     global_truncated = omitted > 0 or any(report.truncated for report in reports)
     warnings: set[str] = set()
-    if snapshot.consistency is not SnapshotConsistency.STABLE:
+    if context.snapshot.consistency is not SnapshotConsistency.STABLE:
         warnings.add("knowledge_snapshot_not_stable")
     if omitted:
         warnings.add("exact_global_result_limit_reached")
     complete = (
-        snapshot.consistency is SnapshotConsistency.STABLE
+        context.snapshot.consistency is SnapshotConsistency.STABLE
         and not global_truncated
         and bool(reports)
         and all(report.complete for report in reports)
     )
     return ExactLookupResult(
-        snapshot.snapshot_id,
+        context.snapshot.snapshot_id,
         visible_matches,
         tuple(reports),
         complete,
         global_truncated,
         omitted,
-        request.max_observed_rows - control.remaining_rows,
-        request.max_sqlite_steps - control.remaining_steps,
+        context.request.max_observed_rows - context.control.remaining_rows,
+        context.request.max_sqlite_steps - context.control.remaining_steps,
         tuple(sorted(warnings)),
         tuple(owner_timings),
     )
+
+
+def lookup_exact(
+    paths: KnowledgeStatePaths,
+    snapshot: KnowledgeSnapshot,
+    request: ExactLookupRequest,
+    *,
+    cancellation_check: Callable[[], None] | None = None,
+    clock_ns: Callable[[], int] | None = None,
+) -> ExactLookupResult:
+    """Resolve typed exact terms without creating or mutating owner state."""
+
+    control = _QueryControl(
+        request.max_observed_rows,
+        request.max_sqlite_steps,
+        cancellation_check,
+    )
+    control.checkpoint()
+    clock = clock_ns or time.perf_counter_ns
+    scopes = _exact_lookup_scopes(request)
+    selected_owners = frozenset(request.owner_scope)
+    reports = _unsupported_exact_reports(request, selected_owners)
+    context = _ExactLookupContext(paths, snapshot, request, control, scopes, clock)
+    matches, owner_reports, owner_timings = _lookup_exact_owners(
+        context,
+        selected_owners,
+    )
+    reports.extend(owner_reports)
+    return _materialize_exact_result(context, matches, reports, owner_timings)
 
 
 def lookup_plan_exact(

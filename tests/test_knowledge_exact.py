@@ -7,6 +7,7 @@
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
+import json
 import sqlite3
 import zlib
 from dataclasses import replace
@@ -44,6 +45,7 @@ from _04_Nucleo_Operativo.knowledge_planner import (
     plan_knowledge_query,
 )
 from _04_Nucleo_Operativo.knowledge_snapshot import KnowledgeStatePaths
+from _04_Nucleo_Operativo.semantic_models import fingerprint_text
 # endregion [01]
 
 # region [02] Implementación
@@ -298,6 +300,113 @@ def _create_catalog(path: Path) -> None:
             path="C:/docs/new.pdf",
             references='[{"identifier":"IEC-99999"}]',
         )
+
+
+LOOKUP_ORCHESTRATION_FIXTURE = (
+    Path(__file__).parent
+    / "fixtures"
+    / "knowledge_exact"
+    / "lookup_exact_orchestration_v1.json"
+)
+
+
+def _state_file_bytes(state: Path) -> dict[str, bytes]:
+    return {
+        path.name: path.read_bytes()
+        for path in sorted(state.iterdir())
+        if path.is_file()
+    }
+
+
+def test_lookup_exact_orchestration_preserves_primary_state_bytes(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    full_digest = _create_inventory(state / "dedup.sqlite3")
+    _create_code(state / "code.sqlite3")
+    _create_catalog(state / "document_catalog.sqlite3")
+    paths = KnowledgeStatePaths.from_directory(state)
+    terms = (
+        ExactLookupTerm(ExactLookupKind.PATH, "C:/docs/proteccion.pdf"),
+        ExactLookupTerm(ExactLookupKind.NAME, "A%_# report.pdf"),
+        ExactLookupTerm(ExactLookupKind.HASH, full_digest),
+        ExactLookupTerm(ExactLookupKind.SYMBOL, "control.validate"),
+        ExactLookupTerm(ExactLookupKind.IDENTIFIER, "IEC-61850"),
+        ExactLookupTerm(ExactLookupKind.SERIAL, "SN-2048"),
+    )
+    before = _state_file_bytes(state)
+    clock_values = iter((100, 110, 200, 215, 300, 321))
+
+    result = lookup_exact(
+        paths,
+        _snapshot(_catalog_owner(), _inventory_owner(), _code_owner()),
+        ExactLookupRequest(
+            terms,
+            limit=10,
+            max_observed_rows=100,
+            owner_scope=("catalog", "inventory", "code"),
+        ),
+        clock_ns=lambda: next(clock_values),
+    )
+
+    characterization = {
+        "result_xxh3_128": fingerprint_text(result.to_json()).xxh3_128,
+        "matches": [
+            [
+                match.term.kind.value,
+                match.resource.owner,
+                match.resource.current_path,
+                match.source_rank,
+            ]
+            for match in result.matches
+        ],
+        "reports": [
+            [
+                report.owner,
+                report.term.kind.value,
+                report.status.value,
+                report.executed,
+                report.available,
+            ]
+            for report in result.reports
+        ],
+        "owner_timings": [timing.to_dict() for timing in result.owner_timings],
+        "summary": {
+            "complete": result.complete,
+            "truncated": result.truncated,
+            "omitted_matches": result.omitted_matches,
+            "rows_observed": result.rows_observed,
+            "sqlite_steps": result.sqlite_steps,
+            "warnings": list(result.warnings),
+        },
+    }
+    fixture = json.loads(LOOKUP_ORCHESTRATION_FIXTURE.read_text(encoding="utf-8"))
+
+    assert fixture["schema"] == "neocortex-lookup-exact-orchestration/v1"
+    assert characterization == fixture["expected"]
+    after = _state_file_bytes(state)
+    database_names = {
+        "code.sqlite3",
+        "dedup.sqlite3",
+        "document_catalog.sqlite3",
+    }
+    allowed_entries = database_names | {
+        f"{name}{suffix}" for name in database_names for suffix in ("-wal", "-shm")
+    }
+
+    # SQLite may maintain WAL/SHM metadata for a read-only WAL owner.  Freeze
+    # primary bytes and reject every filesystem effect outside those sidecars.
+    assert {name: before[name] for name in database_names} == {
+        name: after[name] for name in database_names
+    }
+    assert set(before) <= allowed_entries
+    assert set(after) <= allowed_entries
+    assert all(
+        payload == b""
+        for name, payload in after.items()
+        if name not in before and name.endswith("-wal")
+    )
 
 
 def test_plan_exact_terms_are_typed_and_serial_variants_are_deduplicated() -> None:
@@ -1088,6 +1197,47 @@ def test_preflight_row_and_nonmultiple_vm_budgets_fail_partial_not_by_assertion(
     assert step_bounded.sqlite_steps <= 1_500
 
 
+def test_global_budget_is_shared_in_fixed_owner_order(tmp_path: Path) -> None:
+    state = tmp_path / "state"
+    state.mkdir()
+    _create_inventory(state / "dedup.sqlite3")
+    _create_code(state / "code.sqlite3")
+    paths = KnowledgeStatePaths.from_directory(state)
+    snapshot = _snapshot(_code_owner(), _inventory_owner())
+    term = ExactLookupTerm(ExactLookupKind.PATH, "C:/docs/A%_# report.pdf")
+    requests = (
+        ExactLookupRequest(
+            (term,),
+            limit=1,
+            max_observed_rows=1,
+            owner_scope=("code", "inventory"),
+        ),
+        ExactLookupRequest(
+            (term,),
+            limit=1,
+            max_sqlite_steps=knowledge_exact_module.SQLITE_PROGRESS_INTERVAL,
+            owner_scope=("code", "inventory"),
+        ),
+    )
+
+    for request in requests:
+        result = lookup_exact(paths, snapshot, request)
+        code_report = next(
+            report for report in result.reports if report.owner == "code"
+        )
+
+        assert code_report.executed is False
+        assert code_report.truncated is True
+        assert code_report.reason == "exact_global_work_budget_exhausted"
+        assert [timing.owner for timing in result.owner_timings] == [
+            "inventory",
+            "code",
+        ]
+        assert result.owner_timings[-1].executed is False
+        assert result.rows_observed <= request.max_observed_rows
+        assert result.sqlite_steps <= request.max_sqlite_steps
+
+
 def test_code_exact_path_hash_and_symbol_need_no_fts_chunks(tmp_path: Path) -> None:
     state = tmp_path / "state"
     state.mkdir()
@@ -1280,13 +1430,14 @@ def test_cancellation_propagates_before_owner_read(tmp_path: Path) -> None:
         pass
 
     calls = 0
+    failure = Cancelled("stop")
 
     def cancel() -> None:
         nonlocal calls
         calls += 1
-        raise Cancelled("stop")
+        raise failure
 
-    with pytest.raises(Cancelled, match="stop"):
+    with pytest.raises(Cancelled, match="stop") as caught:
         lookup_exact(
             KnowledgeStatePaths.from_directory(tmp_path / "state"),
             _snapshot(_absent_owner("catalog", 6)),
@@ -1297,6 +1448,7 @@ def test_cancellation_propagates_before_owner_read(tmp_path: Path) -> None:
             cancellation_check=cancel,
         )
     assert calls == 1
+    assert caught.value is failure
 
 
 def test_cancellation_inside_owner_query_is_not_downgraded_to_partial(
@@ -1309,14 +1461,15 @@ def test_cancellation_inside_owner_query_is_not_downgraded_to_partial(
     state.mkdir()
     _create_inventory(state / "dedup.sqlite3")
     calls = 0
+    failure = Cancelled("stop during owner query")
 
     def cancel() -> None:
         nonlocal calls
         calls += 1
         if calls >= 3:
-            raise Cancelled("stop during owner query")
+            raise failure
 
-    with pytest.raises(Cancelled, match="stop during owner query"):
+    with pytest.raises(Cancelled, match="stop during owner query") as caught:
         lookup_exact(
             KnowledgeStatePaths.from_directory(state),
             _snapshot(_inventory_owner()),
@@ -1332,6 +1485,7 @@ def test_cancellation_inside_owner_query_is_not_downgraded_to_partial(
             cancellation_check=cancel,
         )
     assert calls >= 3
+    assert caught.value is failure
 
 
 def test_request_bounds_and_parameterized_hostile_identifier() -> None:
