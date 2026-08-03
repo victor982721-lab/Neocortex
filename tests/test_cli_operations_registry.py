@@ -134,6 +134,7 @@ DIRECT_ARGUMENT_CASES = (
         ("--code-reconstruct", "project"),
     ),
     ("code_doctor", "run_code_doctor", ("--code-doctor",)),
+    ("code_query", "run_code_query", ("--code-query", "status")),
     ("knowledge_status", "run_knowledge_status", ("--knowledge-status",)),
     (
         "knowledge_search",

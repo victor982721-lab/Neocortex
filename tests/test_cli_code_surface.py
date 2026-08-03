@@ -251,6 +251,43 @@ EXPECTED_CODE_ACTIONS = (
         "code_doctor",
         "verify code schema, FTS and analyzer availability without analysis",
     ),
+    _expected_store(
+        "--code-query",
+        "code_query",
+        choices=("status", "review", "diff"),
+        help_text="query published Code analysis through one bounded read-only surface",
+    ),
+    *(
+        _expected_store(
+            f"--code-query-{option}",
+            f"code_query_{option.replace('-', '_')}",
+            metavar="VALUE",
+            help_text="repeat to add an exact Code analysis query filter",
+            action_name="_AppendAction",
+        )
+        for option in (
+            "provider",
+            "category",
+            "module",
+            "status",
+            "delta",
+            "work-package",
+        )
+    ),
+    _expected_store(
+        "--code-query-limit",
+        "code_query_limit",
+        default=50,
+        type_name="int",
+        metavar="N",
+        help_text="return between 1 and 500 bounded query rows",
+    ),
+    _expected_store(
+        "--code-query-baseline",
+        "code_query_baseline",
+        metavar="BASELINE_STATE",
+        help_text="baseline state required only by --code-query diff",
+    ),
     _expected_flag("--code-json", "code_json"),
 )
 
@@ -299,6 +336,24 @@ EXPECTED_CODE_HELP = (
     "  --code-reconstruct-strategy {latest,coherent,branches}\n"
     "  --code-doctor         verify code schema, FTS and analyzer availability\n"
     "                        without analysis\n"
+    "  --code-query {status,review,diff}\n"
+    "                        query published Code analysis through one bounded\n"
+    "                        read-only surface\n"
+    "  --code-query-provider VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-category VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-module VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-status VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-delta VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-work-package VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-limit N  return between 1 and 500 bounded query rows\n"
+    "  --code-query-baseline BASELINE_STATE\n"
+    "                        baseline state required only by --code-query diff\n"
     "  --code-json\n"
     "\n"
 )
