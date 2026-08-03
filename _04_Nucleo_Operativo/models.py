@@ -40,7 +40,7 @@ class FrameworkConfig:
     root: Path = field(default_factory=Path.home)
     state_directory: Path = field(default_factory=default_state_directory)
     self_analysis: bool = False
-    analysis_profile: Literal["protected", "trusted-static"] = "protected"
+    analysis_profile: Literal["protected", "trusted-static", "trusted-deep"] = "protected"
     corpus_access_mode: Literal["normal", "analyze_only"] = "normal"
     apply_actions: bool = False
     preview_group_limit: int = 0
@@ -158,6 +158,10 @@ class FrameworkConfig:
     pdf_memory_wait_timeout_seconds: float = 60.0
     pdf_large_document_bytes: int = 128 * 1024 * 1024
     pdf_large_document_workers: int = 2
+    deep_test_selectors: tuple[str, ...] = ()
+    deep_max_tests: int = 3000
+    deep_time_budget_seconds: int = 600
+    deep_shard_size: int = 20
 
     @property
     def dedup_database(self) -> Path:
