@@ -31,13 +31,11 @@ BASE_DEPENDENCIES = (
     "pytest>=9.1,<10",
     "rich>=15,<16",
     "ruff>=0.15,<0.16",
+    "vulture>=2.16,<2.17",
     "xxhash>=3.8,<4",
 )
 
-DEV_DEPENDENCIES = (
-    "build>=1.5,<2",
-    "vulture>=2.16,<3",
-)
+DEV_DEPENDENCIES = ("build>=1.5,<2",)
 
 OPTIONAL_DEPENDENCIES = {
     "documents": (
@@ -176,6 +174,7 @@ def test_missing_optional_runtimes_are_explicitly_unavailable_or_degraded() -> N
     assert statuses["code"].degradation_reasons == (
         "code_ruff_provider_unavailable",
         "code_mypy_provider_unavailable",
+        "code_vulture_provider_unavailable",
         "code_grimp_provider_unavailable",
         "code_complexipy_provider_unavailable",
         "code_pyright_node_unavailable",

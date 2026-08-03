@@ -607,7 +607,7 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v7"
+    assert first.as_payload()["schema"] == "neocortex.code-review/v8"
     assert "neocortex.code-review/v6" in first.as_payload()["compatible_schemas"]
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
@@ -615,6 +615,7 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
         "neocortex.code-review/v4",
         "neocortex.code-review/v5",
         "neocortex.code-review/v6",
+        "neocortex.code-review/v7",
     ]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
@@ -819,7 +820,7 @@ def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
     assert result.recommendations == ()
     assert result.work_package_status == "abstained"
     assert result.work_package_reason == (
-        "no_primary_act_now_recommendation_within_bounded_findings"
+        "no_primary_act_now_or_high_consensus_unused_candidate_within_bounded_evidence"
     )
     assert result.work_packages == ()
     assert result.coverage is not None

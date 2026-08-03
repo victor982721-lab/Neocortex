@@ -467,12 +467,23 @@ métricas o relaciones. Conserva como costo real el tiempo y bytes de
 verificación, aunque `process_invocations=0`. Mypy y
 Pyright se mantienen en espacios de evidencia separados y sólo producen un
 resumen de coincidencias/discrepancias cuando ambos tienen cobertura completa.
-La plataforma es advisory, no ejecuta contenido, no aplica fixes y no posee
-autoridad de mutación. `trusted-deep` está reservado, no implementado.
+Los ocho proveedores `trusted-static` son advisory, no ejecutan contenido, no
+aplican fixes y no poseen autoridad de mutación. `trusted-deep` añade
+`pytest-coverage-trusted-deep` únicamente para la identidad física exacta de la
+raíz canónica: carga plugins y contenido, ejecuta la suite declarada bajo
+límites y reconoce que no impone sandbox de red. Sigue siendo advisory, nunca
+predeterminado y carece de autoridad de mutación.
+
+`vulture-unused-static` aporta candidatos heurísticos que
+`neocortex.code-unused-analysis/v1` correlaciona con Pyright, grafo, exports,
+contratos dinámicos y Coverage. Los cuatro estados explicables, calibración y
+holdout alimentan status, review, diff y work packages sin score mágico. Incluso
+`probable_unused_high_consensus` sólo crea trabajo de caracterización con
+confirmación humana; nunca autorización de borrado.
 
 La proyección pública `architecture_analysis` mantiene por separado
 `import_graph_consensus`, `architecture_contracts` y
-`module_complexity_displacement`. Review v6 y publication diff v4 sólo aprueban
+`module_complexity_displacement`. Review v8 y publication diff v6 sólo aprueban
 los gates comparables `architecture_contracts_not_degraded`,
 `no_new_import_cycles` y `module_complexity_not_displaced`; en un baseline,
 ante cobertura parcial o firma incompatible quedan `baseline` o

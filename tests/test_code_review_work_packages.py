@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 from _04_Nucleo_Operativo.code_architecture_analysis import (
     ArchitectureContract,
@@ -26,11 +27,18 @@ from _04_Nucleo_Operativo.code_review_models import (
     CodeReviewFinding,
     CodeReviewImpact,
     CodeReviewResult,
+    bounded_code_unused_payload,
     build_code_review_recommendations,
 )
 from _04_Nucleo_Operativo.code_review_work_packages import (
     build_code_review_work_packages,
+    plan_code_review_work_packages,
     read_code_review_planning_links,
+)
+from _04_Nucleo_Operativo.code_unused_analysis import (
+    UnusedConsensusCandidate,
+    UnusedEvidenceSignals,
+    analyze_code_unused,
 )
 
 
@@ -322,6 +330,182 @@ def test_planner_abstains_without_an_act_now_recommendation() -> None:
     )
 
     assert build_code_review_work_packages(findings, (), ()) == ()
+
+
+def _unused_candidate(
+    *,
+    state: str = "probable_unused_high_consensus",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        candidate_id="unused:document_taxonomy.classify_document",
+        relative_path="document_taxonomy.py",
+        module_id="document_taxonomy",
+        symbol="document_taxonomy.classify_document",
+        name="classify_document",
+        state=state,
+        provider_ids=("pyright-trusted-project", "vulture-unused-static"),
+        reasons=("both_static_providers_report", "no_explained_usage_observed"),
+    )
+
+
+def _unused_analysis(*candidates: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        status="ready",
+        candidates=tuple(candidates),
+        calibration_signature="calibration-v1",
+        coverage_status="missing",
+        gates=(
+            SimpleNamespace(gate="calibration_probable_unused_precision", status="passed"),
+            SimpleNamespace(gate="holdout_probable_unused_precision", status="passed"),
+        ),
+    )
+
+
+def test_normal_work_package_is_annotated_with_matching_unused_evidence() -> None:
+    findings = _planning_findings()
+    recommendations = build_code_review_recommendations(findings, limit=1)
+    packages = build_code_review_work_packages(
+        findings,
+        recommendations,
+        (),
+        unused_analysis=_unused_analysis(_unused_candidate()),  # type: ignore[arg-type]
+    )
+
+    assert len(packages) == 1
+    assert packages[0].package_kind == "hotspot_maintenance"
+    assert tuple(item.state for item in packages[0].unused_candidates) == (
+        "probable_unused_high_consensus",
+    )
+    assert packages[0].requires_human_confirmation is True
+    assert packages[0].mutation_authority is False
+
+
+def test_high_consensus_unused_candidate_gets_characterization_only_package() -> None:
+    packages, status, reason = plan_code_review_work_packages(
+        (),
+        (),
+        (),
+        unused_analysis=_unused_analysis(_unused_candidate()),  # type: ignore[arg-type]
+    )
+
+    assert status == "ready"
+    assert reason is None
+    assert len(packages) == 1
+    package = packages[0]
+    assert package.package_kind == "unused_characterization"
+    assert package.objective == "characterize_high_consensus_unused_candidate_without_mutation"
+    assert all(step.phase != "change" for step in package.steps)
+    assert package.requires_human_confirmation is True
+    assert package.mutation_authority is False
+    assert "human_confirmation_recorded" in package.acceptance_gates
+
+
+def test_non_high_consensus_unused_states_never_create_characterization_packages() -> None:
+    candidates = tuple(
+        _unused_candidate(state=state)
+        for state in (
+            "explained_usage",
+            "dynamic_usage_possible",
+            "insufficient_evidence",
+        )
+    )
+    packages, status, reason = plan_code_review_work_packages(
+        (),
+        (),
+        (),
+        unused_analysis=_unused_analysis(*candidates),  # type: ignore[arg-type]
+    )
+
+    assert packages == ()
+    assert status == "abstained"
+    assert reason == (
+        "no_primary_act_now_or_high_consensus_unused_candidate_within_bounded_evidence"
+    )
+
+
+def test_unused_characterization_requires_a_passed_calibration_gate() -> None:
+    analysis = _unused_analysis(_unused_candidate())
+    analysis.gates = (
+        SimpleNamespace(gate="calibration_probable_unused_precision", status="not_evaluated"),
+        SimpleNamespace(gate="holdout_probable_unused_precision", status="passed"),
+    )
+
+    packages, status, _reason = plan_code_review_work_packages(
+        (),
+        (),
+        (),
+        unused_analysis=analysis,  # type: ignore[arg-type]
+    )
+
+    assert packages == ()
+    assert status == "abstained"
+
+
+def test_review_unused_payload_bounds_candidates_and_nested_evidence() -> None:
+    evidence_ids = tuple(f"evidence-{index:02d}" for index in range(25))
+    signals = UnusedEvidenceSignals(
+        vulture_reported=True,
+        vulture_confidence=1.0,
+        pyright_reported=True,
+        vulture_complete=True,
+        pyright_complete=True,
+        providers_aligned=True,
+        graph_references=0,
+        graph_calls=0,
+        graph_imports=0,
+        in_all=False,
+        reexported=False,
+        entry_point=False,
+        callback=False,
+        registry=False,
+        fixture=False,
+        protocol=False,
+        special=False,
+        coverage_observed=False,
+        coverage_status="missing",
+        evidence_ids=evidence_ids,
+    )
+    candidates = tuple(
+        UnusedConsensusCandidate(
+            candidate_id=f"candidate-{index:02d}",
+            version_id=index + 1,
+            symbol_id=index + 1,
+            relative_path=f"pkg/module_{index:02d}.py",
+            module_id=f"pkg.module_{index:02d}",
+            symbol=f"pkg.module_{index:02d}.unused",
+            name="unused",
+            kind="function",
+            start_line=1,
+            end_line=2,
+            state="probable_unused_high_consensus",
+            provider_ids=("pyright-trusted-project", "vulture-unused-static"),
+            signals=signals,
+            reasons=evidence_ids,
+            evidence=evidence_ids,
+            limitations=evidence_ids,
+        )
+        for index in range(21)
+    )
+    analysis = analyze_code_unused(candidates, provider_signature="providers-v1")
+
+    payload = bounded_code_unused_payload(analysis)
+
+    assert payload["candidates_total"] == 21
+    assert payload["candidates_truncated"] is True
+    payload_candidates = payload["candidates"]
+    assert isinstance(payload_candidates, list)
+    assert len(payload_candidates) == 20
+    first = payload_candidates[0]
+    assert isinstance(first, dict)
+    assert first["evidence_total"] == 25
+    assert first["evidence_truncated"] is True
+    bounded_evidence = first["evidence"]
+    assert isinstance(bounded_evidence, list)
+    assert len(bounded_evidence) == 20
+    bounded_signals = first["signals"]
+    assert isinstance(bounded_signals, dict)
+    assert bounded_signals["evidence_ids_total"] == 25
+    assert bounded_signals["evidence_ids_truncated"] is True
 
 
 def test_work_package_adds_bounded_architecture_context_without_changing_identity() -> None:

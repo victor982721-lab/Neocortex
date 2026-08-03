@@ -1,0 +1,13 @@
+{
+  "schema": "neocortex.unused-consensus-fixture/v1",
+  "dataset_id": "neocortex-unused-holdout/v1",
+  "split": "holdout",
+  "samples": [
+    {"sample_id": "hold-used-call", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "hold-used-entry", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "hold-dynamic-protocol", "label": "used", "expected_state": "dynamic_usage_possible"},
+    {"sample_id": "hold-unused-both", "label": "unused", "expected_state": "probable_unused_high_consensus"},
+    {"sample_id": "hold-unused-low", "label": "unused", "expected_state": "insufficient_evidence"},
+    {"sample_id": "hold-unused-incomplete", "label": "unused", "expected_state": "insufficient_evidence"}
+  ]
+}

@@ -123,9 +123,9 @@ el piloto del perfil estático es:
 Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
 ```
 
-`trusted-static` ejecuta siete proveedores independientes: Ruff basic, Ruff
+`trusted-static` ejecuta ocho proveedores independientes: Ruff basic, Ruff
 con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp y Complexipy. Las familias
+Grimp, Complexipy y Vulture. Las familias
 Ruff `I,PT,SIM,UP` quedan fuera para priorizar defectos y mantenibilidad sobre
 estilo/modernización. No escale si status muestra un
 proveedor `abstained`/`not_recorded`, cobertura incompleta o una limitación que
@@ -139,6 +139,39 @@ cognitiva. El status arquitectónico debe mostrar
 `module_complexity_displacement`. En la primera publicación, las dimensiones
 que necesitan comparación permanecen `baseline` o `not_evaluated`; sólo un diff
 comparable permite aprobar que no hubo degradación o desplazamiento.
+
+### Consenso de código potencialmente no usado
+
+`vulture-unused-static` pertenece a `trusted-static` y también se conserva en
+`trusted-deep`. Analiza las copias verificadas del inventario Python sin cargar
+configuración del proyecto, ejecutar contenido, usar red ni aplicar fixes. Sus
+findings son candidatos heurísticos; nunca son prueba suficiente de no uso.
+
+Después de publicar, consulte `--code-status --code-json` y revise
+`unused_analysis`. El consumidor exige Vulture y Pyright listos y correlaciona
+grafo, imports, reexports, `__all__`, callbacks, registries, fixtures, entry
+points, Protocols y Coverage disponible. La precedencia operativa es:
+
+1. evidencia de uso observada → `explained_usage`;
+2. contrato dinámico plausible → `dynamic_usage_possible`;
+3. Vulture/Pyright completos y alineados, confianza Vulture ≥ 0.90 y ninguna
+   evidencia de uso → `probable_unused_high_consensus`;
+4. cualquier brecha restante → `insufficient_evidence`.
+
+Calibration y holdout son fixtures etiquetados independientes. Status y review
+deben publicar precision, recall, abstención, denominadores, firmas y gates por
+separado; no mezcle ambos conjuntos ni presente sus métricas como probabilidad
+de defecto. Si un gate de precisión no pasa, no se crean paquetes de
+caracterización. Si pasa, review puede crear como máximo tres paquetes
+`unused_characterization`; cada uno exige revisión de usos dinámicos, pruebas,
+confirmación humana y replay comparable. `mutation_authority=false` y la
+ausencia total de autoridad de borrado se mantienen incluso para consenso alto.
+
+El publication diff sólo compara esta dimensión cuando coinciden proveedor,
+policy, calibración y holdout. Un candidato de consenso alto nuevo falla su gate
+observacional para exigir revisión; no autoriza editar ni borrar. Coverage puede
+explicar una ejecución observada, pero la falta de cobertura nunca fortalece la
+hipótesis de no uso.
 
 ### Perfil `trusted-deep`
 
@@ -418,8 +451,11 @@ Neocortex --code-doctor
   intérprete, con caché efímera propiedad de la corrida.
 - Pyright `1.1.411` se instala como paquete npm aislado junto al runtime y se
   invoca mediante Node. `--code-doctor --code-json` informa por separado los
-  siete proveedores; la corrida incorpora la resolución exacta a su firma de
-  entorno y comparabilidad.
+  ocho proveedores estáticos y el proveedor profundo; la corrida incorpora la
+  resolución exacta a su firma de entorno y comparabilidad.
+- Vulture `2.16` pertenece al runtime base y se invoca mediante su API
+  programática aislada. Su finding es advisory y sólo el consumidor de consenso
+  puede explicarlo o abstenerse; nunca autoriza borrar.
 - Grimp `3.15` y Complexipy `6.2.0` pertenecen al runtime Python base. Grimp se
   consume directamente como grafo legible por máquina; Import Linter `2.13` se
   midió viable pero no se integra porque duplicaría esa dimensión sin salida de
@@ -462,9 +498,9 @@ incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
 No ejecute manualmente herramientas externas ni descargue modelos para validar
 una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
-validación del wheel debe confirmar Ruff, Mypy, Grimp, Complexipy, Pytest y
-Coverage en la base, y la preparación de los perfiles trusted debe confirmar
-Node y el paquete Pyright aislado.
+validación del wheel debe confirmar Ruff, Mypy, Grimp, Complexipy, Vulture,
+Pytest y Coverage en la base, y la preparación de los perfiles trusted debe
+confirmar Node y el paquete Pyright aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
 estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo

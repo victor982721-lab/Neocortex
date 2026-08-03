@@ -27,6 +27,7 @@ from .code_external_evidence import (
     external_status_digest_payload,
     read_external_evidence,
 )
+from .code_unused_analysis import CodeUnusedAnalysis, read_code_unused_analysis
 from .code_schema import (
     CODE_SCHEMA_VERSION,
     readonly_code_database,
@@ -43,18 +44,25 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v5"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v6"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
     "neocortex.code-publication-diff/v3",
     "neocortex.code-publication-diff/v4",
+    "neocortex.code-publication-diff/v5",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
 CODE_PUBLICATION_DIFF_MAX_CALLS = 250_000
 CODE_PUBLICATION_DIFF_MAX_HOTSPOTS = 20_000
 CODE_PUBLICATION_DIFF_MAX_MODULES = 50_000
+_UNUSED_REQUIRED_PRECISION_GATES = frozenset(
+    {
+        "calibration_probable_unused_precision",
+        "holdout_probable_unused_precision",
+    }
+)
 
 DiffStatus = Literal["ready", "abstained"]
 
@@ -183,6 +191,46 @@ class CodeArchitectureDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeUnusedCandidateExample:
+    candidate_id: str
+    relative_path: str
+    symbol: str | None
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodeUnusedStateChange:
+    candidate_id: str
+    relative_path: str
+    symbol: str | None
+    baseline_state: str
+    current_state: str
+
+
+@dataclass(frozen=True, slots=True)
+class CodeUnusedAnalysisDelta:
+    """Comparable identity/state changes; never a defect or deletion score."""
+
+    status: Literal["ready", "not_evaluated"]
+    reason: str | None
+    baseline_provider_signature: str | None
+    current_provider_signature: str | None
+    baseline_calibration_signature: str | None
+    current_calibration_signature: str | None
+    common: int
+    added: int | None
+    removed: int | None
+    state_changes: int | None
+    high_consensus_added: int | None
+    high_consensus_resolved: int | None
+    added_examples: tuple[CodeUnusedCandidateExample, ...]
+    removed_examples: tuple[CodeUnusedCandidateExample, ...]
+    state_change_examples: tuple[CodeUnusedStateChange, ...]
+    gate: Literal["passed", "failed", "not_evaluated"]
+    gate_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class CodePublicationDiffDigest:
     xxh3_128: str
     xxh3_64_guard: str
@@ -217,6 +265,7 @@ class CodePublicationDiffResult:
     )
     limitations: tuple[str, ...]
     digest: CodePublicationDiffDigest | None
+    unused_analysis: CodeUnusedAnalysisDelta | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload = asdict(self)
@@ -254,6 +303,7 @@ class _Publication:
     provider_finding_ids: dict[str, frozenset[str]]
     architecture: CodeArchitectureAnalysis
     test_coverage: CodeCoverageAnalysis
+    unused_analysis: CodeUnusedAnalysis
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -513,6 +563,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             int(latest["analysis_run_id"]),
             database=str(database),
         )
+        unused_analysis = read_code_unused_analysis(
+            connection,
+            int(latest["analysis_run_id"]),
+            database=str(database),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -537,6 +592,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         provider_ids,
         architecture,
         test_coverage,
+        unused_analysis,
     )
 
 
@@ -1012,6 +1068,161 @@ def _architecture_delta(
     )
 
 
+def _unused_not_evaluated(
+    baseline: CodeUnusedAnalysis,
+    current: CodeUnusedAnalysis,
+    reason: str,
+) -> CodeUnusedAnalysisDelta:
+    return CodeUnusedAnalysisDelta(
+        status="not_evaluated",
+        reason=reason,
+        baseline_provider_signature=baseline.provider_signature,
+        current_provider_signature=current.provider_signature,
+        baseline_calibration_signature=baseline.calibration_signature,
+        current_calibration_signature=current.calibration_signature,
+        common=0,
+        added=None,
+        removed=None,
+        state_changes=None,
+        high_consensus_added=None,
+        high_consensus_resolved=None,
+        added_examples=(),
+        removed_examples=(),
+        state_change_examples=(),
+        gate="not_evaluated",
+        gate_reason=reason,
+    )
+
+
+def _unused_comparability_reason(
+    baseline: CodeUnusedAnalysis,
+    current: CodeUnusedAnalysis,
+) -> str | None:
+    if baseline.status != "ready":
+        return "baseline_unused_analysis_not_ready:" + (baseline.reason or baseline.status)
+    if current.status != "ready":
+        return "current_unused_analysis_not_ready:" + (current.reason or current.status)
+    signatures = (
+        ("provider_signature", baseline.provider_signature, current.provider_signature),
+        ("calibration_signature", baseline.calibration_signature, current.calibration_signature),
+        ("policy_signature", baseline.policy_signature, current.policy_signature),
+    )
+    for name, baseline_value, current_value in signatures:
+        if not baseline_value or not current_value:
+            return f"unused_{name}_missing"
+        if baseline_value != current_value:
+            return f"unused_{name}_mismatch"
+    return None
+
+
+def _unused_acceptance_gate(
+    baseline: CodeUnusedAnalysis,
+    current: CodeUnusedAnalysis,
+    *,
+    high_consensus_added: int,
+) -> tuple[Literal["passed", "failed", "not_evaluated"], str | None]:
+    observed = {
+        f"{label}:{gate.gate}": gate.status
+        for label, analysis in (("baseline", baseline), ("current", current))
+        for gate in analysis.gates
+        if gate.gate in _UNUSED_REQUIRED_PRECISION_GATES
+    }
+    required = tuple(
+        f"{label}:{gate}"
+        for label in ("baseline", "current")
+        for gate in sorted(_UNUSED_REQUIRED_PRECISION_GATES)
+    )
+    failed = tuple(item for item in required if observed.get(item) == "failed")
+    if failed:
+        return "failed", "unused_precision_gate_failed:" + ",".join(failed)
+    unavailable = tuple(item for item in required if observed.get(item) != "passed")
+    if unavailable:
+        return "not_evaluated", "unused_precision_gate_not_evaluated:" + ",".join(unavailable)
+    if high_consensus_added:
+        return "failed", "new_probable_unused_high_consensus_candidates"
+    return "passed", None
+
+
+def _unused_delta(
+    baseline: CodeUnusedAnalysis,
+    current: CodeUnusedAnalysis,
+) -> CodeUnusedAnalysisDelta:
+    reason = _unused_comparability_reason(baseline, current)
+    if reason is not None:
+        return _unused_not_evaluated(baseline, current, reason)
+    baseline_by_id = {item.candidate_id: item for item in baseline.candidates}
+    current_by_id = {item.candidate_id: item for item in current.candidates}
+    baseline_ids = set(baseline_by_id)
+    current_ids = set(current_by_id)
+    common_ids = sorted(baseline_ids & current_ids)
+    added_ids = sorted(current_ids - baseline_ids)
+    removed_ids = sorted(baseline_ids - current_ids)
+    changes = tuple(
+        CodeUnusedStateChange(
+            candidate_id=candidate_id,
+            relative_path=current_by_id[candidate_id].relative_path,
+            symbol=current_by_id[candidate_id].symbol,
+            baseline_state=baseline_by_id[candidate_id].state,
+            current_state=current_by_id[candidate_id].state,
+        )
+        for candidate_id in common_ids
+        if baseline_by_id[candidate_id].state != current_by_id[candidate_id].state
+    )
+    high_state = "probable_unused_high_consensus"
+    high_added = sum(
+        current_by_id[candidate_id].state == high_state
+        and (candidate_id not in baseline_by_id or baseline_by_id[candidate_id].state != high_state)
+        for candidate_id in current_ids
+    )
+    high_resolved = sum(
+        baseline_by_id[candidate_id].state == high_state
+        and (candidate_id not in current_by_id or current_by_id[candidate_id].state != high_state)
+        for candidate_id in baseline_ids
+    )
+    added_examples = tuple(
+        CodeUnusedCandidateExample(
+            candidate_id=item.candidate_id,
+            relative_path=item.relative_path,
+            symbol=item.symbol,
+            state=item.state,
+        )
+        for item in (current_by_id[candidate_id] for candidate_id in added_ids)
+    )[:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT]
+    removed_examples = tuple(
+        CodeUnusedCandidateExample(
+            candidate_id=item.candidate_id,
+            relative_path=item.relative_path,
+            symbol=item.symbol,
+            state=item.state,
+        )
+        for item in (baseline_by_id[candidate_id] for candidate_id in removed_ids)
+    )[:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT]
+    gate, gate_reason = _unused_acceptance_gate(
+        baseline,
+        current,
+        high_consensus_added=high_added,
+    )
+    return CodeUnusedAnalysisDelta(
+        status="ready",
+        reason=None,
+        baseline_provider_signature=baseline.provider_signature,
+        current_provider_signature=current.provider_signature,
+        baseline_calibration_signature=baseline.calibration_signature,
+        current_calibration_signature=current.calibration_signature,
+        common=len(common_ids),
+        added=len(added_ids),
+        removed=len(removed_ids),
+        state_changes=len(changes),
+        high_consensus_added=high_added,
+        high_consensus_resolved=high_resolved,
+        added_examples=added_examples,
+        removed_examples=removed_examples,
+        state_change_examples=changes[:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT],
+        gate=gate,
+        gate_reason=gate_reason,
+    )
+
+
 def _digest_payload(
     baseline: CodePublicationSnapshot,
     current: CodePublicationSnapshot,
@@ -1022,6 +1233,7 @@ def _digest_payload(
     providers: tuple[CodeProviderEvidenceDelta, ...],
     architecture: CodeArchitectureDelta,
     test_coverage: CoverageComparison,
+    unused_analysis: CodeUnusedAnalysisDelta,
     verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
@@ -1054,6 +1266,7 @@ def _digest_payload(
             "providers": [asdict(item) for item in providers],
             "architecture": asdict(architecture),
             "test_coverage": asdict(test_coverage),
+            "unused_analysis": asdict(unused_analysis),
             "verdict": verdict,
             "limitations": list(limitations),
         }
@@ -1089,6 +1302,7 @@ def _abstained(
         verdict=None,
         limitations=(),
         digest=None,
+        unused_analysis=None,
     )
 
 
@@ -1126,13 +1340,18 @@ def compare_code_publications(
         baseline.test_coverage,
         current.test_coverage,
     )
+    unused_analysis = _unused_delta(
+        baseline.unused_analysis,
+        current.unused_analysis,
+    )
     verdict = _provider_verdict(providers)
     limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
-        "provider_verdict_excludes_architecture_and_test_coverage_gates",
+        "provider_verdict_excludes_architecture_test_coverage_and_unused_gates",
+        "unused_analysis_is_advisory_and_never_authorizes_deletion_or_mutation",
     ]
     if any(item.status != "ready" for item in providers):
         limitations.append("provider_verdict_uses_only_comparable_providers")
@@ -1140,6 +1359,8 @@ def compare_code_publications(
         limitations.append("architecture_delta_not_comparable")
     if test_coverage.status != "comparable":
         limitations.append("test_coverage_delta_not_comparable")
+    if unused_analysis.status != "ready":
+        limitations.append("unused_analysis_delta_not_comparable")
     if any(
         _legacy_ruff_contract_compatible(item.provider_id, item.baseline, item.current)
         for item in providers
@@ -1156,6 +1377,7 @@ def compare_code_publications(
         providers,
         architecture,
         test_coverage,
+        unused_analysis,
         verdict,
         frozen_limitations,
     )
@@ -1177,6 +1399,7 @@ def compare_code_publications(
         verdict=verdict,
         limitations=frozen_limitations,
         digest=digest,
+        unused_analysis=unused_analysis,
     )
 
 
@@ -1194,5 +1417,8 @@ __all__ = [
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",
     "CodePublicationSnapshot",
+    "CodeUnusedAnalysisDelta",
+    "CodeUnusedCandidateExample",
+    "CodeUnusedStateChange",
     "compare_code_publications",
 ]

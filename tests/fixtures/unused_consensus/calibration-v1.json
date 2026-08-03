@@ -1,0 +1,15 @@
+{
+  "schema": "neocortex.unused-consensus-fixture/v1",
+  "dataset_id": "neocortex-unused-calibration/v1",
+  "split": "calibration",
+  "samples": [
+    {"sample_id": "cal-used-reference", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "cal-used-import", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "cal-used-export", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "cal-used-coverage", "label": "used", "expected_state": "explained_usage"},
+    {"sample_id": "cal-dynamic-registry", "label": "used", "expected_state": "dynamic_usage_possible"},
+    {"sample_id": "cal-unused-both-100", "label": "unused", "expected_state": "probable_unused_high_consensus"},
+    {"sample_id": "cal-unused-both-90", "label": "unused", "expected_state": "probable_unused_high_consensus"},
+    {"sample_id": "cal-unused-vulture-only", "label": "unused", "expected_state": "insufficient_evidence"}
+  ]
+}

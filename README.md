@@ -224,12 +224,24 @@ fija `E4,E7,E9,F`, aislada de la configuración del proyecto. Para una raíz que
 Victor haya declarado confiable, `--analysis-profile trusted-static` añade,
 como proveedores independientes, Ruff con la política versionada del proyecto,
 acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze, Grimp y
-Complexipy. Ruff trusted omite
+Complexipy, y `vulture-unused-static`. Ruff trusted omite
 deliberadamente `I,PT,SIM,UP`: esas familias de estilo, tests y modernización no
 deben ahogar la señal de mantenimiento en esta etapa. Los dos type checkers
 conservan hallazgos separados y publican
 un resumen explícito de coincidencias y discrepancias; la ausencia de uno queda
 `not_comparable`, nunca se disfraza de consenso.
+
+Vulture 2.16 aporta candidatos estáticos `unused_code` mediante una ejecución
+aislada, acotada y sin cargar configuración del proyecto. Su confianza es una
+señal heurística, no una conclusión. El consumidor
+`neocortex.code-unused-analysis/v1` la correlaciona con Pyright, grafo interno,
+imports, reexports, `__all__`, callbacks, registries, fixtures, entry points,
+Protocols y, cuando existe, Coverage. Cada candidato queda en uno de cuatro
+estados explicables: `explained_usage`, `dynamic_usage_possible`,
+`insufficient_evidence` o `probable_unused_high_consensus`. Fixture de
+calibración y holdout publican precision, recall y abstención por separado; una
+señal ausente o no comparable obliga a abstenerse. Incluso el consenso alto es
+advisory, exige confirmación humana y tiene cero autoridad de borrado o mutación.
 
 Los tres proveedores de arquitectura tienen contratos distintos: Ruff Analyze
 (`ruff-analyze-imports`) actúa como oráculo diferencial del grafo; Grimp
@@ -240,7 +252,7 @@ se derivan de los seis paquetes de producción y conservan explícitamente las
 fronteras permitidas y los ciclos ya existentes como baseline `no-new`; no
 presentan la arquitectura actual como acíclica.
 
-Los siete proveedores estáticos trabajan sobre copias verificadas, tienen
+Los ocho proveedores estáticos trabajan sobre copias verificadas, tienen
 límites y no importan ni ejecutan el código observado. Todos publican versión,
 firmas, cobertura, contadores de proceso/bytes/tiempo/caché y evidencia
 únicamente advisory; ninguno aplica fixes ni posee autoridad de mutación. Un
@@ -250,7 +262,7 @@ doctor; una indisponibilidad o límite alcanzado obliga a abstener el gate
 afectado, no borra la evidencia de los demás proveedores.
 
 `trusted-deep` es un perfil adicional, nunca predeterminado, que conserva los
-siete proveedores estáticos y añade `pytest-coverage-trusted-deep`. Sólo acepta
+ocho proveedores estáticos y añade `pytest-coverage-trusted-deep`. Sólo acepta
 la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`: ejecuta
 el código del proyecto, sus pruebas y `conftest.py`, mide líneas y ramas con
 contextos dinámicos por test, y por ello no se admite sobre una raíz arbitraria.
@@ -284,16 +296,20 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v7 conserva las capas anteriores, el ranking bruto y
+explicable. El envelope v8 conserva las capas anteriores, el ranking bruto y
 hasta tres recomendaciones `act_now`, y añade
 `external_evidence_suite` con los proveedores y gates normalizados sin alterar
 ranking ni actionability. La proyección `architecture_analysis` consume las
 métricas y relaciones portables del schema Code v4 y muestra módulos, imports,
 SCC, contratos y los estados `import_graph_consensus`,
 `architecture_contracts` y `module_complexity_displacement`; ausencia o falta
-de comparabilidad nunca se convierte en `passed`. Mantiene un
-único `work_package` como siguiente cambio coherente.
-Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
+de comparabilidad nunca se convierte en `passed`. `unused_analysis` publica los
+cuatro estados, evidencia, firmas, calibración/holdout y gates sin cambiar el
+ranking histórico. El planificador v4 conserva como máximo un paquete raíz de
+mantenimiento y, de forma independiente, puede añadir hasta tres paquetes de
+caracterización para candidatos `probable_unused_high_consensus` sólo cuando
+pasan los gates de precisión. El paquete de mantenimiento mantiene una sola
+recomendación raíz y enlaza como `contract_guard`
 los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
 y enumera contratos, cadenas de imports acotadas, orden, validación y gates de
 arquitectura/publicación: `architecture_contracts_not_degraded`,
@@ -305,14 +321,15 @@ faltantes del símbolo objetivo, y añade `tests_passed`, `coverage_available`,
 comparable. El horizonte de planeación permanece fijo en 50 aunque la vista
 muestre 10; no agrupa por nombre, directorio ni prefijo de módulo.
 `--code-review-limit N --code-json` amplía de 1 a 50 la vista auditable. La
-consulta es estrictamente read-only y el paquete es consejo, nunca autorización
-de cambio. Los avisos heurísticos de código
-probablemente muerto se cuentan pero no se recomiendan hasta calibrar su
-resolución de llamadas. Un snapshot full completado sin USN se etiqueta
+consulta es estrictamente read-only y todo paquete es consejo, nunca autorización
+de cambio. Un paquete de código potencialmente no usado sólo solicita
+caracterización, revisión de superficies dinámicas, pruebas y confirmación
+humana; nunca propone borrar. El conteo legacy `probable_dead` permanece
+descriptivo y separado. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` v5 compara dos publicaciones Code completadas sin
+`--code-publication-diff` v6 compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
 hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
@@ -320,8 +337,12 @@ coinciden. Añade deltas de métricas por módulo, contratos, ciclos y complejid
 desplazada cuando ambas publicaciones son comparables. Para `trusted-deep`
 compara cobertura de líneas y ramas sólo si coinciden la suite, alcance,
 configuración y herramientas; de otro modo la dimensión queda
-`not_evaluated`. El veredicto agregado siempre conserva las limitaciones
-parciales.
+`not_evaluated`. También compara identidades y cambios entre los cuatro estados
+de código potencialmente no usado sólo si coinciden proveedor, policy,
+calibración y holdout, e informa candidatos de consenso alto añadidos o
+resueltos; cualquier incompatibilidad queda `not_evaluated`. El veredicto
+agregado siempre conserva las limitaciones parciales y nunca transforma el
+delta en autorización de borrado.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.

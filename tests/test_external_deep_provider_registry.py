@@ -25,6 +25,7 @@ from _04_Nucleo_Operativo.external_evidence_models import (
 )
 from _04_Nucleo_Operativo.external_evidence_providers import (
     PYTEST_COVERAGE_PROVIDER_ID,
+    VULTURE_UNUSED_PROVIDER_ID,
     PytestCoverageTrustedDeepProvider,
     provider_tool_versions,
     providers_for_profile,
@@ -108,6 +109,7 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
         "ruff-trusted-project",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "vulture-unused-static",
         "ruff-analyze-imports",
         "grimp-architecture",
         "complexipy-cognitive",
@@ -124,6 +126,21 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
     assert descriptor.uses_network is True
     assert descriptor.mutation_authority is False
     assert descriptor.limits.timeout_seconds == 90.0
+    vulture_descriptor = next(
+        item.descriptor
+        for item in providers
+        if item.descriptor.provider_id == VULTURE_UNUSED_PROVIDER_ID
+    )
+    assert vulture_descriptor.profile == "trusted-static"
+    assert vulture_descriptor.scope == "current-inventory-python"
+    assert vulture_descriptor.invalidation_strategy == "project_wide"
+    assert vulture_descriptor.loads_project_configuration is False
+    assert vulture_descriptor.loads_plugins is False
+    assert vulture_descriptor.imports_content is False
+    assert vulture_descriptor.executes_content is False
+    assert vulture_descriptor.uses_network is False
+    assert vulture_descriptor.mutation_authority is False
+    assert provider_tool_versions()[VULTURE_UNUSED_PROVIDER_ID] == "vulture-test"
     assert provider_tool_versions()[PYTEST_COVERAGE_PROVIDER_ID] == (
         "pytest=pytest-test;coverage=coverage-test"
     )

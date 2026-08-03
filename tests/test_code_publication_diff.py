@@ -6,6 +6,7 @@ import hashlib
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 from _04_Nucleo_Operativo.code_architecture_analysis import (
     ArchitectureContract,
@@ -23,6 +24,7 @@ from _04_Nucleo_Operativo.code_contracts import (
 )
 from _04_Nucleo_Operativo.code_publication_diff import (
     _architecture_delta,
+    _unused_delta,
     compare_code_publications,
 )
 from _04_Nucleo_Operativo.code_schema import (
@@ -37,6 +39,99 @@ from tests.test_external_provider_platform import _tree as _provider_source_tree
 
 
 PROCESSING_SIGNATURE = "code-publication-diff-fixture-v1"
+
+
+def _unused_candidate(candidate_id: str, state: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        candidate_id=candidate_id,
+        relative_path=f"pkg/{candidate_id}.py",
+        symbol=f"pkg.{candidate_id}",
+        state=state,
+    )
+
+
+def _unused_analysis(
+    *candidates: SimpleNamespace,
+    provider_signature: str = "providers-v1",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        status="ready",
+        reason=None,
+        provider_signature=provider_signature,
+        calibration_signature="calibration-v1",
+        policy_signature="policy-v1",
+        evidence_signature="evidence-v1",
+        candidates=tuple(candidates),
+        gates=(
+            SimpleNamespace(gate="calibration_probable_unused_precision", status="passed"),
+            SimpleNamespace(gate="holdout_probable_unused_precision", status="passed"),
+        ),
+    )
+
+
+def test_unused_diff_compares_portable_identity_and_state_without_a_magic_score() -> None:
+    baseline = _unused_analysis(
+        _unused_candidate("candidate-a", "insufficient_evidence"),
+        _unused_candidate("candidate-b", "probable_unused_high_consensus"),
+    )
+    current = _unused_analysis(
+        _unused_candidate("candidate-a", "probable_unused_high_consensus"),
+        _unused_candidate("candidate-b", "explained_usage"),
+        _unused_candidate("candidate-c", "probable_unused_high_consensus"),
+    )
+    current.evidence_signature = "different-normalized-content"
+
+    delta = _unused_delta(baseline, current)  # type: ignore[arg-type]
+
+    assert delta.status == "ready"
+    assert delta.common == 2
+    assert delta.added == 1
+    assert delta.removed == 0
+    assert delta.state_changes == 2
+    assert delta.high_consensus_added == 2
+    assert delta.high_consensus_resolved == 1
+    assert delta.gate == "failed"
+    assert delta.gate_reason == "new_probable_unused_high_consensus_candidates"
+    assert delta.added_examples[0].candidate_id == "candidate-c"
+    assert delta.added_examples[0].relative_path == "pkg/candidate-c.py"
+    assert not hasattr(delta, "score")
+    assert not hasattr(delta, "defect_probability")
+
+
+def test_unused_diff_never_passes_when_provider_signatures_are_incomparable() -> None:
+    baseline = _unused_analysis(
+        _unused_candidate("candidate-a", "insufficient_evidence"),
+        provider_signature="providers-v1",
+    )
+    current = _unused_analysis(
+        _unused_candidate("candidate-a", "explained_usage"),
+        provider_signature="providers-v2",
+    )
+
+    delta = _unused_delta(baseline, current)  # type: ignore[arg-type]
+
+    assert delta.status == "not_evaluated"
+    assert delta.reason == "unused_provider_signature_mismatch"
+    assert delta.gate == "not_evaluated"
+    assert delta.added is None
+    assert delta.state_changes is None
+
+
+def test_unused_diff_never_passes_without_a_calibrated_precision_gate() -> None:
+    baseline = _unused_analysis(_unused_candidate("candidate-a", "probable_unused_high_consensus"))
+    current = _unused_analysis(_unused_candidate("candidate-a", "probable_unused_high_consensus"))
+    current.gates = (
+        SimpleNamespace(gate="calibration_probable_unused_precision", status="not_evaluated"),
+        SimpleNamespace(gate="holdout_probable_unused_precision", status="passed"),
+    )
+
+    delta = _unused_delta(baseline, current)  # type: ignore[arg-type]
+
+    assert delta.status == "ready"
+    assert delta.reason is None
+    assert delta.gate == "not_evaluated"
+    assert delta.gate_reason is not None
+    assert delta.gate_reason.startswith("unused_precision_gate_not_evaluated:")
 
 
 def _diagnostic(
@@ -368,8 +463,8 @@ def test_publication_diff_of_the_same_state_is_stable_and_empty(
     assert result.test_coverage.status == "not_comparable"
     assert all(gate.status == "not_evaluated" for gate in result.test_coverage.gates)
     payload = result.as_payload()
-    assert payload["schema"] == "neocortex.code-publication-diff/v5"
-    assert "neocortex.code-publication-diff/v4" in payload["compatible_schemas"]
+    assert payload["schema"] == "neocortex.code-publication-diff/v6"
+    assert "neocortex.code-publication-diff/v5" in payload["compatible_schemas"]
     coverage_payload = payload["test_coverage"]
     assert isinstance(coverage_payload, dict)
     assert coverage_payload["schema"] == "neocortex.code-coverage-analysis/v1"
