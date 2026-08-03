@@ -122,6 +122,143 @@ def _insert_finding_projection(
     return _lastrowid(cursor)
 
 
+def _normalized_finding_from_row(row: sqlite3.Row) -> ExternalProviderFinding:
+    try:
+        metadata = json.loads(str(row["metadata_json"]))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("external finding metadata is malformed") from exc
+    if (
+        not isinstance(metadata, dict)
+        or row["relative_path"] is None
+        or row["version_id"] is None
+        or bool(row["mutation_authority"])
+    ):
+        raise ValueError("external finding owner projection is incomplete")
+    details = metadata.get("details")
+    if not isinstance(details, dict):
+        raise ValueError("external finding details are malformed")
+    return ExternalProviderFinding(
+        str(row["portable_finding_id"]),
+        int(row["version_id"]),
+        str(row["relative_path"]),
+        str(row["category"]),
+        str(row["code"]),
+        str(row["severity"]),
+        str(row["message"]),
+        bool(row["observation_confirmed"]),
+        None if row["tool_confidence"] is None else float(row["tool_confidence"]),
+        (None if row["calibrated_confidence"] is None else float(row["calibrated_confidence"])),
+        str(row["gate_authority"]),
+        int(row["start_line"]),
+        int(row["start_column"]),
+        int(row["end_line"]),
+        int(row["end_column"]),
+        metadata.get("url") if isinstance(metadata.get("url"), str) else None,
+        bool(metadata.get("fix_available", False)),
+        details,
+    )
+
+
+def _normalized_provider_findings(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+) -> tuple[ExternalProviderFinding, ...]:
+    rows = connection.execute(
+        """SELECT f.*,i.relative_path FROM external_findings f
+        LEFT JOIN external_run_inputs i ON i.tool_run_id=f.tool_run_id
+        AND i.version_id=f.version_id
+        WHERE f.tool_run_id=? ORDER BY f.portable_finding_id LIMIT ?""",
+        (tool_run_id, _FINDING_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _FINDING_LIMIT:
+        raise ValueError("external provider findings exceed their read bound")
+    return tuple(_normalized_finding_from_row(row) for row in rows)
+
+
+def _rematerialize_replay_projection(
+    connection: sqlite3.Connection,
+    publication: ExternalProviderPublication,
+) -> None:
+    source_tool_run_id = publication.replay_source_tool_run_id
+    if source_tool_run_id is None:
+        raise ValueError("external provider replay source is missing")
+    descriptor = publication.descriptor
+    source = connection.execute(
+        """SELECT r.status,r.tool_name,r.tool_version,r.configuration_signature,
+        c.provider_id,c.provider_schema,c.source,c.profile,c.root_identity,
+        c.project_configuration_digest,c.environment_signature,c.input_signature,
+        c.comparability_signature,c.execution,c.result_digest,c.coverage_complete
+        FROM external_tool_runs r JOIN external_run_contracts c
+        ON c.tool_run_id=r.tool_run_id WHERE r.tool_run_id=?""",
+        (source_tool_run_id,),
+    ).fetchone()
+    expected_source = (
+        "completed",
+        descriptor.tool_name,
+        publication.publication.tool_version,
+        descriptor.configuration_signature,
+        descriptor.provider_id,
+        descriptor.provider_schema,
+        descriptor.source,
+        descriptor.profile,
+        publication.root_identity,
+        descriptor.project_configuration_digest,
+        descriptor.environment_signature,
+        publication.input_signature,
+        descriptor.comparability_signature,
+        "full",
+        publication.result_digest,
+        1,
+    )
+    if source is None or tuple(source) != expected_source:
+        raise ValueError("external provider replay source is incompatible")
+
+    findings = _normalized_provider_findings(connection, source_tool_run_id)
+    metrics = _provider_metrics(connection, source_tool_run_id)
+    relations = _provider_relations(connection, source_tool_run_id)
+    if publication.result_digest != external_provider_result_digest(
+        findings,
+        metrics,
+        relations,
+    ):
+        raise ValueError("external provider replay source digest is inconsistent")
+    for counter, evidence in (
+        ("findings", findings),
+        ("metrics", metrics),
+        ("relations", relations),
+    ):
+        if publication.counters.get(counter, len(evidence)) != len(evidence):
+            raise ValueError(f"external provider replay {counter} counter is inconsistent")
+    for finding in findings:
+        if not _current_version_exists(connection, finding.version_id):
+            raise RuntimeError("external replay finding version is no longer current")
+    for metric in metrics:
+        if metric.version_id is not None and not _current_version_exists(
+            connection, metric.version_id
+        ):
+            raise RuntimeError("external replay metric version is no longer current")
+    for relation in relations:
+        for version_id in (relation.source_version_id, relation.target_version_id):
+            if version_id is not None and not _current_version_exists(connection, version_id):
+                raise RuntimeError("external replay relation version is no longer current")
+
+    _delete_provider_projection(connection, source=descriptor.source)
+    for finding in findings:
+        diagnostic_id = _insert_finding_projection(
+            connection,
+            tool_run_id=source_tool_run_id,
+            publication=publication,
+            finding=finding,
+        )
+        connection.execute(
+            """UPDATE external_findings SET projected_diagnostic_id=?
+            WHERE tool_run_id=? AND portable_finding_id=?""",
+            (diagnostic_id, source_tool_run_id, finding.portable_finding_id),
+        )
+    if _provider_findings(connection, source_tool_run_id) != findings:
+        raise ValueError("external provider replay projection verification failed")
+
+
 def _publish_external_provider(
     connection: sqlite3.Connection,
     analysis_run_id: int,
@@ -232,6 +369,7 @@ def _publish_external_provider(
     if publication.replay_source_tool_run_id is not None:
         if publication.execution != "cache_replay" or not publication.verification_signature:
             raise ValueError("external provider replay contract is incomplete")
+        _rematerialize_replay_projection(connection, publication)
         connection.execute(
             """INSERT INTO external_run_replays(
             tool_run_id,source_tool_run_id,verification_signature,
@@ -505,12 +643,6 @@ def _provider_findings(
     findings: list[ExternalProviderFinding] = []
     for row in rows:
         try:
-            metadata = json.loads(str(row["metadata_json"]))
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise ValueError("external finding metadata is malformed") from exc
-        if not isinstance(metadata, dict) or row["relative_path"] is None:
-            raise ValueError("external finding owner projection is incomplete")
-        try:
             diagnostic_metadata = json.loads(str(row["diagnostic_metadata"]))
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError("external diagnostic projection metadata is malformed") from exc
@@ -534,35 +666,7 @@ def _provider_findings(
         )
         if not expected_projection:
             raise ValueError("external diagnostic projection is inconsistent")
-        details = metadata.get("details")
-        if not isinstance(details, dict):
-            raise ValueError("external finding details are malformed")
-        findings.append(
-            ExternalProviderFinding(
-                str(row["portable_finding_id"]),
-                int(row["version_id"]),
-                str(row["relative_path"]),
-                str(row["category"]),
-                str(row["code"]),
-                str(row["severity"]),
-                str(row["message"]),
-                bool(row["observation_confirmed"]),
-                None if row["tool_confidence"] is None else float(row["tool_confidence"]),
-                (
-                    None
-                    if row["calibrated_confidence"] is None
-                    else float(row["calibrated_confidence"])
-                ),
-                str(row["gate_authority"]),
-                int(row["start_line"]),
-                int(row["start_column"]),
-                int(row["end_line"]),
-                int(row["end_column"]),
-                metadata.get("url") if isinstance(metadata.get("url"), str) else None,
-                bool(metadata.get("fix_available", False)),
-                details,
-            )
-        )
+        findings.append(_normalized_finding_from_row(row))
     return tuple(findings)
 
 

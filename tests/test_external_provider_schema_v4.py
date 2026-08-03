@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 from _04_Nucleo_Operativo import code_schema
 from _04_Nucleo_Operativo.code_external_evidence import ExternalEvidencePublication
 from _04_Nucleo_Operativo.external_evidence_models import (
+    ExternalProviderFinding,
     ExternalProviderMetric,
     ExternalProviderPublication,
     ExternalProviderRelation,
@@ -110,6 +112,27 @@ def _metric(provider_id: str, *, value: float = 3.0) -> ExternalProviderMetric:
     )
 
 
+def _finding(provider_id: str) -> ExternalProviderFinding:
+    return ExternalProviderFinding(
+        f"finding:{provider_id}:a.py:1",
+        1,
+        "a.py",
+        "architecture",
+        "fixture-contract",
+        "warning",
+        "Fixture architecture contract is violated",
+        True,
+        1.0,
+        None,
+        "advisory",
+        1,
+        0,
+        1,
+        4,
+        metadata={"contract": "fixture"},
+    )
+
+
 def _relation(provider_id: str) -> ExternalProviderRelation:
     return ExternalProviderRelation(
         external_relation_identity(
@@ -166,6 +189,21 @@ def _full_publication(provider_id: str) -> ExternalProviderPublication:
     )
 
 
+def _full_publication_with_finding(provider_id: str) -> ExternalProviderPublication:
+    base = _full_publication(provider_id)
+    finding = _finding(provider_id)
+    return replace(
+        base,
+        findings=(finding,),
+        counters={**base.counters, "findings": 1},
+        result_digest=external_provider_result_digest(
+            (finding,),
+            base.metrics,
+            base.relations,
+        ),
+    )
+
+
 def _replay_publication(
     source: ExternalProviderPublication,
     source_tool_run_id: int,
@@ -189,7 +227,7 @@ def _replay_publication(
             "covered_files": 1,
             "files_verified": 1,
             "bytes_verified": 4,
-            "findings": 0,
+            "findings": len(source.findings),
             "metrics": 1,
             "relations": 1,
             "comparable": 1,
@@ -361,11 +399,22 @@ def test_publication_replay_and_baseline_resolve_all_evidence(tmp_path: Path) ->
     try:
         source = _full_publication("architecture-provider")
         source_run_id = publish_external_provider(connection, 1, source)
+        connection.execute(
+            """INSERT INTO diagnostics(
+            version_id,source,code,severity,message,tool_name,tool_version,
+            confirmed,confidence,metadata_json)
+            VALUES(1,'external:architecture-provider','stale','warning',
+            'stale projection','fixture-tool','1.0',1,1.0,'{}')"""
+        )
         replay_run_id = publish_external_provider(
             connection,
             2,
             _replay_publication(source, source_run_id),
         )
+        remaining_projection_count = connection.execute(
+            """SELECT COUNT(*) FROM diagnostics
+            WHERE source='external:architecture-provider'"""
+        ).fetchone()[0]
         connection.commit()
 
         evidence = read_external_provider_evidence(connection, 2)["architecture-provider"]
@@ -387,6 +436,7 @@ def test_publication_replay_and_baseline_resolve_all_evidence(tmp_path: Path) ->
     assert evidence.status == "ready"
     assert evidence.tool_run_id == replay_run_id
     assert evidence.effective_tool_run_id == source_run_id
+    assert remaining_projection_count == 0
     assert len(evidence.metrics) == len(evidence.relations) == 1
     assert evidence.relations[0].relation_kind == "module_import"
     assert suite.providers[0].metrics == suite.providers[0].relations == 1
@@ -394,6 +444,79 @@ def test_publication_replay_and_baseline_resolve_all_evidence(tmp_path: Path) ->
     assert exact is not None and comparable is not None
     assert exact.portable_metric_ids == (source.metrics[0].portable_metric_id,)
     assert exact.portable_relation_ids == (source.relations[0].portable_relation_id,)
+
+
+def test_exact_replay_rematerializes_a_deleted_diagnostic_projection(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "replay-projection.sqlite3"
+    _create_current_owner(database, 1, 2, 3)
+    connection = code_schema.connect_code_state(database, create=False)
+    try:
+        source = _full_publication_with_finding("architecture-provider")
+        source_run_id = publish_external_provider(connection, 1, source)
+        connection.execute("DELETE FROM diagnostics WHERE source='external:architecture-provider'")
+        assert (
+            connection.execute(
+                """SELECT projected_diagnostic_id FROM external_findings
+            WHERE tool_run_id=?""",
+                (source_run_id,),
+            ).fetchone()[0]
+            is None
+        )
+
+        first_replay_id = publish_external_provider(
+            connection,
+            2,
+            _replay_publication(source, source_run_id),
+        )
+        first_status = read_external_evidence_suite(
+            connection,
+            2,
+            enforce_current_runtime=False,
+        )
+        second_replay_id = publish_external_provider(
+            connection,
+            3,
+            _replay_publication(source, source_run_id),
+        )
+        second_status = read_external_evidence_suite(
+            connection,
+            3,
+            enforce_current_runtime=False,
+        )
+        normalized_counts = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("external_findings", "external_metrics", "external_relations")
+        }
+        projection = connection.execute(
+            """SELECT f.projected_diagnostic_id,d.source,d.metadata_json
+            FROM external_findings f JOIN diagnostics d
+            ON d.diagnostic_id=f.projected_diagnostic_id
+            WHERE f.tool_run_id=?""",
+            (source_run_id,),
+        ).fetchone()
+        replay_count = connection.execute("SELECT COUNT(*) FROM external_run_replays").fetchone()[0]
+        connection.commit()
+    finally:
+        connection.close()
+
+    assert first_replay_id != source_run_id
+    assert second_replay_id not in {source_run_id, first_replay_id}
+    assert first_status.status == second_status.status == "ready"
+    assert first_status.providers[0].findings == second_status.providers[0].findings == 1
+    assert first_status.providers[0].execution == "cache_replay"
+    assert second_status.providers[0].execution == "cache_replay"
+    assert normalized_counts == {
+        "external_findings": 1,
+        "external_metrics": 1,
+        "external_relations": 1,
+    }
+    assert projection is not None
+    assert projection[0] is not None
+    assert projection[1] == "external:architecture-provider"
+    assert json.loads(projection[2])["external_tool_run_id"] == source_run_id
+    assert replay_count == 2
 
 
 def test_one_corrupt_provider_abstains_without_hiding_a_valid_provider(
