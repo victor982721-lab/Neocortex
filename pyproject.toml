@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "complexipy>=6.2,<7",
+    "cosmic-ray>=8.4.6,<8.5",
     "coverage>=7.14,<8",
     "deptry>=0.25,<0.26",
     "grimp>=3.15,<4",
