@@ -152,6 +152,12 @@ de soporte ignorados por Git tampoco entran en la firma de soporte; la
 limitación `git_ignored_support_files_excluded_from_support_signature` impide
 presentar esa firma como observación exhaustiva de artefactos locales ignorados.
 
+En Windows, el entorno efímero del worker fija `core.longpaths=true` mediante
+`GIT_CONFIG_COUNT/KEY/VALUE` sólo para sus procesos hijos. No cambia la
+configuración global, local ni del sistema de Git. Los diagnósticos extensos de
+Pytest conservan tanto el encabezado como la causa final al truncarse, para no
+ocultar el error operativo que cerró una prueba.
+
 Cada shard queda ligado a fingerprints de código, soporte de pruebas, suite,
 selección, configuración y versiones de Python/Pytest/Coverage. Sólo se conserva
 un checkpoint si todas sus pruebas terminaron aprobadas. Una reanudación puede
