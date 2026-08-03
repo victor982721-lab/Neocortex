@@ -24,9 +24,12 @@ confiable sin autorizar trabajo común sobre el corpus. El preset:
   parciales—, con ejecución aislada, acotada y sin autoridad de mutación.
 
 No es una consulta read-only: crea o actualiza `framework.sqlite3`,
-`dedup.sqlite3` y `code.sqlite3` en el estado indicado. El código observado se
-trata como datos; nunca se ejecuta ni adquiere autoridad para pedir
-herramientas, permisos, red o mutaciones.
+`dedup.sqlite3` y `code.sqlite3` en el estado indicado. En `protected` y
+`trusted-static`, el código observado se trata sólo como datos y no se ejecuta.
+La única excepción es el perfil explícito `trusted-deep`, cuya finalidad es
+ejecutar la suite declarada de la raíz canónica bajo límites duros; ni el código
+ni sus resultados adquieren autoridad para pedir herramientas, permisos, red o
+mutaciones.
 
 ## Plataforma genérica de evidencia externa
 
@@ -39,12 +42,13 @@ ruta desconocida, cambio concurrente, salida inválida, timeout, overflow o
 límite alcanzado falla o abstiene sólo al proveedor afectado sin ocultar el
 estado AST ni los demás resultados válidos.
 
-`--analysis-profile` admite dos perfiles públicos:
+`--analysis-profile` admite tres perfiles públicos:
 
 | Perfil | Proveedores | Configuración y confianza |
 |---|---|---|
 | `protected` (predeterminado) | `ruff-protected-basic` | Ruff `E4,E7,E9,F` con `--isolated`, sin configuración del proyecto. Es la frontera `untrusted-safe`. |
 | `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture`, `complexipy-cognitive` | Añade política estática, tipos, grafo de imports, contratos arquitectónicos y complejidad cognitiva sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
+| `trusted-deep` | Los siete de `trusted-static` más `pytest-coverage-trusted-deep` | Ejecuta el código, pruebas y `conftest.py` declarados únicamente para la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`; mide branch coverage y contextos dinámicos por test. Es la frontera `trusted-execution`, nunca predeterminada. |
 
 Ruff trusted selecciona `E4,E7,E9,F,B,C4,PIE,RUF`. Omite deliberadamente
 `I,PT,SIM,UP`: ordenar imports, convenciones pytest, simplificación y
@@ -85,8 +89,9 @@ baseline `no-new`; no afirman que la arquitectura actual sea acíclica.
 Cada adaptador usa salida estructurada, cwd/entorno controlados, caché efímera o
 deshabilitada, límites de proceso, tiempo, memoria, inputs, diagnósticos y
 salida. Todas las formas de fix permanecen deshabilitadas. Los descriptores
-declaran `imports_content=false`, `executes_content=false`, `uses_network=false`,
-`authority=advisory` y `mutation_authority=false`.
+estáticos declaran `imports_content=false`, `executes_content=false`; el
+proveedor profundo declara ambas como `true`. Todos declaran
+`uses_network=false`, `authority=advisory` y `mutation_authority=false`.
 
 Mypy y Pyright publican findings `typing` separados. `type_consensus` compara
 únicamente proveedores completos y compatibles; cuenta `both_report`,
@@ -113,9 +118,46 @@ compatibles y la finalización
 de Code se confirman atómicamente. Una corrida parcial, indisponible o fallida
 no puede aprobar su gate ni aparentar frescura.
 
-`trusted-deep` está reservado en los contratos persistentes para una futura
-frontera de ejecución confiable; no es una opción CLI ni tiene proveedores
-implementados.
+### Ejecución profunda, Coverage y reanudación
+
+`trusted-deep` no acepta mini-roots ni raíces configurables: antes de crear el
+run exige que ruta resuelta e identidad física coincidan exactamente con
+`C:\Users\Victor\Neocortex\Repository`. Su estado sigue siendo externo y
+disjunto; el ejemplo operativo usa exclusivamente Laboratory:
+
+```powershell
+$Root = 'C:\Users\Victor\Neocortex\Repository'
+$State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\trusted-deep'
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State
+```
+
+Sin `--deep-test-selector`, Pytest recolecta la suite declarada completa. El
+selector es repetible y acepta una ruta relativa bajo `tests/` o un node id. La
+selección explícita se publica como `selected`; la ausencia de selectores, como
+`full`. Los controles son:
+
+| Opción | Predeterminado | Rango | Función |
+|---|---:|---:|---|
+| `--deep-max-tests` | 3000 | 1–5000 | Máximo de tests admitidos; una recolección mayor queda parcial. |
+| `--deep-time-budget-seconds` | 600 | 30–900 | Presupuesto duro total de recolección y ejecución. |
+| `--deep-shard-size` | 20 | 1–50 | Node ids exactos por shard reanudable. |
+
+El proveedor inicia Coverage con branch coverage antes de cargar Pytest y
+cambia el contexto dinámico por node id y fase (`setup`, `call`, `teardown`).
+Normaliza resultados test→líneas→símbolos→módulos como métricas y relaciones
+portables consumidas por status, review, diff y work packages. Coverage mide
+sólo el proceso principal: no recoge subprocesses y publica explícitamente
+`coverage_main_process_only` y `subprocess_coverage_not_collected`. Los archivos
+de soporte ignorados por Git tampoco entran en la firma de soporte; la
+limitación `git_ignored_support_files_excluded_from_support_signature` impide
+presentar esa firma como observación exhaustiva de artefactos locales ignorados.
+
+Cada shard queda ligado a fingerprints de código, soporte de pruebas, suite,
+selección, configuración y versiones de Python/Pytest/Coverage. Sólo se conserva
+un checkpoint si todas sus pruebas terminaron aprobadas. Una reanudación puede
+reutilizar esos shards; los fallidos, incompletos, corruptos o incompatibles se
+ejecutan de nuevo. Un replay exacto de toda la publicación conserva además el
+contrato genérico de caché del proveedor.
 
 ## Preflight y disjunción obligatoria
 
@@ -138,8 +180,8 @@ uso.
 Con un artefacto instalado que coincida con esta fuente, la forma canónica es:
 
 ```powershell
-$Root = Join-Path $HOME 'Neocortex\Repository'
-$State = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\smokes\run-id'
+$Root = 'C:\Users\Victor\Neocortex\Repository'
+$State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\run-id'
 # Elija un perfil para el estado de esta secuencia:
 Neocortex --self-analysis --root $Root --state-directory $State
 # o, sólo para una raíz confiable:
@@ -240,6 +282,11 @@ documento liga:
 - los cuatro conteos de seguridad en cero;
 - los dos arrays argv canónicos.
 
+En `trusted-deep` añade `deep_analysis`: declara
+`content_executed=true`, `suite_selection`, selectores, límites y una firma de
+configuración. La ausencia, duplicación o incoherencia de esos controles invalida
+el manifest en lugar de reconstruir supuestos.
+
 La consulta compatible es `--code-status --code-json`. Sólo añade
 `self_analysis` cuando el último run de code está ligado a un autoanálisis; un
 run normal conserva `self_analysis: null`. `manifest_status` puede ser
@@ -247,6 +294,12 @@ run normal conserva `self_analysis: null`. `manifest_status` puede ser
 raíz, vínculo code/framework, checkpoint de inventario y estado del journal
 (`unchanged`, `advanced`, `discontinuous` o `unavailable`); `current=true`
 requiere todas las cercas positivas y journal sin cambios.
+
+Para una publicación profunda, el mismo status añade `test_coverage` con el
+estado de `pytest-coverage-trusted-deep`, suite `full` o `selected`, completitud,
+resultados de pruebas, totales de líneas y ramas, conteos de módulos/símbolos y
+relaciones test→símbolo, gates y limitaciones. La salida de consola permanece
+acotada; JSON conserva ejemplos limitados y conteos totales.
 
 El decoder conserva lectura estricta del manifest histórico v1. Un manifest v2
 con journal no disponible puede ser válido como evidencia de una corrida
@@ -274,7 +327,7 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v6` conserva compatibilidad con v2-v5 y la proyección
+El contrato `neocortex.code-review/v7` conserva compatibilidad con v2-v6 y la proyección
 legacy `external_evidence`; añade `external_evidence_suite` con perfil, estado,
 proveedores, cobertura, counters, gates y consenso de tipos. Añade además
 `architecture`, que consume métricas/relaciones persistidas y resume
@@ -282,6 +335,9 @@ módulos, símbolos, imports, SCC, ciclos, contratos y tres estados explícitos:
 `import_graph_consensus`, `architecture_contracts` y
 `module_complexity_displacement`. Cada estado puede quedar `not_evaluated`; la
 ausencia de un proveedor o baseline comparable nunca equivale a aprobación.
+`test_coverage` añade los resultados profundos sin reinterpretar una suite
+parcial como completa: enumera ejemplos acotados de módulos/símbolos con líneas
+o ramas faltantes y relaciones test→símbolo observadas.
 Esta evidencia no
 cambia ranking, actionability o selección de paquetes. `findings` selecciona
 sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
@@ -315,7 +371,7 @@ autoriza modificar código. Cero hallazgos o cero `act_now` son respuestas
 válidas; en el segundo caso `recommendation_status=abstained` explica la brecha.
 
 `work_packages` añade una tercera capa mediante
-`python-maintenance-work-packages-v1`. El primer y único paquete toma la primera
+`python-maintenance-work-packages-v3`. El primer y único paquete toma la primera
 recomendación como `primary_change_target` y consulta siempre un pool fijo de 50
 hotspots, aunque la vista solicitada sea menor. Sólo incorpora
 `contract_guard`s alcanzados por una llamada confirmada directa o por dos saltos
@@ -330,7 +386,13 @@ expone los gates de proveedor normalizados y los gates arquitectónicos
 `architecture_contracts_not_degraded`, `no_new_import_cycles` y
 `module_complexity_not_displaced`. Cada uno sólo puede aprobarse frente
 a una línea base comparable del mismo adaptador, versión, configuración y
-entorno. La primera publicación sana queda `baseline`; si falta el proveedor o
+entorno. La evidencia profunda añade la proyección del símbolo objetivo, sus
+pruebas protectoras observadas, líneas/ramas faltantes y los gates
+`tests_passed`, `coverage_available`, `work_package_target_protected`,
+`line_coverage_not_degraded` y `branch_coverage_not_degraded`. Los dos últimos
+requieren un publication diff comparable; no encontrar una relación produce
+`unprotected`, no un permiso para editar. La primera publicación sana queda
+`baseline`; si falta el proveedor o
 cambia su firma queda `not_evaluated` o `abstained` sin borrar los demás. Los
 guards no son objetivos automáticos y el paquete nunca autoriza modificar código.
 
@@ -424,8 +486,8 @@ iguales.
 ## Comparación read-only entre publicaciones
 
 `--code-publication-diff` convierte la comparación de dos publicaciones Code
-en una operación canónica, acotada y determinista. El envelope v4 conserva
-compatibilidad declarada con v1-v3 y añade deltas arquitectónicos a los deltas
+en una operación canónica, acotada y determinista. El envelope v5 conserva
+compatibilidad declarada con v1-v4 y añade deltas de Coverage a los deltas arquitectónicos y
 por proveedor y al veredicto agregado. El argumento identifica el
 estado baseline; `--state-directory` identifica la publicación actual:
 
@@ -462,6 +524,13 @@ otro símbolo o módulo relacionado, sin convertir la métrica en probabilidad d
 defecto. Un primer snapshot queda `baseline`; cambio de versión, configuración,
 entorno, raíz o cobertura deja la dimensión `not_evaluated` y explica la causa.
 
+Coverage sólo es comparable si ambas publicaciones están listas y coinciden
+proveedor, versiones, configuración, selección, firma de suite y alcance de
+medición. En ese caso el diff informa deltas de líneas y ramas y evalúa
+`line_coverage_not_degraded` y `branch_coverage_not_degraded`. Una suite parcial,
+un selector distinto o el límite `max_tests` alcanzado deja esos gates
+`not_evaluated`; no se extrapola cobertura completa.
+
 ## Mini-root de laboratorio
 
 Use contenido sintético y dos hermanos disjuntos. No copie el corpus real para
@@ -481,7 +550,8 @@ El ejemplo presupone que un fixture sintético de 20–50 archivos ya creó
 `$MiniRoot`; esa raíz acotada es el límite físico y permite una publicación
 completa del perfil `protected`. Para probar `trusted-static`, el fixture debe
 incluir su `pyproject.toml` versionado y el runtime debe contener los siete
-proveedores. No autoriza
+proveedores. `trusted-deep` nunca acepta este mini-root: exige exclusivamente la
+raíz canónica y un estado separado bajo Laboratory. No autoriza
 crear, copiar o limpiar datos fuera del laboratorio. Use un estado nuevo por
 secuencia aislada; para validar full→incremental/no-op/cambio, reutilice ese
 mismo estado sólo dentro de la secuencia controlada y con la misma configuración.

@@ -142,7 +142,31 @@ módulo. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
 modernización en el resultado prioritario. Sólo debe usarse con una raíz
 confiable porque lee `pyproject.toml`;
 aun así no importa ni ejecuta sus módulos, no usa red, no aplica fixes y toda la
-evidencia es advisory. `trusted-deep` está reservado y no es una opción vigente.
+evidencia es advisory.
+
+`trusted-deep` añade Pytest + Coverage a los siete proveedores estáticos. Nunca
+es el perfil predeterminado y sólo acepta la identidad física exacta de
+`C:\Users\Victor\Neocortex\Repository`; cualquier otra raíz se rechaza antes de
+crear un run. Este perfil sí ejecuta código declarado del proyecto, pruebas y
+`conftest.py`, por lo que debe usar estado aislado:
+
+```powershell
+$Root = 'C:\Users\Victor\Neocortex\Repository'
+$State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\trusted-deep'
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State
+
+# Selección focal repetible; omitirla significa suite declarada completa.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
+  --deep-test-selector tests/test_bounded_subprocess.py `
+  --deep-max-tests 3000 --deep-time-budget-seconds 600 --deep-shard-size 20
+```
+
+`--deep-test-selector` acepta sólo una ruta relativa bajo `tests/` o un node id
+de Pytest y puede repetirse. `--deep-max-tests` admite 1–5000 (3000 por defecto),
+`--deep-time-budget-seconds` 30–900 (600) y `--deep-shard-size` 1–50 (20). La
+selección vacía se publica como `full`; una o más selecciones, como `selected`.
+El manifest declara `content_executed=true`, la selección y la firma de estos
+controles.
 
 Si USN no está disponible, el preset hace un full scan portable sin checkpoint
 y publica `journal.status=unavailable`; code puede reutilizar caché, pero el
@@ -163,16 +187,23 @@ imports, SCC, contratos, complejidad y limitaciones. Un proveedor ausente o una
 publicación no comparable queda `not_evaluated`, no `passed`. En review, el
 work package expone `architecture_contracts_not_degraded`,
 `no_new_import_cycles` y `module_complexity_not_displaced`; no son permisos de
-edición.
+edición. Para `trusted-deep`, `test_coverage` añade selección y completitud,
+resultados de pruebas, totales de líneas/ramas, relaciones test→símbolo, ejemplos
+faltantes, versiones, firmas y limitaciones. Coverage usa contextos dinámicos
+por node id y fase Pytest; mide sólo el proceso principal, no subprocesses.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v6` conserva compatibilidad con v2-v5 y
+envelope `neocortex.code-review/v7` conserva compatibilidad con v2-v6 y
 la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
 recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
 ranking, además de un `work_package`
 determinista con una sola recomendación raíz, guards alcanzados por llamadas
 confirmadas a uno o dos saltos, riesgo agregado, módulo primario, contratos
-afectados, cadenas de imports acotadas, pasos y gates. El
+afectados, cadenas de imports acotadas, pruebas protectoras observadas, líneas y
+ramas faltantes, pasos y gates. Los gates profundos son `tests_passed`,
+`coverage_available`, `work_package_target_protected`,
+`line_coverage_not_degraded` y `branch_coverage_not_degraded`; ausencia o falta
+de comparabilidad nunca aprueba uno. El
 pool del planificador siempre es el top 50, independientemente de la vista; no
 agrupa por nombre o directorio y los guards exigen caracterización antes de
 cualquier cambio. `--code-review-limit N --code-json` permite inspeccionar entre
@@ -185,13 +216,16 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v4`, compatible con v1-v3, informa
+envelope `neocortex.code-publication-diff/v5`, compatible con v1-v4, informa
 calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
 gate y veredicto agregado; los restantes quedan `not_evaluated` con su
 limitación. Cuando la arquitectura es comparable añade deltas por módulo,
-imports, SCC/ciclos, contratos y complejidad desplazada. Nunca aplica cambios.
+imports, SCC/ciclos, contratos y complejidad desplazada. También compara líneas
+y ramas de Coverage cuando suite, alcance de medición, configuración y versiones
+son equivalentes; en cualquier otro caso publica `not_evaluated`. Nunca aplica
+cambios.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -281,7 +315,8 @@ audio, código y estado semántico.
 `external_evidence_providers` para `ruff-protected-basic`,
 `ruff-trusted-project`, `mypy-trusted-project` y
 `pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture` y
-`complexipy-cognitive`, con disponibilidad, versión y autoridad advisory.
+`complexipy-cognitive`, además de `pytest-coverage-trusted-deep`, con
+disponibilidad, versión y autoridad advisory.
 La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
 por sí sola al proveedor protected.
 
