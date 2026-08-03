@@ -122,6 +122,35 @@ def _individual_metrics(
     )
 
 
+def test_real_deptry_accepts_exact_stage_without_exclusion_panic(tmp_path: Path) -> None:
+    stage_root, staged, config_path = _stage(
+        tmp_path,
+        {"pkg/a.py": "value = 1\n"},
+    )
+    config_path.write_text(
+        """[project]
+name = "Fixture_Project"
+version = "1.0.0"
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+""",
+        encoding="utf-8",
+    )
+
+    result = hygiene.execute_deptry_dependency_hygiene(
+        stage_root,
+        staged,
+        config_path,
+        dict(os.environ),
+    )
+
+    assert result.findings == ()
+    assert result.counters["dependency_issue_count"] == 0
+    assert result.process_invocations == 1
+
+
 def test_realistic_json_preserves_file_and_project_issues(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -143,7 +172,7 @@ def test_realistic_json_preserves_file_and_project_issues(
     assert command[:5] == (hygiene.sys.executable, "-I", "-m", "deptry", "source")
     assert command[command.index("--config") + 1].endswith("pyproject.toml")
     assert command[command.index("--optional-dependencies-dev-groups") + 1] == "dev"
-    assert command[command.index("--exclude") + 1] == "(?!)"
+    assert command[command.index("--exclude") + 1] == r"\x00"
     assert "--json-output" in command
     assert "--no-ansi" in command
     assert "--ignore-notebooks" in command
@@ -176,6 +205,7 @@ def test_realistic_json_preserves_file_and_project_issues(
 
     assert result.counters == {
         "dependency_issue_count": 5,
+        "dependency_duplicate_report_row_count": 0,
         "dependency_gate_issue_count": 3,
         "dependency_advisory_issue_count": 2,
         "dependency_python_issue_count": 3,
@@ -188,6 +218,7 @@ def test_realistic_json_preserves_file_and_project_issues(
     }
     aggregate = {item.metric_name: item.value for item in result.metrics}
     assert aggregate["dependency_issue_count"] == 5.0
+    assert aggregate["dependency_duplicate_report_row_count"] == 0.0
     assert aggregate["dependency_gate_issue_count"] == 3.0
     assert aggregate["dependency_advisory_issue_count"] == 2.0
     assert {item.relation_kind for item in result.relations} == {"dependency_hygiene_scope"}
@@ -241,6 +272,28 @@ def test_project_issue_is_not_coerced_into_a_file_finding(
     assert len(individual) == 1
     assert individual[0].metadata["location_kind"] == "project"
     assert individual[0].metadata["classification"] == "advisory"
+
+
+def test_exact_duplicate_project_rows_are_collapsed_and_counted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stage_root, staged, config_path = _stage(tmp_path)
+    duplicate = _issue("DEP002", "Pillow", "pyproject.toml", None, None)
+    _install_fake_run(monkeypatch, [duplicate, duplicate, duplicate])
+
+    result = hygiene.execute_deptry_dependency_hygiene(
+        stage_root,
+        staged,
+        config_path,
+        {},
+    )
+
+    individual = _individual_metrics(result)
+    assert len(individual) == 1
+    assert individual[0].metadata["module"] == "Pillow"
+    assert result.counters["dependency_issue_count"] == 1
+    assert result.counters["dependency_duplicate_report_row_count"] == 2
 
 
 def test_issue_bound_and_exit_contract_fail_closed(

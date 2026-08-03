@@ -53,7 +53,12 @@ _GATE_CODES = frozenset({"DEP001", "DEP003", "DEP004"})
 _PROJECT_CODES = frozenset({"DEP002", "DEP005"})
 _PYTHON_CODES = _SUPPORTED_CODES - _PROJECT_CODES
 _PYPROJECT_NAME = "pyproject.toml"
-_NEVER_EXCLUDE_PATTERN = "(?!)"
+# Deptry 0.25.x compiles exclusions with Rust's ``regex`` crate, which rejects
+# look-around expressions such as ``(?!)`` by panicking inside its native
+# extension.  NUL cannot occur in a filesystem path on supported platforms, so
+# this valid Rust-regex pattern preserves the exact staged inventory without
+# matching any source path.
+_NEVER_EXCLUDE_PATTERN = r"\x00"
 _TIMEOUT_SECONDS = 180.0
 _MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
 _MAX_CONFIG_BYTES = 1024 * 1024
@@ -556,10 +561,15 @@ def _project_metric(
     )
 
 
-def _counters(issues: tuple[_DependencyIssue, ...]) -> dict[str, int]:
+def _counters(
+    issues: tuple[_DependencyIssue, ...],
+    *,
+    duplicate_report_rows: int,
+) -> dict[str, int]:
     codes = Counter(item.code for item in issues)
     return {
         "dependency_issue_count": len(issues),
+        "dependency_duplicate_report_row_count": duplicate_report_rows,
         "dependency_gate_issue_count": sum(item.classification == "gate" for item in issues),
         "dependency_advisory_issue_count": sum(
             item.classification == "advisory" for item in issues
@@ -571,6 +581,20 @@ def _counters(issues: tuple[_DependencyIssue, ...]) -> dict[str, int]:
             for code in sorted(_SUPPORTED_CODES)
         },
     }
+
+
+def _deduplicate_report_issues(
+    issues: tuple[_DependencyIssue, ...],
+) -> tuple[tuple[_DependencyIssue, ...], int]:
+    unique: dict[str, _DependencyIssue] = {}
+    duplicate_rows = 0
+    for issue in issues:
+        previous = unique.setdefault(issue.identity, issue)
+        if previous != issue:
+            raise ValueError("Deptry JSON report issue identity collided")
+        if previous is not issue:
+            duplicate_rows += 1
+    return tuple(sorted(unique.values(), key=lambda item: item.identity)), duplicate_rows
 
 
 def _metrics(
@@ -745,7 +769,7 @@ def execute_deptry_dependency_hygiene(
                 os.path.normcase(os.path.abspath(scratch_config)),
             }
         )
-        issues = tuple(
+        normalized_issues = tuple(
             sorted(
                 (
                     _normalize_issue(
@@ -760,11 +784,10 @@ def execute_deptry_dependency_hygiene(
                 key=lambda item: item.identity,
             )
         )
-        if len({item.identity for item in issues}) != len(issues):
-            raise ValueError("Deptry JSON report contains duplicate issues")
+        issues, duplicate_report_rows = _deduplicate_report_issues(normalized_issues)
         _verify_stage_unchanged(owners)
 
-    counters = _counters(issues)
+    counters = _counters(issues, duplicate_report_rows=duplicate_report_rows)
     findings = tuple(
         sorted(
             (_finding(issue) for issue in issues if issue.owner is not None),
