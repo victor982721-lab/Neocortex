@@ -375,6 +375,33 @@ Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-j
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
 
+#### Consulta unificada de la publicación
+
+`--code-query` ofrece una sola superficie read-only sobre `status`, `review` y
+`diff`; consume únicamente publicaciones existentes y no vuelve a analizar la
+raíz, migra bases ni escribe estado:
+
+```powershell
+Neocortex --state-directory $State --code-query status
+Neocortex --state-directory $State --code-query review --code-query-provider $Provider --code-query-module $Module --code-json
+Neocortex --state-directory $State --code-query diff --code-query-baseline $BaselineState --code-query-delta added --code-json
+```
+
+Los filtros repetibles son `provider`, `category`, `module`, `status`, `delta`
+y `work-package`; se combinan con AND entre dimensiones y OR dentro de una
+misma dimensión. Un filtro de módulo incluye el módulo exacto y sus
+descendientes. `--code-query-limit` acepta 1–500 (50 por defecto) y
+`--code-query-baseline` sólo es válido con `diff`. La salida humana y JSON
+conservan dimensiones, evidencia y limitaciones por separado: no calculan un
+score agregado ni una probabilidad de defecto, y nunca autorizan una mutación.
+
+El único workflow `Neocortex CI` en `.github/workflows/ci.yml` valida Windows y
+Python 3.13. Los carriles `fast` y `standard` corren en pull requests y pushes;
+`deep` queda reservado al cron semanal o a `workflow_dispatch`. Standard
+construye e instala el wheel antes de probarlo; deep ejecuta sólo fixtures y
+contratos acotados, no suplanta la identidad física local exigida por una
+corrida real `trusted-deep`.
+
 La validación H6 sobre la raíz canónica produjo el work package
 `_04_Nucleo_Operativo.external_deep_coverage` /
 `external_deep_coverage._normalize`. Run 9 terminó en 343.168 s con 585

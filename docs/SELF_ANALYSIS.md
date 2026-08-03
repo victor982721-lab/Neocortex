@@ -583,6 +583,44 @@ policy y firmas de calibración/holdout. Informa candidatos añadidos/retirados,
 cambios entre los cuatro estados y consenso alto añadido/resuelto. Su gate es
 observacional y nunca autoriza borrar o modificar.
 
+## Consulta multidimensional de publicaciones
+
+La superficie pública unificada es:
+
+```powershell
+Neocortex --state-directory $State --code-query status
+Neocortex --state-directory $State --code-query review --code-json
+Neocortex --state-directory $CurrentState --code-query diff --code-query-baseline $BaselineState --code-json
+```
+
+No es otro productor. `status`, `review` y `diff` reutilizan sus envelopes
+publicados y después aplican una proyección acotada; la operación no recorre la
+raíz, ejecuta proveedores, crea/migra estado, hace checkpoint ni escribe las
+bases. `--code-query-baseline` es obligatorio y exclusivo de `diff`.
+
+Las seis dimensiones de filtro son repetibles:
+
+| Dimensión | Opción |
+| --- | --- |
+| proveedor | `--code-query-provider VALUE` |
+| categoría | `--code-query-category VALUE` |
+| módulo | `--code-query-module VALUE` |
+| estado | `--code-query-status VALUE` |
+| delta | `--code-query-delta VALUE` |
+| work package | `--code-query-work-package VALUE` |
+
+Los valores repetidos dentro de una dimensión se combinan con OR; dimensiones
+distintas se combinan con AND. El módulo seleccionado incluye su coincidencia
+exacta y descendientes, sin convertir prefijos de texto ajenos en módulos. El
+límite es 50 por defecto y acepta 1–500. La salida humana conserva resumen,
+filtros, matches y limitaciones mediante líneas `CODE_QUERY*`; `--code-json`
+entrega el envelope auditable.
+
+La consulta conserva categorías, gates, evidencia, deltas, estados y work
+packages como dimensiones separadas. No crea `aggregate_score`, no presenta
+ninguna métrica como `defect_probability` y no transforma consenso, cobertura,
+mutación, historia o centralidad en autoridad de cambio.
+
 ## Mini-root de laboratorio
 
 Use contenido sintético y dos hermanos disjuntos. No copie el corpus real para
