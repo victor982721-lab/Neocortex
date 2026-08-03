@@ -1384,17 +1384,13 @@ def _supply_chain_delta(
             CodeSupplyChainGateDelta(
                 gate=gate,
                 provider_id=selected.provider_id,
-                baseline_status=(
-                    "not_evaluated" if gate_before is None else gate_before.status
-                ),
+                baseline_status=("not_evaluated" if gate_before is None else gate_before.status),
                 current_status="not_evaluated" if gate_after is None else gate_after.status,
                 baseline_reason=(
                     "gate_not_recorded" if gate_before is None else gate_before.reason
                 ),
                 current_reason="gate_not_recorded" if gate_after is None else gate_after.reason,
-                evidence_count_delta=(
-                    0 if gate_after is None else gate_after.evidence_count
-                )
+                evidence_count_delta=(0 if gate_after is None else gate_after.evidence_count)
                 - (0 if gate_before is None else gate_before.evidence_count),
             )
         )
