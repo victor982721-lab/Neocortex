@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 # endregion [01]
 
 # region [02] Implementación
@@ -19,6 +21,23 @@ from collections.abc import Sequence
 _CAPABILITIES_COMMAND = ("doctor", "capabilities")
 _CAPABILITIES_FLAT_FLAG = "--doctor-capabilities"
 _CAPABILITIES_JSON_FLAT_FLAG = "--doctor-capabilities-json"
+
+
+def _prepend_owned_executable_directories() -> None:
+    """Expose executable shims installed inside the active Neocortex runtime."""
+
+    candidates = (Path(sys.prefix) / "tools" / "pyright" / "node_modules" / ".bin",)
+    path_entries = [entry for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    known_entries = {os.path.normcase(os.path.normpath(entry)) for entry in path_entries}
+    additions: list[str] = []
+    for candidate in candidates:
+        candidate_text = str(candidate)
+        candidate_key = os.path.normcase(os.path.normpath(candidate_text))
+        if candidate.is_dir() and candidate_key not in known_entries:
+            additions.append(candidate_text)
+            known_entries.add(candidate_key)
+    if additions:
+        os.environ["PATH"] = os.pathsep.join((*additions, *path_entries))
 
 
 def _is_capabilities_command(arguments: Sequence[str]) -> bool:
@@ -87,6 +106,7 @@ def _run_special_mode(arguments: Sequence[str]) -> int | None:
 def entrypoint(arguments: Sequence[str] | None = None) -> int:
     """Run one CLI, desktop, or supervised-worker invocation."""
 
+    _prepend_owned_executable_directories()
     forwarded = list(sys.argv[1:] if arguments is None else arguments)
     try:
         special_exit_code = _run_special_mode(forwarded)

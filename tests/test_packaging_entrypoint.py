@@ -5,6 +5,7 @@
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
 from unittest.mock import patch
@@ -97,6 +98,26 @@ def test_installed_entrypoint_forwards_arguments_to_integrated_cli() -> None:
 
     assert result == 7
     run_cli.assert_called_once_with(["--status"])
+
+
+def test_installed_entrypoint_exposes_owned_pyright_shim(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    owned_bin = tmp_path / "tools" / "pyright" / "node_modules" / ".bin"
+    owned_bin.mkdir(parents=True)
+    original_path = os.pathsep.join(("C:/system/bin", "C:/other/bin"))
+    monkeypatch.setenv("PATH", original_path)
+    monkeypatch.setattr("neocortex.cli.sys.prefix", str(tmp_path))
+
+    with patch("_04_Nucleo_Operativo.cli_app.main", return_value=0):
+        assert entrypoint(("--version",)) == 0
+        assert entrypoint(("--version",)) == 0
+
+    assert os.environ["PATH"].split(os.pathsep) == [
+        str(owned_bin),
+        *original_path.split(os.pathsep),
+    ]
 
 
 def test_legacy_dedup_entrypoint_delegates_without_legacy_state(
