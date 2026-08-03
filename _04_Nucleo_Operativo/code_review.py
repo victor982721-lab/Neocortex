@@ -12,6 +12,10 @@ from .code_architecture_analysis import (
     CodeArchitectureAnalysis,
     read_code_architecture_analysis,
 )
+from .code_coverage_analysis import (
+    CodeCoverageAnalysis,
+    read_code_coverage_analysis,
+)
 from .code_external_evidence import (
     ExternalEvidenceStatus,
     read_external_evidence,
@@ -122,6 +126,7 @@ class _ReviewRead:
     external_evidence: ExternalEvidenceStatus
     external_evidence_suite: ExternalEvidenceSuiteStatus
     architecture: CodeArchitectureAnalysis
+    test_coverage: CodeCoverageAnalysis
 
 
 _CANDIDATE_SQL = """
@@ -710,6 +715,11 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
             -1 if latest_run is None else latest_run.analysis_run_id,
             database=str(path),
         )
+        test_coverage = read_code_coverage_analysis(
+            connection,
+            -1 if latest_run is None else latest_run.analysis_run_id,
+            database=str(path),
+        )
     return _ReviewRead(
         latest_run=latest_run,
         coverage=CodeReviewCoverage(
@@ -729,6 +739,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         external_evidence=external_evidence,
         external_evidence_suite=external_evidence_suite,
         architecture=architecture,
+        test_coverage=test_coverage,
     )
 
 
@@ -752,6 +763,7 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         external_evidence=None,
         external_evidence_suite=None,
         architecture=None,
+        test_coverage=None,
         limitations=(),
         digest=None,
     )
@@ -813,6 +825,10 @@ def review_code_state(
         limitations.append(
             "architecture_not_ready:" + (read.architecture.reason or read.architecture.status)
         )
+    if read.test_coverage.status != "ready":
+        limitations.append(
+            "test_coverage_not_ready:" + (read.test_coverage.reason or read.test_coverage.status)
+        )
     snapshot = CodeReviewSnapshot(
         analysis_run_id=read.latest_run.analysis_run_id,
         framework_run_id=read.latest_run.framework_run_id,
@@ -841,6 +857,7 @@ def review_code_state(
         read.planning_links,
         architecture=read.architecture,
         architecture_root=snapshot.root,
+        test_coverage=read.test_coverage,
     )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
@@ -862,6 +879,7 @@ def review_code_state(
         external_evidence=read.external_evidence,
         external_evidence_suite=read.external_evidence_suite,
         architecture=read.architecture,
+        test_coverage=read.test_coverage,
         limitations=limitation_tuple,
         digest=build_code_review_digest(
             snapshot,
@@ -879,6 +897,7 @@ def review_code_state(
             external_evidence=read.external_evidence,
             external_evidence_suite=read.external_evidence_suite,
             architecture=read.architecture,
+            test_coverage=read.test_coverage,
             limitations=limitation_tuple,
         ),
     )

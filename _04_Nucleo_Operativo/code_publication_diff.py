@@ -14,6 +14,13 @@ from .code_architecture_analysis import (
     CodeArchitectureAnalysis,
     read_code_architecture_analysis,
 )
+from .code_coverage_analysis import (
+    CODE_COVERAGE_SCHEMA,
+    CodeCoverageAnalysis,
+    CoverageComparison,
+    compare_code_coverage,
+    read_code_coverage_analysis,
+)
 from .code_external_evidence import (
     RUFF_CONFIGURATION_SIGNATURE,
     ExternalEvidenceStatus,
@@ -36,11 +43,12 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v4"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v5"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
     "neocortex.code-publication-diff/v3",
+    "neocortex.code-publication-diff/v4",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
@@ -196,6 +204,7 @@ class CodePublicationDiffResult:
     analysis_profile: str | None
     providers: tuple[CodeProviderEvidenceDelta, ...]
     architecture: CodeArchitectureDelta | None
+    test_coverage: CoverageComparison | None
     verdict: (
         Literal[
             "improved",
@@ -210,11 +219,17 @@ class CodePublicationDiffResult:
     digest: CodePublicationDiffDigest | None
 
     def as_payload(self) -> dict[str, object]:
+        payload = asdict(self)
+        if self.test_coverage is not None:
+            payload["test_coverage"] = {
+                "schema": CODE_COVERAGE_SCHEMA,
+                **asdict(self.test_coverage),
+            }
         return {
             "kind": "code-publication-diff",
             "schema": CODE_PUBLICATION_DIFF_SCHEMA,
             "compatible_schemas": list(CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS),
-            **asdict(self),
+            **payload,
         }
 
 
@@ -238,6 +253,7 @@ class _Publication:
     external_evidence_suite: ExternalEvidenceSuiteStatus
     provider_finding_ids: dict[str, frozenset[str]]
     architecture: CodeArchitectureAnalysis
+    test_coverage: CodeCoverageAnalysis
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -492,6 +508,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             int(latest["analysis_run_id"]),
             database=str(database),
         )
+        test_coverage = read_code_coverage_analysis(
+            connection,
+            int(latest["analysis_run_id"]),
+            database=str(database),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -515,6 +536,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         external_suite,
         provider_ids,
         architecture,
+        test_coverage,
     )
 
 
@@ -999,6 +1021,7 @@ def _digest_payload(
     external_evidence: CodeExternalEvidenceDelta,
     providers: tuple[CodeProviderEvidenceDelta, ...],
     architecture: CodeArchitectureDelta,
+    test_coverage: CoverageComparison,
     verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
@@ -1030,6 +1053,7 @@ def _digest_payload(
             },
             "providers": [asdict(item) for item in providers],
             "architecture": asdict(architecture),
+            "test_coverage": asdict(test_coverage),
             "verdict": verdict,
             "limitations": list(limitations),
         }
@@ -1061,6 +1085,7 @@ def _abstained(
         analysis_profile=None,
         providers=(),
         architecture=None,
+        test_coverage=None,
         verdict=None,
         limitations=(),
         digest=None,
@@ -1097,17 +1122,24 @@ def compare_code_publications(
     external_evidence = _external_delta(baseline, current)
     providers = _provider_deltas(baseline, current)
     architecture = _architecture_delta(baseline.architecture, current.architecture)
+    test_coverage = compare_code_coverage(
+        baseline.test_coverage,
+        current.test_coverage,
+    )
     verdict = _provider_verdict(providers)
     limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
+        "provider_verdict_excludes_architecture_and_test_coverage_gates",
     ]
     if any(item.status != "ready" for item in providers):
         limitations.append("provider_verdict_uses_only_comparable_providers")
     if architecture.status != "ready":
         limitations.append("architecture_delta_not_comparable")
+    if test_coverage.status != "comparable":
+        limitations.append("test_coverage_delta_not_comparable")
     if any(
         _legacy_ruff_contract_compatible(item.provider_id, item.baseline, item.current)
         for item in providers
@@ -1123,6 +1155,7 @@ def compare_code_publications(
         external_evidence,
         providers,
         architecture,
+        test_coverage,
         verdict,
         frozen_limitations,
     )
@@ -1140,6 +1173,7 @@ def compare_code_publications(
         analysis_profile=current.external_evidence_suite.profile,
         providers=providers,
         architecture=architecture,
+        test_coverage=test_coverage,
         verdict=verdict,
         limitations=frozen_limitations,
         digest=digest,

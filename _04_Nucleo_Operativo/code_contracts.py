@@ -11,12 +11,119 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+import re
 from typing import Literal, Protocol
 
 from _02_Deduplicacion import FileSnapshot
 
 from .route_filters import CandidateSelection
 from .semantic_models import canonical_json, fingerprint_text
+
+DEEP_CONFIGURATION_SCHEMA = "neocortex.code-deep-configuration/v1"
+DEFAULT_DEEP_MAX_TESTS = 3000
+DEFAULT_DEEP_TIME_BUDGET_SECONDS = 600
+DEFAULT_DEEP_SHARD_SIZE = 20
+
+
+def normalize_deep_test_selectors(values: Sequence[str]) -> tuple[str, ...]:
+    """Validate and canonicalize relative pytest paths and node identifiers."""
+
+    if len(values) > 5000:
+        raise ValueError("too many deep test selectors")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value.strip() != value
+            or len(value.encode("utf-8")) > 4096
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("deep test selector is malformed")
+        selector = value.replace("\\", "/")
+        path_text, *node_parts = selector.split("::")
+        components = path_text.split("/")
+        if (
+            path_text.startswith("/")
+            or re.match(r"^[A-Za-z]:", path_text)
+            or ":" in path_text
+            or any(component in {"", ".", ".."} for component in components)
+            or components[0].casefold() != "tests"
+            or not components[-1].casefold().startswith("test_")
+            or not components[-1].casefold().endswith(".py")
+            or any(not part or part.strip() != part for part in node_parts)
+        ):
+            raise ValueError(
+                "deep test selector must be a relative tests/test_*.py path or node id"
+            )
+        canonical = path_text + "".join(f"::{part}" for part in node_parts)
+        identity = canonical.casefold()
+        if identity in seen:
+            raise ValueError("deep test selectors contain a duplicate")
+        seen.add(identity)
+        normalized.append(canonical)
+    return tuple(sorted(normalized, key=lambda item: (item.casefold(), item)))
+
+
+def deep_configuration_payload(
+    *,
+    analysis_profile: str,
+    test_selectors: Sequence[str],
+    max_tests: int,
+    time_budget_seconds: int,
+    shard_size: int,
+) -> dict[str, object]:
+    """Return the separate, versioned execution contract for deep analysis."""
+
+    selectors = normalize_deep_test_selectors(test_selectors)
+    if analysis_profile not in {"protected", "trusted-static", "trusted-deep"}:
+        raise ValueError("code analysis_profile is unsupported")
+    if not 1 <= max_tests <= 5000:
+        raise ValueError("deep max_tests must be between 1 and 5000")
+    if not 30 <= time_budget_seconds <= 900:
+        raise ValueError("deep time_budget_seconds must be between 30 and 900")
+    if not 1 <= shard_size <= 50:
+        raise ValueError("deep shard_size must be between 1 and 50")
+    content_executed = analysis_profile == "trusted-deep"
+    if not content_executed and (
+        selectors
+        or max_tests != DEFAULT_DEEP_MAX_TESTS
+        or time_budget_seconds != DEFAULT_DEEP_TIME_BUDGET_SECONDS
+        or shard_size != DEFAULT_DEEP_SHARD_SIZE
+    ):
+        raise ValueError("deep configuration requires trusted-deep")
+    return {
+        "schema": DEEP_CONFIGURATION_SCHEMA,
+        "analysis_profile": analysis_profile,
+        "content_executed": content_executed,
+        "suite_selection": ("selected" if selectors else "full")
+        if content_executed
+        else "not_applicable",
+        "test_selectors": list(selectors),
+        "max_tests": max_tests,
+        "time_budget_seconds": time_budget_seconds,
+        "shard_size": shard_size,
+    }
+
+
+def deep_configuration_signature(payload: Mapping[str, object]) -> str:
+    """Fingerprint one validated deep-configuration payload."""
+
+    expected_keys = {
+        "schema",
+        "analysis_profile",
+        "content_executed",
+        "suite_selection",
+        "test_selectors",
+        "max_tests",
+        "time_budget_seconds",
+        "shard_size",
+    }
+    if set(payload) != expected_keys:
+        raise ValueError("deep configuration payload is malformed")
+    return "code-deep-v1:" + fingerprint_text(canonical_json(dict(payload))).xxh3_128
+
 
 # region [01] Artifact and evidence vocabulary
 
@@ -279,8 +386,12 @@ class CodeRouteConfig:
     complexity_warning: int = 15
     function_lines_warning: int = 200
     external_evidence_root: Path | None = None
-    analysis_profile: Literal["protected", "trusted-static"] = "protected"
+    analysis_profile: Literal["protected", "trusted-static", "trusted-deep"] = "protected"
     selection: CandidateSelection = field(default_factory=CandidateSelection)
+    deep_test_selectors: tuple[str, ...] = ()
+    deep_max_tests: int = DEFAULT_DEEP_MAX_TESTS
+    deep_time_budget_seconds: int = DEFAULT_DEEP_TIME_BUDGET_SECONDS
+    deep_shard_size: int = DEFAULT_DEEP_SHARD_SIZE
 
     def __post_init__(self) -> None:
         if self.max_file_bytes < 4096:
@@ -295,8 +406,19 @@ class CodeRouteConfig:
             raise ValueError("code chunk_chars must be between 1024 and 1000000")
         if self.complexity_warning < 1 or self.function_lines_warning < 1:
             raise ValueError("code diagnostic thresholds must be positive")
-        if self.analysis_profile not in {"protected", "trusted-static"}:
-            raise ValueError("code analysis_profile is unsupported")
+        normalized_selectors = normalize_deep_test_selectors(self.deep_test_selectors)
+        deep_configuration_payload(
+            analysis_profile=self.analysis_profile,
+            test_selectors=normalized_selectors,
+            max_tests=self.deep_max_tests,
+            time_budget_seconds=self.deep_time_budget_seconds,
+            shard_size=self.deep_shard_size,
+        )
+        object.__setattr__(
+            self,
+            "deep_test_selectors",
+            normalized_selectors,
+        )
 
     @property
     def processing_signature(self) -> str:
@@ -314,6 +436,24 @@ class CodeRouteConfig:
             }
         )
         return "code-v2:" + fingerprint_text(payload).xxh3_128
+
+    @property
+    def deep_configuration_payload(self) -> dict[str, object]:
+        """Describe content execution separately from ordinary AST caching."""
+
+        return deep_configuration_payload(
+            analysis_profile=self.analysis_profile,
+            test_selectors=self.deep_test_selectors,
+            max_tests=self.deep_max_tests,
+            time_budget_seconds=self.deep_time_budget_seconds,
+            shard_size=self.deep_shard_size,
+        )
+
+    @property
+    def deep_configuration_signature(self) -> str:
+        """Fingerprint only the trusted-deep suite and execution bounds."""
+
+        return deep_configuration_signature(self.deep_configuration_payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,6 +649,10 @@ def analyzer_for_language(
 
 
 __all__ = [
+    "DEEP_CONFIGURATION_SCHEMA",
+    "DEFAULT_DEEP_MAX_TESTS",
+    "DEFAULT_DEEP_SHARD_SIZE",
+    "DEFAULT_DEEP_TIME_BUDGET_SECONDS",
     "AnalysisStatus",
     "ArtifactClassification",
     "ArtifactKind",
@@ -533,4 +677,7 @@ __all__ = [
     "SourceRange",
     "SymbolRecord",
     "analyzer_for_language",
+    "deep_configuration_payload",
+    "deep_configuration_signature",
+    "normalize_deep_test_selectors",
 ]

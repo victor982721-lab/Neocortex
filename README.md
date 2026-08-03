@@ -240,14 +240,36 @@ se derivan de los seis paquetes de producción y conservan explícitamente las
 fronteras permitidas y los ciclos ya existentes como baseline `no-new`; no
 presentan la arquitectura actual como acíclica.
 
-Todos los proveedores trabajan sobre copias verificadas, tienen límites,
-publican versión, firmas, cobertura, contadores de proceso/bytes/tiempo/caché y
-evidencia únicamente advisory. No importan ni ejecutan el código observado, no
-aplican fixes y no poseen autoridad de mutación. Un replay exacto vuelve a
-verificar los inputs y reutiliza la publicación sin abrir otro proceso. La suite
-aparece en status, review, publication diff y code doctor; una indisponibilidad
-o límite alcanzado obliga a abstener el gate afectado, no borra la evidencia de
-los demás proveedores. `trusted-deep` está reservado y aún no se implementa.
+Los siete proveedores estáticos trabajan sobre copias verificadas, tienen
+límites y no importan ni ejecutan el código observado. Todos publican versión,
+firmas, cobertura, contadores de proceso/bytes/tiempo/caché y evidencia
+únicamente advisory; ninguno aplica fixes ni posee autoridad de mutación. Un
+replay exacto vuelve a verificar los inputs y reutiliza la publicación sin abrir
+otro proceso. La suite aparece en status, review, publication diff y code
+doctor; una indisponibilidad o límite alcanzado obliga a abstener el gate
+afectado, no borra la evidencia de los demás proveedores.
+
+`trusted-deep` es un perfil adicional, nunca predeterminado, que conserva los
+siete proveedores estáticos y añade `pytest-coverage-trusted-deep`. Sólo acepta
+la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`: ejecuta
+el código del proyecto, sus pruebas y `conftest.py`, mide líneas y ramas con
+contextos dinámicos por test, y por ello no se admite sobre una raíz arbitraria.
+El estado debe permanecer aislado en Laboratory:
+
+```powershell
+$Root = 'C:\Users\Victor\Neocortex\Repository'
+$State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\trusted-deep'
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State
+```
+
+Sin `--deep-test-selector`, ejecuta la suite declarada completa. El selector se
+puede repetir con una ruta relativa bajo `tests/` o un node id de Pytest. Los
+límites predeterminados son 3000 tests, 600 segundos y shards de 20; sus rangos
+son 1–5000, 30–900 y 1–50, respectivamente. Sólo los shards que terminaron con
+todas sus pruebas aprobadas producen checkpoints reanudables ligados a las
+firmas exactas de inputs, herramientas y configuración. Coverage mide sólo el
+proceso principal: la cobertura de subprocesses no se atribuye y se declara
+como limitación.
 El status sí es estrictamente read-only:
 cualquier `-wal`, `-shm`
 o `-journal` junto a `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`,
@@ -262,7 +284,7 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v6 conserva las capas anteriores, el ranking bruto y
+explicable. El envelope v7 conserva las capas anteriores, el ranking bruto y
 hasta tres recomendaciones `act_now`, y añade
 `external_evidence_suite` con los proveedores y gates normalizados sin alterar
 ranking ni actionability. La proyección `architecture_analysis` consume las
@@ -275,23 +297,31 @@ Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
 los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
 y enumera contratos, cadenas de imports acotadas, orden, validación y gates de
 arquitectura/publicación: `architecture_contracts_not_degraded`,
-`no_new_import_cycles` y `module_complexity_not_displaced`. El horizonte de
-planeación permanece fijo en 50 aunque la vista muestre 10; no agrupa por nombre,
-directorio ni prefijo de módulo. `--code-review-limit N --code-json` amplía de 1
-a 50 la vista auditable. La consulta es estrictamente read-only y el paquete es
-consejo, nunca autorización de cambio. Los avisos heurísticos de código
+`no_new_import_cycles` y `module_complexity_not_displaced`. Cuando existe una
+publicación `trusted-deep`, también enlaza pruebas protectoras, líneas y ramas
+faltantes del símbolo objetivo, y añade `tests_passed`, `coverage_available`,
+`work_package_target_protected`, `line_coverage_not_degraded` y
+`branch_coverage_not_degraded`. Los dos últimos sólo se evalúan ante un baseline
+comparable. El horizonte de planeación permanece fijo en 50 aunque la vista
+muestre 10; no agrupa por nombre, directorio ni prefijo de módulo.
+`--code-review-limit N --code-json` amplía de 1 a 50 la vista auditable. La
+consulta es estrictamente read-only y el paquete es consejo, nunca autorización
+de cambio. Los avisos heurísticos de código
 probablemente muerto se cuentan pero no se recomiendan hasta calibrar su
 resolución de llamadas. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` v4 compara dos publicaciones Code completadas sin
+`--code-publication-diff` v5 compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
 hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
 coinciden. Añade deltas de métricas por módulo, contratos, ciclos y complejidad
-desplazada cuando ambas publicaciones son comparables, además de un veredicto
-agregado que conserva limitaciones parciales.
+desplazada cuando ambas publicaciones son comparables. Para `trusted-deep`
+compara cobertura de líneas y ramas sólo si coinciden la suite, alcance,
+configuración y herramientas; de otro modo la dimensión queda
+`not_evaluated`. El veredicto agregado siempre conserva las limitaciones
+parciales.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.

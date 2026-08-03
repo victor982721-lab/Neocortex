@@ -9,6 +9,11 @@ from pathlib import Path
 
 from _02_Deduplicacion import InventoryExclusionPolicy
 
+from .code_contracts import (
+    deep_configuration_payload,
+    deep_configuration_signature,
+    normalize_deep_test_selectors,
+)
 from .models import FrameworkConfig
 
 # region [01] Stable profile and manifest contracts
@@ -213,6 +218,27 @@ def self_analysis_commands(
         analyze.extend(("--code-max-count", str(config.code_max_documents)))
     if config.code_retry_errors:
         analyze.append("--retry-code-errors")
+    deep_selectors = normalize_deep_test_selectors(config.deep_test_selectors)
+    deep_configuration_payload(
+        analysis_profile=config.analysis_profile,
+        test_selectors=deep_selectors,
+        max_tests=config.deep_max_tests,
+        time_budget_seconds=config.deep_time_budget_seconds,
+        shard_size=config.deep_shard_size,
+    )
+    if config.analysis_profile == "trusted-deep":
+        for selector in deep_selectors:
+            analyze.extend(("--deep-test-selector", selector))
+        analyze.extend(
+            (
+                "--deep-max-tests",
+                str(config.deep_max_tests),
+                "--deep-time-budget-seconds",
+                str(config.deep_time_budget_seconds),
+                "--deep-shard-size",
+                str(config.deep_shard_size),
+            )
+        )
     return {
         "analyze": analyze,
         "status": [
@@ -237,6 +263,67 @@ def _bounded_argv(values: Sequence[str], *, label: str) -> list[str]:
     ):
         raise ValueError(f"invalid self-analysis {label} argv")
     return result
+
+
+def _option_values(argv: Sequence[str], option: str) -> list[str]:
+    """Read exact option/value pairs and reject a missing value."""
+
+    values: list[str] = []
+    for index, token in enumerate(argv):
+        if token == option:
+            if index + 1 >= len(argv) or argv[index + 1].startswith("--"):
+                raise ValueError(f"self-analysis {option} value is missing")
+            values.append(argv[index + 1])
+        elif token.startswith(option + "="):
+            value = token[len(option) + 1 :]
+            if not value:
+                raise ValueError(f"self-analysis {option} value is missing")
+            values.append(value)
+    return values
+
+
+def _deep_analysis_from_argv(argv: Sequence[str]) -> dict[str, object] | None:
+    """Reconstruct trusted-deep evidence exactly or fail closed."""
+
+    deep_options = (
+        "--deep-test-selector",
+        "--deep-max-tests",
+        "--deep-time-budget-seconds",
+        "--deep-shard-size",
+    )
+    profile_values = _option_values(argv, "--analysis-profile")
+    if len(profile_values) > 1:
+        raise ValueError("self-analysis profile is duplicated")
+    profile = profile_values[0] if profile_values else "protected"
+    deep_present = any(
+        token == option or token.startswith(option + "=")
+        for token in argv
+        for option in deep_options
+    )
+    if profile != "trusted-deep":
+        if deep_present:
+            raise ValueError("deep analysis controls require trusted-deep")
+        return None
+    scalar_values: dict[str, int] = {}
+    for option in deep_options[1:]:
+        values = _option_values(argv, option)
+        if len(values) != 1:
+            raise ValueError(f"trusted-deep requires exactly one {option}")
+        try:
+            scalar_values[option] = int(values[0])
+        except ValueError as exc:
+            raise ValueError(f"trusted-deep {option} must be an integer") from exc
+    payload = deep_configuration_payload(
+        analysis_profile=profile,
+        test_selectors=_option_values(argv, "--deep-test-selector"),
+        max_tests=scalar_values["--deep-max-tests"],
+        time_budget_seconds=scalar_values["--deep-time-budget-seconds"],
+        shard_size=scalar_values["--deep-shard-size"],
+    )
+    return {
+        **payload,
+        "configuration_signature": deep_configuration_signature(payload),
+    }
 
 
 def build_self_analysis_completion_manifest(
@@ -269,6 +356,9 @@ def build_self_analysis_completion_manifest(
         raise ValueError("self-analysis safety counts must be exact zeroes")
     if set(commands) != {"analyze", "status"}:
         raise ValueError("self-analysis commands are incomplete")
+    analyze_argv = _bounded_argv(commands["analyze"], label="analyze")
+    status_argv = _bounded_argv(commands["status"], label="status")
+    deep_analysis = _deep_analysis_from_argv(analyze_argv)
     manifest: dict[str, object] = {
         "schema": SELF_ANALYSIS_MANIFEST_SCHEMA,
         "run": dict(run),
@@ -284,10 +374,12 @@ def build_self_analysis_completion_manifest(
         },
         "safety": dict(safety_counts),
         "commands": {
-            "analyze": _bounded_argv(commands["analyze"], label="analyze"),
-            "status": _bounded_argv(commands["status"], label="status"),
+            "analyze": analyze_argv,
+            "status": status_argv,
         },
     }
+    if deep_analysis is not None:
+        manifest["deep_analysis"] = deep_analysis
     payload = json.dumps(
         manifest,
         ensure_ascii=False,

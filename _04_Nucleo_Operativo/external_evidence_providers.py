@@ -1,4 +1,4 @@
-"""Real bounded providers for protected and trusted-static self-analysis."""
+"""Real bounded providers for protected, trusted-static and trusted-deep analysis."""
 
 from __future__ import annotations
 
@@ -38,6 +38,20 @@ from .code_external_evidence import (
     external_input_signature,
     validate_external_inputs,
 )
+from .code_contracts import (
+    deep_configuration_payload as build_deep_configuration_payload,
+    deep_configuration_signature as calculate_deep_configuration_signature,
+)
+from .external_deep_coverage import (
+    DEEP_COVERAGE_PROVIDER_SCHEMA,
+    PYTEST_COVERAGE_PROVIDER_ID,
+    DeepCoverageConfig,
+    DeepCoverageExecution,
+    DeepCoveragePreparedInput,
+    execute_pytest_coverage,
+    prepare_deep_coverage_input,
+    trusted_deep_home_directory,
+)
 from .external_evidence_models import (
     AnalysisProfile,
     ExternalEvidenceProvider,
@@ -50,6 +64,7 @@ from .external_evidence_models import (
     InvalidationStrategy,
     ProviderDescriptor,
     ProviderLimits,
+    ProviderTrust,
     external_provider_result_digest,
     external_root_identity,
     external_signature,
@@ -79,6 +94,9 @@ _PYRIGHT_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _RUFF_MEMORY_BYTES = 512 * 1024 * 1024
 _GRIMP_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _COMPLEXIPY_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+_DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+_DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
+_DEEP_COVERAGE_FINDING_BOUND = 2_000
 
 
 def _unexpected_exit_message(
@@ -99,6 +117,58 @@ def _package_version(name: str) -> str | None:
     except importlib.metadata.PackageNotFoundError:
         return None
     return version if version and len(version.encode("utf-8")) <= 256 else None
+
+
+def _deep_tool_version() -> str | None:
+    pytest_version = _package_version("pytest")
+    coverage_version = _package_version("coverage")
+    if pytest_version is None or coverage_version is None:
+        return None
+    value = f"pytest={pytest_version};coverage={coverage_version}"
+    return value if len(value.encode("utf-8")) <= 256 else None
+
+
+def _validated_deep_configuration(
+    payload: Mapping[str, object] | None,
+    signature: str | None,
+) -> tuple[dict[str, object], DeepCoverageConfig]:
+    if payload is None or signature is None:
+        raise ValueError("trusted-deep requires its exact configuration and signature")
+    selectors_value = payload.get("test_selectors")
+    max_tests = payload.get("max_tests")
+    time_budget_seconds = payload.get("time_budget_seconds")
+    shard_size = payload.get("shard_size")
+    if (
+        not isinstance(selectors_value, list)
+        or any(not isinstance(item, str) for item in selectors_value)
+        or isinstance(max_tests, bool)
+        or not isinstance(max_tests, int)
+        or isinstance(time_budget_seconds, bool)
+        or not isinstance(time_budget_seconds, int)
+        or isinstance(shard_size, bool)
+        or not isinstance(shard_size, int)
+    ):
+        raise ValueError("trusted-deep configuration types are invalid")
+    selectors = tuple(item for item in selectors_value if isinstance(item, str))
+    normalized = build_deep_configuration_payload(
+        analysis_profile=str(payload.get("analysis_profile")),
+        test_selectors=selectors,
+        max_tests=max_tests,
+        time_budget_seconds=time_budget_seconds,
+        shard_size=shard_size,
+    )
+    if normalized != dict(payload) or normalized["analysis_profile"] != "trusted-deep":
+        raise ValueError("trusted-deep configuration is not canonical")
+    observed_signature = calculate_deep_configuration_signature(normalized)
+    if observed_signature != signature:
+        raise ValueError("trusted-deep configuration signature disagrees")
+    return normalized, DeepCoverageConfig(
+        selectors,
+        max_tests,
+        float(time_budget_seconds),
+        shard_size,
+        signature,
+    )
 
 
 def _read_exact_config(path: Path) -> bytes:
@@ -138,19 +208,26 @@ def _environment_signature(
     tool_name: str,
     tool_version: str,
     node_path: str | None = None,
+    home_directory: str | None = None,
+    path_value: str | None = None,
+    pathext_value: str | None = None,
 ) -> str:
-    return external_signature(
-        "external-environment-v1",
-        {
-            "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
-            "python_version": platform.python_version(),
-            "implementation": platform.python_implementation(),
-            "platform": platform.platform(),
-            "tool_name": tool_name,
-            "tool_version": tool_version,
-            "node_path": node_path,
-        },
-    )
+    payload: dict[str, object] = {
+        "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
+        "python_version": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "platform": platform.platform(),
+        "tool_name": tool_name,
+        "tool_version": tool_version,
+        "node_path": node_path,
+    }
+    if home_directory is not None:
+        payload["home_directory"] = os.path.normcase(os.path.abspath(home_directory))
+    if path_value is not None:
+        payload["path"] = path_value
+    if pathext_value is not None:
+        payload["pathext"] = pathext_value
+    return external_signature("external-environment-v1", payload)
 
 
 def _limits(*, memory: int) -> ProviderLimits:
@@ -180,7 +257,19 @@ def _provider_descriptor(
     memory: int,
     loads_project_configuration: bool,
     scope: str = "current-inventory-python",
+    limits: ProviderLimits | None = None,
+    loads_plugins: bool = False,
+    imports_content: bool = False,
+    executes_content: bool = False,
+    uses_network: bool = False,
 ) -> ProviderDescriptor:
+    trust_requirement: ProviderTrust
+    if profile == "protected":
+        trust_requirement = "untrusted-safe"
+    elif profile == "trusted-static":
+        trust_requirement = "trusted-static"
+    else:
+        trust_requirement = "trusted-execution"
     configuration_signature = external_signature(
         f"{provider_id}-configuration-v1", configuration_payload
     )
@@ -205,7 +294,7 @@ def _provider_descriptor(
         provider_schema,
         tool_name,
         profile,
-        "untrusted-safe" if profile == "protected" else "trusted-static",
+        trust_requirement,
         scope,
         source,
         configuration_signature,
@@ -215,8 +304,12 @@ def _provider_descriptor(
         execution_strategy,
         invalidation_strategy,
         "exact-publication-replay-v1",
-        _limits(memory=memory),
+        _limits(memory=memory) if limits is None else limits,
         loads_project_configuration=loads_project_configuration,
+        loads_plugins=loads_plugins,
+        imports_content=imports_content,
+        executes_content=executes_content,
+        uses_network=uses_network,
     )
 
 
@@ -412,10 +505,19 @@ def _exact_replay(
     baseline: ExternalProviderBaseline,
     *,
     limitations: Sequence[str] = (),
+    input_signature_override: str | None = None,
 ) -> ExternalProviderPublication:
     started_ns = time.time_ns()
     validate_external_inputs(files)
-    input_signature = external_input_signature(files)
+    input_signature = (
+        external_input_signature(files)
+        if input_signature_override is None
+        else input_signature_override
+    )
+    if not input_signature or len(input_signature.encode("utf-8")) > 512:
+        raise ValueError("external provider input signature is invalid")
+    if baseline.input_signature != input_signature:
+        raise ValueError("external provider replay input signature is not exact")
     counters = {
         "eligible_files": len(files),
         "covered_files": len(files),
@@ -510,6 +612,7 @@ def _success(
     process_invocations: int,
     bytes_staged: int,
     limitations: Sequence[str] = (),
+    input_signature_override: str | None = None,
 ) -> ExternalProviderPublication:
     ordered_findings = tuple(sorted(findings, key=lambda item: item.portable_finding_id))
     if len({item.portable_finding_id for item in ordered_findings}) != len(ordered_findings):
@@ -526,7 +629,13 @@ def _success(
         ordered_metrics,
         ordered_relations,
     )
-    input_signature = external_input_signature(files)
+    input_signature = (
+        external_input_signature(files)
+        if input_signature_override is None
+        else input_signature_override
+    )
+    if not input_signature or len(input_signature.encode("utf-8")) > 512:
+        raise ValueError("external provider input signature is invalid")
     counters = _result_counters(
         files,
         ordered_findings,
@@ -1254,6 +1363,7 @@ def provider_tool_versions() -> dict[str, str | None]:
         RUFF_ANALYZE_PROVIDER_ID: ruff_version,
         GRIMP_ARCHITECTURE_PROVIDER_ID: _package_version("grimp"),
         COMPLEXIPY_COGNITIVE_PROVIDER_ID: _package_version("complexipy"),
+        PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
     }
 
 
@@ -1612,10 +1722,369 @@ class ComplexipyCognitiveProvider(_TrustedArchitectureProvider):
     executor = staticmethod(execute_complexipy_cognitive)
 
 
+_DEEP_COVERAGE_LIMITATIONS = (
+    "coverage_main_process_only",
+    "subprocess_coverage_not_collected",
+    "git_ignored_support_files_excluded_from_support_signature",
+)
+
+
+class PytestCoverageTrustedDeepProvider:
+    """Execute the explicit canonical test selection with branch coverage."""
+
+    def __init__(
+        self,
+        root: Path,
+        deep_configuration: Mapping[str, object] | None,
+        deep_configuration_signature: str | None,
+    ) -> None:
+        payload, config = _validated_deep_configuration(
+            deep_configuration,
+            deep_configuration_signature,
+        )
+        self.root = root
+        self.deep_configuration = payload
+        self.config = config
+        self._version = _deep_tool_version()
+        version = self._version or "unavailable"
+        self._root_identity = external_root_identity(root)
+        _raw_project, _parsed_project, project_digest = _project_configuration(root)
+        self.descriptor = _provider_descriptor(
+            provider_id=PYTEST_COVERAGE_PROVIDER_ID,
+            provider_schema=DEEP_COVERAGE_PROVIDER_SCHEMA,
+            tool_name="pytest+coverage",
+            tool_version=version,
+            profile="trusted-deep",
+            source="external:pytest-coverage-trusted-deep",
+            configuration_payload={
+                "deep_configuration": payload,
+                "deep_configuration_signature": config.configuration_signature,
+                "branch_coverage": True,
+                "dynamic_contexts": "pytest-nodeid-phase-v1",
+                "subprocess_coverage": False,
+                "autofix": False,
+            },
+            project_configuration_digest=project_digest,
+            environment_signature=_environment_signature(
+                tool_name="pytest+coverage",
+                tool_version=version,
+                home_directory=trusted_deep_home_directory(),
+                path_value=os.environ.get("PATH"),
+                pathext_value=os.environ.get("PATHEXT"),
+            ),
+            root_identity=self._root_identity,
+            execution_strategy="canonical-root-bounded-sharded-pytest-coverage-v1",
+            invalidation_strategy="dynamic_suite",
+            memory=_DEEP_COVERAGE_MEMORY_BYTES,
+            loads_project_configuration=True,
+            scope="canonical-neocortex-pytest-selection-v1",
+            limits=ProviderLimits(
+                config.time_budget_seconds,
+                _DEEP_COVERAGE_MEMORY_BYTES,
+                RUFF_MAX_TOTAL_BYTES,
+                _DEEP_COVERAGE_OUTPUT_BYTES,
+                _DEEP_COVERAGE_FINDING_BOUND,
+            ),
+            loads_plugins=True,
+            imports_content=True,
+            executes_content=True,
+            # Pytest content is trusted but not network-sandboxed.  Claiming false
+            # here would overstate a guarantee the provider does not enforce.
+            uses_network=True,
+        )
+        self._prepared_key: str | None = None
+        self._prepared: DeepCoveragePreparedInput | None = None
+        self._preparation_error_key: str | None = None
+        self._preparation_error: Exception | None = None
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def _prepare(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> tuple[DeepCoveragePreparedInput, bool]:
+        key = external_input_signature(files)
+        if self._prepared_key == key and self._prepared is not None:
+            return self._prepared, True
+        if self._preparation_error_key == key and self._preparation_error is not None:
+            raise self._preparation_error
+        try:
+            prepared = prepare_deep_coverage_input(
+                self.root,
+                files,
+                self.config,
+                environment=_controlled_environment(),
+            )
+        except Exception as exc:
+            self._preparation_error_key = key
+            self._preparation_error = exc
+            raise
+        self._prepared_key = key
+        self._prepared = prepared
+        self._preparation_error_key = None
+        self._preparation_error = None
+        return prepared, False
+
+    def baseline_input_signature(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> str:
+        """Return the exact replay key, caching its measured preflight."""
+
+        prepared, _cached = self._prepare(files)
+        return prepared.publication_input_signature
+
+    def _attach_deep_contract(
+        self,
+        publication: ExternalProviderPublication,
+        *,
+        prepared: DeepCoveragePreparedInput | None,
+        execution: DeepCoverageExecution | None,
+    ) -> ExternalProviderPublication:
+        counters = dict(publication.counters)
+        if prepared is not None:
+            counters.update(
+                {
+                    "support_files_verified": prepared.support_files_verified,
+                    "support_bytes_verified": prepared.support_bytes_verified,
+                    "preparation_milliseconds": prepared.preparation_milliseconds,
+                    "bytes_read": max(
+                        counters.get("bytes_read", 0),
+                        prepared.support_bytes_verified,
+                    ),
+                }
+            )
+            if execution is None:
+                counters.update(
+                    {
+                        "process_invocations": max(
+                            counters.get("process_invocations", 0),
+                            prepared.process_invocations,
+                        ),
+                        "stdout_bytes": max(
+                            counters.get("stdout_bytes", 0),
+                            prepared.stdout_bytes,
+                        ),
+                        "stderr_bytes": max(
+                            counters.get("stderr_bytes", 0),
+                            prepared.stderr_bytes,
+                        ),
+                        "wall_milliseconds": max(
+                            counters.get("wall_milliseconds", 0),
+                            prepared.preparation_milliseconds,
+                        ),
+                    }
+                )
+        if execution is not None:
+            counters.update({name: int(value) for name, value in execution.counters.items()})
+        provenance = dict(publication.publication.provenance)
+        provenance["deep_configuration"] = {
+            "payload": dict(self.deep_configuration),
+            "signature": self.config.configuration_signature,
+        }
+        deep_execution: dict[str, object] = {
+            "suite_selection": self.config.suite_selection,
+            "content_executed": publication.execution != "cache_replay",
+            "whole_publication_replay": publication.execution == "cache_replay",
+        }
+        if prepared is not None:
+            deep_execution.update(
+                {
+                    "code_input_signature": prepared.code_input_signature,
+                    "support_signature": prepared.support_signature,
+                    "publication_input_signature": prepared.publication_input_signature,
+                    "support_files_verified": prepared.support_files_verified,
+                    "support_bytes_verified": prepared.support_bytes_verified,
+                    "preparation_milliseconds": prepared.preparation_milliseconds,
+                    "preparation_process_invocations": prepared.process_invocations,
+                }
+            )
+        if execution is not None:
+            deep_execution.update(
+                {
+                    "measurement_complete": execution.measurement_complete,
+                    "suite_signature": execution.suite_signature,
+                    "measurement_scope_signature": execution.measurement_scope_signature,
+                }
+            )
+        provenance["deep_execution"] = deep_execution
+        inner = replace(publication.publication, provenance=provenance)
+        return replace(publication, publication=inner, counters=counters)
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        started_ns = time.time_ns()
+        if self._version is None:
+            return self._attach_deep_contract(
+                _failure(
+                    self.descriptor,
+                    root,
+                    files,
+                    tool_version="unavailable",
+                    status="unavailable",
+                    reason="pytest_or_coverage_unavailable",
+                    started_ns=started_ns,
+                ),
+                prepared=None,
+                execution=None,
+            )
+        prepared: DeepCoveragePreparedInput | None = None
+        try:
+            if external_root_identity(root) != self._root_identity:
+                raise ValueError("trusted-deep root changed after provider construction")
+            prepared, was_cached = self._prepare(files)
+            if was_cached:
+                started_ns -= prepared.preparation_milliseconds * 1_000_000
+        except subprocess.TimeoutExpired:
+            return self._attach_deep_contract(
+                _failure(
+                    self.descriptor,
+                    root,
+                    files,
+                    tool_version=self._version,
+                    status="timeout",
+                    reason="deep_coverage_preparation_timeout",
+                    started_ns=started_ns,
+                ),
+                prepared=prepared,
+                execution=None,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return self._attach_deep_contract(
+                _failure(
+                    self.descriptor,
+                    root,
+                    files,
+                    tool_version=self._version,
+                    status="failed",
+                    reason=f"deep_coverage_preparation_failed:{type(exc).__name__}:{exc}"[:4096],
+                    started_ns=started_ns,
+                ),
+                prepared=prepared,
+                execution=None,
+            )
+        assert prepared is not None
+        if (
+            baseline is not None
+            and baseline.input_signature == prepared.publication_input_signature
+        ):
+            replay = _exact_replay(
+                self.descriptor,
+                root,
+                files,
+                baseline,
+                limitations=_DEEP_COVERAGE_LIMITATIONS,
+                input_signature_override=prepared.publication_input_signature,
+            )
+            return self._attach_deep_contract(
+                replay,
+                prepared=prepared,
+                execution=None,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            durable_identity = external_signature(
+                "deep-coverage-scratch-v1",
+                {
+                    "root_identity": external_root_identity(root),
+                    "configuration_signature": self.config.configuration_signature,
+                },
+            ).rsplit(":", 1)[-1]
+            # Keep the unpublished internal scratch layout deliberately short.  Pytest
+            # adds node-id-derived directories below its basetemp and nested Git
+            # fixtures must still fit the traditional Windows path budget.
+            durable_scratch = staging_parent / "d" / durable_identity
+            durable_scratch.mkdir(parents=True, exist_ok=True)
+            staged = {os.path.normcase(os.path.abspath(item.path)): item for item in files}
+            if len(staged) != len(files):
+                raise ValueError("trusted-deep input paths are duplicated")
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-pytest-coverage-",
+                dir=staging_parent,
+            ) as temporary:
+                execution = execute_pytest_coverage(
+                    Path(temporary),
+                    staged,
+                    _controlled_environment(),
+                    trusted_root=root,
+                    scratch_root=durable_scratch,
+                    config=self.config,
+                    prepared_input=prepared,
+                )
+        except subprocess.TimeoutExpired:
+            return self._attach_deep_contract(
+                _failure(
+                    self.descriptor,
+                    root,
+                    files,
+                    tool_version=self._version,
+                    status="timeout",
+                    reason="provider_timeout",
+                    started_ns=started_ns,
+                ),
+                prepared=prepared,
+                execution=None,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return self._attach_deep_contract(
+                _failure(
+                    self.descriptor,
+                    root,
+                    files,
+                    tool_version=self._version,
+                    status="failed",
+                    reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                    started_ns=started_ns,
+                ),
+                prepared=prepared,
+                execution=None,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            files,
+            execution.findings,
+            baseline if execution.measurement_complete else None,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=0,
+            limitations=execution.limitations,
+            input_signature_override=prepared.publication_input_signature,
+        )
+        publication = replace(
+            publication,
+            coverage_complete=execution.measurement_complete,
+        )
+        return self._attach_deep_contract(
+            publication,
+            prepared=prepared,
+            execution=execution,
+        )
+
+
 def providers_for_profile(
     profile: AnalysisProfile,
     root: Path,
+    *,
+    deep_configuration: Mapping[str, object] | None = None,
+    deep_configuration_signature: str | None = None,
 ) -> tuple[ExternalEvidenceProvider, ...]:
+    if profile != "trusted-deep" and (
+        deep_configuration is not None or deep_configuration_signature is not None
+    ):
+        raise ValueError("deep provider configuration requires trusted-deep")
     if profile == "protected":
         return (RuffProtectedBasicProvider(root),)
     if profile == "trusted-static":
@@ -1628,7 +2097,17 @@ def providers_for_profile(
             GrimpArchitectureProvider(root),
             ComplexipyCognitiveProvider(root),
         )
-    raise ValueError("trusted-deep providers are not implemented")
+    if profile == "trusted-deep":
+        static = providers_for_profile("trusted-static", root)
+        return (
+            *static,
+            PytestCoverageTrustedDeepProvider(
+                root,
+                deep_configuration,
+                deep_configuration_signature,
+            ),
+        )
+    raise ValueError("external analysis profile is unsupported")
 
 
 __all__ = [
@@ -1636,6 +2115,7 @@ __all__ = [
     "GRIMP_ARCHITECTURE_PROVIDER_ID",
     "MYPY_PROVIDER_ID",
     "PYRIGHT_PROVIDER_ID",
+    "PYTEST_COVERAGE_PROVIDER_ID",
     "RUFF_ANALYZE_PROVIDER_ID",
     "RUFF_PROTECTED_PROVIDER_ID",
     "RUFF_TRUSTED_PROVIDER_ID",
@@ -1643,6 +2123,7 @@ __all__ = [
     "GrimpArchitectureProvider",
     "MypyTrustedProjectProvider",
     "PyrightTrustedProjectProvider",
+    "PytestCoverageTrustedDeepProvider",
     "RuffAnalyzeImportsProvider",
     "RuffProtectedBasicProvider",
     "RuffTrustedProjectProvider",

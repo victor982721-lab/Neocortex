@@ -24,6 +24,7 @@ from .self_analysis import (
     MAX_SELF_ANALYSIS_MANIFEST_BYTES,
     SELF_ANALYSIS_MANIFEST_SCHEMA,
     SELF_ANALYSIS_PROFILE_VERSION,
+    _deep_analysis_from_argv,
 )
 
 
@@ -408,6 +409,59 @@ def _validate_commands(manifest: Mapping[str, object]) -> None:
             )
 
 
+def _validate_deep_analysis(
+    manifest: Mapping[str, object],
+    *,
+    schema: str,
+) -> None:
+    """Bind optional v2 deep evidence exactly to the recorded analyze argv."""
+
+    commands = manifest_mapping(manifest.get("commands"), label="manifest commands")
+    analyze = _string_list(
+        commands.get("analyze"),
+        label="manifest analyze command",
+    )
+    try:
+        expected = _deep_analysis_from_argv(analyze)
+    except ValueError as exc:
+        raise InvalidSelfAnalysisManifest(
+            "manifest deep analysis command is incompatible"
+        ) from exc
+    recorded = manifest.get("deep_analysis")
+    if schema in LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS:
+        if "deep_analysis" in manifest or expected is not None:
+            raise InvalidSelfAnalysisManifest(
+                "legacy manifest cannot contain deep analysis evidence"
+            )
+        return
+    if expected is None:
+        if "deep_analysis" in manifest:
+            raise InvalidSelfAnalysisManifest(
+                "manifest deep analysis evidence is unexpected"
+            )
+        return
+    recorded_mapping = manifest_mapping(
+        recorded,
+        label="manifest deep analysis evidence",
+    )
+    recorded_canonical = json.dumps(
+        recorded_mapping,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    expected_canonical = json.dumps(
+        expected,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    if recorded_canonical != expected_canonical:
+        raise InvalidSelfAnalysisManifest(
+            "manifest deep analysis evidence is inconsistent"
+        )
+
+
 # endregion [03]
 
 
@@ -444,11 +498,18 @@ def _decode_bounded_json(raw: object, byte_count: object) -> Mapping[str, object
         raise InvalidSelfAnalysisManifest(
             "self-analysis manifest is malformed JSON"
         ) from exc
-    return manifest_mapping(
+    manifest = manifest_mapping(
         decoded,
         label="self-analysis manifest",
-        keys=frozenset({"schema", "run", "inventory", "code", "safety", "commands"}),
     )
+    common_keys = frozenset(
+        {"schema", "run", "inventory", "code", "safety", "commands"}
+    )
+    if set(manifest) not in {common_keys, common_keys | {"deep_analysis"}}:
+        raise InvalidSelfAnalysisManifest(
+            "self-analysis manifest has an incompatible shape"
+        )
+    return manifest
 
 
 def decode_self_analysis_manifest(raw: object, byte_count: object) -> dict[str, object]:
@@ -468,6 +529,7 @@ def decode_self_analysis_manifest(raw: object, byte_count: object) -> dict[str, 
     _validate_code(manifest)
     _validate_safety(manifest)
     _validate_commands(manifest)
+    _validate_deep_analysis(manifest, schema=str(schema))
     canonical = canonical_self_analysis_manifest(manifest)
     if canonical != raw:
         raise InvalidSelfAnalysisManifest(

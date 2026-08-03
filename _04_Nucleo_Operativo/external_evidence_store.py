@@ -947,12 +947,30 @@ def _current_runtime_reason(
     from .external_evidence_providers import providers_for_profile
 
     profile_value = str(row["profile"])
-    if profile_value not in {"protected", "trusted-static"}:
+    if profile_value not in {"protected", "trusted-static", "trusted-deep"}:
         return "external_provider_profile_unsupported"
+    deep_configuration: Mapping[str, object] | None = None
+    deep_configuration_signature: str | None = None
+    if profile_value == "trusted-deep":
+        try:
+            provenance = json.loads(str(row["provenance_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return "external_provider_deep_configuration_invalid"
+        recorded = provenance.get("deep_configuration") if isinstance(provenance, dict) else None
+        if not isinstance(recorded, dict) or set(recorded) != {"payload", "signature"}:
+            return "external_provider_deep_configuration_invalid"
+        payload = recorded.get("payload")
+        signature = recorded.get("signature")
+        if not isinstance(payload, dict) or not isinstance(signature, str) or not signature:
+            return "external_provider_deep_configuration_invalid"
+        deep_configuration = payload
+        deep_configuration_signature = signature
     try:
         providers = providers_for_profile(
             cast(AnalysisProfile, profile_value),
             Path(str(row["observed_root"])),
+            deep_configuration=deep_configuration,
+            deep_configuration_signature=deep_configuration_signature,
         )
     except (OSError, RuntimeError, TypeError, ValueError):
         return "external_provider_runtime_probe_failed"
@@ -1116,11 +1134,12 @@ def read_external_evidence_suite(
             statuses.append(_legacy_provider_status(legacy))
     statuses.sort(key=lambda item: item.provider_id)
     status_map = {item.provider_id: item for item in statuses}
-    profile = (
-        "trusted-static"
-        if any(item.profile == "trusted-static" for item in statuses)
-        else "protected"
-    )
+    if any(item.profile == "trusted-deep" for item in statuses):
+        profile: AnalysisProfile = "trusted-deep"
+    elif any(item.profile == "trusted-static" for item in statuses):
+        profile = "trusted-static"
+    else:
+        profile = "protected"
     if not statuses:
         suite_status = "not_recorded"
     elif all(item.status == "ready" for item in statuses):
@@ -1130,7 +1149,7 @@ def read_external_evidence_suite(
     else:
         suite_status = "abstained"
     return ExternalEvidenceSuiteStatus(
-        profile,  # type: ignore[arg-type]
+        profile,
         suite_status,  # type: ignore[arg-type]
         tuple(statuses),
         _type_consensus(findings, status_map),

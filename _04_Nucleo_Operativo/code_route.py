@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import time
 from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager, nullcontext
@@ -66,6 +67,7 @@ from .external_evidence_models import (
 )
 from .external_evidence_providers import (
     RUFF_PROTECTED_PROVIDER_ID,
+    PytestCoverageTrustedDeepProvider,
     RuffProtectedBasicProvider,
     providers_for_profile,
 )
@@ -361,7 +363,22 @@ class CodeRoute:
                 )
                 publications = ()
             else:
-                providers = providers_for_profile(self.config.analysis_profile, root)
+                deep_configuration = (
+                    self.config.deep_configuration_payload
+                    if self.config.analysis_profile == "trusted-deep"
+                    else None
+                )
+                deep_configuration_signature = (
+                    self.config.deep_configuration_signature
+                    if self.config.analysis_profile == "trusted-deep"
+                    else None
+                )
+                providers = providers_for_profile(
+                    self.config.analysis_profile,
+                    root,
+                    deep_configuration=deep_configuration,
+                    deep_configuration_signature=deep_configuration_signature,
+                )
                 normalized: list[ExternalProviderPublication] = []
                 protected_provider = next(
                     item
@@ -416,12 +433,24 @@ class CodeRoute:
                     version = provider.tool_version()
                     exact = None
                     comparable = None
-                    if version is not None:
+                    provider_input_signature: str | None = external_input_signature(files)
+                    if isinstance(provider, PytestCoverageTrustedDeepProvider):
+                        try:
+                            provider_input_signature = provider.baseline_input_signature(files)
+                        except (
+                            OSError,
+                            RuntimeError,
+                            TypeError,
+                            ValueError,
+                            subprocess.TimeoutExpired,
+                        ):
+                            provider_input_signature = None
+                    if version is not None and provider_input_signature is not None:
                         exact, comparable = state.external_provider_baselines(
                             descriptor=provider.descriptor,
                             tool_version=version,
                             root_identity=external_root_identity(root),
-                            input_signature=external_input_signature(files),
+                            input_signature=provider_input_signature,
                         )
                     normalized.append(
                         provider.run(

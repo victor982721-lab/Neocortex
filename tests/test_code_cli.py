@@ -20,6 +20,17 @@ from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
 from _04_Nucleo_Operativo.code_schema import initialize_code_state
+from _04_Nucleo_Operativo.code_coverage_analysis import (
+    CODE_COVERAGE_PROVIDER_ID,
+    CodeCoverageAnalysis,
+    CoverageComparison,
+    CoverageGateEvaluation,
+    CoverageScopeSummary,
+    CoverageTestOutcomes,
+    CoverageToolVersion,
+    CoverageTotals,
+    WorkPackageCoverageProjection,
+)
 from _04_Nucleo_Operativo.external_evidence_providers import provider_tool_versions
 
 # endregion [01]
@@ -113,6 +124,8 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert status["architecture"]["reason"] == "code_state_missing"
     assert status["architecture"]["summary"] is None
     assert len(status["architecture"]["gates"]) == 3
+    assert status["test_coverage"]["status"] == "abstained"
+    assert status["test_coverage"]["reason"] == "code_state_missing"
     assert doctor["kind"] == "code-doctor"
     assert doctor["schema"] == "not-initialized"
     assert set(doctor["external_evidence_providers"]) == set(provider_tool_versions())
@@ -129,6 +142,7 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert "CODE_ARCHITECTURE status=abstained gate=abstained" in human_status
     assert "CODE_ARCHITECTURE_SUMMARY status=not_evaluated" in human_status
     assert human_status.count("CODE_ARCHITECTURE_GATE ") == 3
+    assert "CODE_COVERAGE status=abstained" in human_status
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
@@ -152,19 +166,20 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
-    assert payload["schema"] == "neocortex.code-review/v6"
+    assert payload["schema"] == "neocortex.code-review/v7"
     assert "neocortex.code-review/v3" in payload["compatible_schemas"]
     assert payload["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
         "neocortex.code-review/v4",
         "neocortex.code-review/v5",
+        "neocortex.code-review/v6",
     ]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
     assert payload["actionability_version"] == "python-maintenance-actionability-v1"
     assert payload["recommendation_status"] == "not_evaluated"
-    assert payload["planning_version"] == "python-maintenance-work-packages-v2"
+    assert payload["planning_version"] == "python-maintenance-work-packages-v3"
     assert payload["work_package_status"] == "not_evaluated"
     assert payload["work_packages"] == []
     assert not (tmp_path / "code.sqlite3").exists()
@@ -291,6 +306,29 @@ def test_code_status_projects_bounded_architecture_summary_and_gates(
         external_evidence={"status": "ready"},
         external_evidence_suite={"profile": "full", "status": "ready", "providers": []},
         architecture=architecture,
+        test_coverage={
+            "status": "ready",
+            "reason": None,
+            "suite_selection": "selected",
+            "measurement_complete": True,
+            "content_executed": True,
+            "outcomes": {
+                "collected": 2,
+                "selected": 2,
+                "passed": 2,
+                "failed": 0,
+                "skipped": 0,
+            },
+            "totals": {
+                "covered_lines": 8,
+                "executable_lines": 10,
+                "covered_branch_exits": 3,
+                "branch_exits": 4,
+            },
+            "gates": [
+                {"gate": "tests_passed", "status": "passed", "reason": None},
+            ],
+        },
     )
 
     cli_code._emit_code_status(
@@ -306,6 +344,8 @@ def test_code_status_projects_bounded_architecture_summary_and_gates(
     assert "CODE_ARCHITECTURE_SUMMARY modules=25 import_edges=30 consensus_edges=28" in output
     assert "CODE_ARCHITECTURE_PROVIDER id=grimp-architecture status=ready" in output
     assert "CODE_ARCHITECTURE_GATE id=architecture_contracts status=failed" in output
+    assert "CODE_COVERAGE status=ready suite=selected" in output
+    assert "CODE_COVERAGE_GATE id=tests_passed status=passed" in output
 
 
 def test_code_review_human_surfaces_architecture_and_work_package_context(
@@ -350,6 +390,29 @@ def test_code_review_human_surfaces_architecture_and_work_package_context(
         primary_module="app",
         import_chains=(("app", "core"),),
         affected_architecture_contracts=("layers",),
+        test_coverage=WorkPackageCoverageProjection(
+            "symbol:app.handler:10:30",
+            "protected",
+            ("tests/test_app.py::test_handler",),
+            ("relation:handler",),
+            CoverageGateEvaluation("work_package_target_protected", "passed", None),
+        ),
+        test_coverage_scope=CoverageScopeSummary(
+            "symbol",
+            "symbol:app.handler:10:30",
+            "app",
+            "symbol:app.handler:10:30",
+            "handler",
+            10,
+            30,
+            "app.py",
+            CoverageTotals(20, 18, 2, 6, 5, 1, 90.0, 83.333333),
+            ((19, 20),),
+            ((18, 20),),
+            False,
+            False,
+            ("tests/test_app.py::test_handler",),
+        ),
         acceptance_gates=(
             "target_hotspot_removed",
             "architecture_contracts_not_degraded",
@@ -376,10 +439,34 @@ def test_code_review_human_surfaces_architecture_and_work_package_context(
         work_packages=(package,),
         ranking="python-confirmed-hotspots-v2",
         actionability_version="python-maintenance-actionability-v1",
-        planning_version="python-maintenance-work-packages-v2",
+        planning_version="python-maintenance-work-packages-v3",
         external_evidence=None,
         external_evidence_suite=None,
         architecture=architecture,
+        test_coverage=CodeCoverageAnalysis(
+            database="fixture",
+            analysis_run_id=1,
+            provider_id=CODE_COVERAGE_PROVIDER_ID,
+            tool_run_id=1,
+            effective_tool_run_id=1,
+            status="ready",
+            reason=None,
+            suite_selection="selected",
+            measurement_complete=True,
+            content_executed=True,
+            tool_versions=(CoverageToolVersion("coverage", "7.14.1"),),
+            suite_signature="suite",
+            configuration_signature="configuration",
+            measurement_scope_signature="scope",
+            outcomes=CoverageTestOutcomes(1, 1, 1, 0, 0),
+            totals=CoverageTotals(20, 18, 2, 6, 5, 1, 90.0, 83.333333),
+            modules=(),
+            symbols=(package.test_coverage_scope,),
+            test_relations=(),
+            failed_test_nodeids=(),
+            gates=(CoverageGateEvaluation("tests_passed", "passed", None),),
+            limitations=("selected_suite_is_not_claimed_as_full_project_coverage",),
+        ),
         recommendation_status="abstained",
         recommendation_reason="none",
         work_package_status="ready",
@@ -404,6 +491,12 @@ def test_code_review_human_surfaces_architecture_and_work_package_context(
     assert "architecture_contracts_not_degraded" in output
     assert "no_new_import_cycles" in output
     assert "module_complexity_not_displaced" in output
+    assert "CODE_REVIEW_TEST_COVERAGE status=ready suite=selected" in output
+    assert "CODE_REVIEW_TEST_COVERAGE_GATE id=tests_passed status=passed" in output
+    assert "CODE_REVIEW_WORK_PACKAGE_COVERAGE status=protected" in output
+    assert 'tests=["tests/test_app.py::test_handler"]' in output
+    assert "missing_lines=[[19, 20]]" in output
+    assert "missing_branches=[[18, 20]]" in output
 
 
 def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
@@ -476,6 +569,24 @@ def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
         verdict="mixed",
         providers=(),
         architecture=architecture,
+        test_coverage=CoverageComparison(
+            status="comparable",
+            reason=None,
+            baseline_suite_signature="suite",
+            current_suite_signature="suite",
+            executable_lines_delta=1,
+            covered_lines_delta=2,
+            missing_lines_delta=-1,
+            branch_exits_delta=0,
+            covered_branch_exits_delta=1,
+            missing_branch_exits_delta=-1,
+            line_coverage_percent_delta=1.5,
+            branch_coverage_percent_delta=2.0,
+            gates=(
+                CoverageGateEvaluation("line_coverage_not_degraded", "passed", None),
+                CoverageGateEvaluation("branch_coverage_not_degraded", "passed", None),
+            ),
+        ),
         limitations=(),
     )
     monkeypatch.setattr(
@@ -502,6 +613,9 @@ def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
     assert output.count("CODE_PUBLICATION_DIFF_ARCHITECTURE_MODULE ") == 20
     assert "module_examples_omitted=1" in output
     assert 'CODE_PUBLICATION_DIFF_ARCHITECTURE_DISPLACEMENT target="app"' in output
+    assert "CODE_PUBLICATION_DIFF_COVERAGE status=comparable line_delta=1.5" in output
+    assert "covered_lines_delta=2 missing_lines_delta=-1" in output
+    assert output.count("CODE_PUBLICATION_DIFF_COVERAGE_GATE ") == 2
 
 
 def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:

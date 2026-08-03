@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from pathlib import Path
 
 from .cli_audio_surface import (
     validate_audio_arguments,
@@ -19,6 +20,7 @@ from .cli_office_surface import (
 )
 from .cli_operations import DirectOperationFamily, selected_direct_operations
 from .cli_semantic_surface import validate_semantic_arguments
+from .code_contracts import normalize_deep_test_selectors
 from .corpus_access import path_trees_intersect
 from .route_selection import (
     BUILTIN_ROUTE_ORDER,
@@ -72,16 +74,57 @@ _SELF_ANALYSIS_UNUSED_OPTIONS = frozenset(
         "tesseract_cmd",
     }
 )
+_TRUSTED_DEEP_OPTIONS = frozenset(
+    {
+        "deep_test_selectors",
+        "deep_max_tests",
+        "deep_time_budget_seconds",
+        "deep_shard_size",
+    }
+)
+
+
+def trusted_deep_expected_root(home: Path | None = None) -> Path:
+    """Return the sole project root permitted to execute trusted content."""
+
+    base = Path.home() if home is None else Path(home)
+    return base / "Neocortex" / "Repository"
+
+
+def _is_exact_trusted_deep_root(root: Path) -> bool:
+    """Compare physical root identity without any configurable bypass."""
+
+    expected = trusted_deep_expected_root()
+    resolved_root = root.resolve(strict=True)
+    resolved_expected = expected.resolve(strict=True)
+    return resolved_root == resolved_expected and resolved_root.samefile(resolved_expected)
 
 
 def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     """Expand the protected code-only preset and reject unused controls."""
 
-    if not args.self_analysis:
-        if "analysis_profile" in set(getattr(args, "_explicit_options", ())):
-            raise SystemExit("--analysis-profile requires --self-analysis")
-        return
     explicit = set(getattr(args, "_explicit_options", ()))
+    explicit_deep = sorted(explicit & _TRUSTED_DEEP_OPTIONS)
+    if not args.self_analysis:
+        if "analysis_profile" in explicit:
+            raise SystemExit("--analysis-profile requires --self-analysis")
+        if explicit_deep:
+            option = "--" + explicit_deep[0].replace("_", "-")
+            raise SystemExit(f"{option} requires --self-analysis --analysis-profile trusted-deep")
+        return
+    if args.analysis_profile != "trusted-deep" and explicit_deep:
+        option = "--" + explicit_deep[0].replace("_", "-")
+        raise SystemExit(f"{option} requires --analysis-profile trusted-deep")
+    try:
+        args.deep_test_selectors = normalize_deep_test_selectors(args.deep_test_selectors)
+    except ValueError as exc:
+        raise SystemExit(f"invalid --deep-test-selector: {exc}") from exc
+    if not 1 <= args.deep_max_tests <= 5000:
+        raise SystemExit("--deep-max-tests must be between 1 and 5000")
+    if not 30 <= args.deep_time_budget_seconds <= 900:
+        raise SystemExit("--deep-time-budget-seconds must be between 30 and 900")
+    if not 1 <= args.deep_shard_size <= 50:
+        raise SystemExit("--deep-shard-size must be between 1 and 50")
     if "root" not in explicit:
         raise SystemExit("--self-analysis requires explicit --root")
     if "state_directory" not in explicit:
@@ -123,6 +166,18 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         args.root = validate_inventory_root(args.root)
     except (InventoryError, OSError, RuntimeError, ValueError) as exc:
         raise SystemExit(f"invalid --self-analysis root: {exc}") from exc
+    if args.analysis_profile == "trusted-deep":
+        try:
+            exact_trusted_root = _is_exact_trusted_deep_root(args.root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise SystemExit(
+                "trusted-deep canonical root identity cannot be verified: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+        if not exact_trusted_root:
+            raise SystemExit(
+                f"trusted-deep requires the exact canonical root {trusted_deep_expected_root()}"
+            )
     try:
         intersects = path_trees_intersect(args.root, args.state_directory)
     except (OSError, ValueError) as exc:

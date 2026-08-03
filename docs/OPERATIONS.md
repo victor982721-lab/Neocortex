@@ -140,6 +140,49 @@ cognitiva. El status arquitectónico debe mostrar
 que necesitan comparación permanecen `baseline` o `not_evaluated`; sólo un diff
 comparable permite aprobar que no hubo degradación o desplazamiento.
 
+### Perfil `trusted-deep`
+
+Úselo sólo para ejecutar la suite declarada de NeoCortex y correlacionar pruebas
+con líneas, ramas, símbolos, módulos y el work package vigente. No es
+predeterminado y la CLI rechaza cualquier raíz que no sea la identidad física
+exacta de `C:\Users\Victor\Neocortex\Repository`. El perfil ejecuta código del
+proyecto, pruebas y `conftest.py`; no procesa corpus ni modifica el estado
+durable vivo:
+
+```powershell
+$Root = 'C:\Users\Victor\Neocortex\Repository'
+$State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\trusted-deep'
+
+# Suite declarada completa, dentro de los límites predeterminados.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State
+
+# Alternativa focal: el selector puede repetirse y acepta node ids de Pytest.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
+  --deep-test-selector tests/test_bounded_subprocess.py `
+  --deep-time-budget-seconds 600 --deep-max-tests 3000 --deep-shard-size 20
+```
+
+Los límites admitidos son 30–900 segundos, 1–5000 tests y shards de 1–50;
+600/3000/20 son los valores predeterminados. Sin selector, la publicación
+declara `suite_selection=full`; con uno o más, `selected`. Si `max_tests` trunca
+lo recolectado, `measurement_complete=false` y los gates que necesitan cobertura
+completa se abstienen.
+
+Coverage usa branch coverage y contextos dinámicos por test/fase de Pytest, pero
+mide sólo el proceso principal. Un subprocess creado por las pruebas puede
+ejecutar código sin quedar atribuido y la publicación lo declara mediante
+`coverage_main_process_only` y `subprocess_coverage_not_collected`. Los shards se
+firman con inputs, suite, configuración y versiones. Sólo un shard con todas sus
+pruebas aprobadas produce checkpoint reanudable; uno fallido, incompleto o
+incompatible se vuelve a ejecutar.
+
+Después de cerrar writers, consulte el mismo `$State` con `--code-status
+--code-json` y `--code-review --code-json`. `test_coverage` debe explicar
+selección, completitud, resultados, líneas/ramas y limitaciones. El work package
+debe mostrar pruebas protectoras o `unprotected`/`not_evaluated`; jamás infiera
+protección por nombre. Un publication diff sólo puede aprobar los deltas de
+líneas y ramas cuando suite, alcance, configuración y herramientas coinciden.
+
 El manifest guarda `Neocortex` como primer elemento de su argv canónico. Antes
 de promover el launcher estable, use la ruta exacta del runtime versionado para
 validar `--version`, `--help` y este preset.
@@ -169,9 +212,9 @@ campos USN en `NULL` y las rutas reutilizan caches por identidad/metadata.
 
 Sólo un cambio al autoanálisis o un cierre de release requiere un smoke de la
 raíz canónica. En ese caso analiza `%USERPROFILE%\Neocortex\Repository` con un
-estado externo nuevo bajo
-`%LOCALAPPDATA%\Neocortex\self-analysis\smokes`. Un cambio cotidiano no debe
-convertirse por rutina en un análisis completo del repositorio.
+estado externo nuevo bajo `C:\Users\Victor\Neocortex\Laboratory\self-analysis`.
+Un cambio cotidiano no debe convertirse por rutina en un análisis completo del
+repositorio.
 
 ## Reanudación
 
@@ -419,9 +462,9 @@ incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
 No ejecute manualmente herramientas externas ni descargue modelos para validar
 una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
-validación del wheel debe confirmar Ruff, Mypy, Grimp y Complexipy en la base,
-y la preparación del perfil `trusted-static` debe confirmar Node y el paquete
-Pyright aislado.
+validación del wheel debe confirmar Ruff, Mypy, Grimp, Complexipy, Pytest y
+Coverage en la base, y la preparación de los perfiles trusted debe confirmar
+Node y el paquete Pyright aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
 estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo

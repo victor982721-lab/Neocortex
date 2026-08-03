@@ -364,6 +364,16 @@ def test_publication_diff_of_the_same_state_is_stable_and_empty(
     assert result.hotspots.removed == 0
     assert result.hotspots.changed_evidence == 0
     assert result.probable_dead_delta == 0
+    assert result.test_coverage is not None
+    assert result.test_coverage.status == "not_comparable"
+    assert all(gate.status == "not_evaluated" for gate in result.test_coverage.gates)
+    payload = result.as_payload()
+    assert payload["schema"] == "neocortex.code-publication-diff/v5"
+    assert "neocortex.code-publication-diff/v4" in payload["compatible_schemas"]
+    coverage_payload = payload["test_coverage"]
+    assert isinstance(coverage_payload, dict)
+    assert coverage_payload["schema"] == "neocortex.code-coverage-analysis/v1"
+    assert "test_coverage_delta_not_comparable" in result.limitations
 
 
 def _architecture_provider(provider_id: str) -> ArchitectureProviderStatus:

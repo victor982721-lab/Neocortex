@@ -130,13 +130,46 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--analysis-profile",
-        choices=("protected", "trusted-static"),
+        choices=("protected", "trusted-static", "trusted-deep"),
         default="protected",
         help=(
             "external-evidence profile for --self-analysis; protected is the "
             "safe default, trusted-static loads the explicitly trusted project's "
-            "versioned static-analysis policy"
+            "versioned static-analysis policy, and trusted-deep additionally "
+            "executes its bounded declared test selection"
         ),
+    )
+    parser.add_argument(
+        "--deep-test-selector",
+        dest="deep_test_selectors",
+        action="append",
+        default=[],
+        metavar="TEST_PATH_OR_NODEID",
+        help=(
+            "repeatable relative tests/ path or pytest node id selected by "
+            "trusted-deep; omitting it selects the declared full suite"
+        ),
+    )
+    parser.add_argument(
+        "--deep-max-tests",
+        type=int,
+        default=3000,
+        metavar="N",
+        help="maximum tests admitted by trusted-deep (1..5000; default 3000)",
+    )
+    parser.add_argument(
+        "--deep-time-budget-seconds",
+        type=int,
+        default=600,
+        metavar="SECONDS",
+        help="hard trusted-deep test budget (30..900 seconds; default 600)",
+    )
+    parser.add_argument(
+        "--deep-shard-size",
+        type=int,
+        default=20,
+        metavar="N",
+        help="trusted-deep tests per resumable shard (1..50; default 20)",
     )
 
     parser.add_argument(

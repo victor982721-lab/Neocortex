@@ -624,7 +624,7 @@ def test_status_review_and_diff_consume_the_normalized_provider_contract(
     second_diff = compare_code_publications(baseline_state, current_state)
     assert first_diff == second_diff
     assert first_diff.status == "ready"
-    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v4"
+    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v5"
     assert first_diff.analysis_profile == "protected"
     assert len(first_diff.providers) == 1
     assert first_diff.providers[0].provider_id == "ruff-protected-basic"
