@@ -1,9 +1,11 @@
 # Direct dependency constraints validated with CPython 3.13 on Windows.
 # Transitive packages remain resolver-managed by their owning direct dependency.
 build==1.5.0
+complexipy==6.2.0
 coverage==7.14.1
 fastembed==0.8.0
 faster-whisper==1.2.1
+grimp==3.15
 mypy==2.1.0
 nudenet==3.4.2
 numpy==2.4.6

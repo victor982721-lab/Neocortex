@@ -346,6 +346,22 @@ CAPABILITY_SPECS: Mapping[str, RuntimeCapabilitySpec] = MappingProxyType(
                     missing_reason="code_mypy_provider_unavailable",
                     extra=None,
                 ),
+                _distribution(
+                    "grimp",
+                    "grimp",
+                    "grimp",
+                    required=False,
+                    missing_reason="code_grimp_provider_unavailable",
+                    extra=None,
+                ),
+                _distribution(
+                    "complexipy",
+                    "complexipy",
+                    "complexipy",
+                    required=False,
+                    missing_reason="code_complexipy_provider_unavailable",
+                    extra=None,
+                ),
                 _executable(
                     "node",
                     "node",
