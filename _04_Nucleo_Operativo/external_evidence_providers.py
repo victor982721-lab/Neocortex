@@ -2146,11 +2146,16 @@ class PipAuditKnownVulnerabilitiesProvider:
         self._utc_date = dt.datetime.now(tz=dt.UTC).date().isoformat()
         self._installed_signature: str | None
         environment_started = time.perf_counter_ns()
-        try:
-            self._installed_signature = _installed_distribution_signature(utc_date=self._utc_date)
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        if self._version is None:
             self._installed_signature = None
-            self._environment_error = f"{type(exc).__name__}:{exc}"
+        else:
+            try:
+                self._installed_signature = _installed_distribution_signature(
+                    utc_date=self._utc_date
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._installed_signature = None
+                self._environment_error = f"{type(exc).__name__}:{exc}"
         self._environment_preparation_milliseconds = max(
             0,
             (time.perf_counter_ns() - environment_started) // 1_000_000,
@@ -2361,11 +2366,14 @@ class InstalledPackageInventoryProvider:
         self._version = _package_version("neocortex-framework")
         self._environment_error: str | None = None
         self._installed_signature: str | None
-        try:
-            self._installed_signature = _installed_distribution_signature()
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        if self._version is None:
             self._installed_signature = None
-            self._environment_error = f"{type(exc).__name__}:{exc}"
+        else:
+            try:
+                self._installed_signature = _installed_distribution_signature()
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._installed_signature = None
+                self._environment_error = f"{type(exc).__name__}:{exc}"
         version = self._version or "unavailable"
         self.descriptor = _provider_descriptor(
             provider_id=INSTALLED_PACKAGE_PROVIDER_ID,

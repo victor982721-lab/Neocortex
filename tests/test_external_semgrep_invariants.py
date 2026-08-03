@@ -444,8 +444,9 @@ def test_ruleset_and_version_contracts_are_local_pinned_and_without_fixes() -> N
     assert ruleset.parent.name == "semgrep_rules"
     ruleset_bytes = ruleset.read_bytes()
     assert adapter._ruleset_digest(ruleset_bytes) == adapter.SEMGREP_RULESET_SHA256
+    canonical_lf = ruleset_bytes.replace(b"\r\n", b"\n")
     assert (
-        adapter._ruleset_digest(ruleset_bytes.replace(b"\n", b"\r\n"))
+        adapter._ruleset_digest(canonical_lf.replace(b"\n", b"\r\n"))
         == adapter.SEMGREP_RULESET_SHA256
     )
     assert (
