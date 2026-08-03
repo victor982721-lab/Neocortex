@@ -11,6 +11,11 @@ from .code_architecture_analysis import (
     bounded_import_chains,
     module_id_from_path,
 )
+from .code_coverage_analysis import (
+    CodeCoverageAnalysis,
+    project_work_package_coverage,
+    project_work_package_coverage_scope,
+)
 from .code_review_actionability import classify_source_role
 from .code_review_models import (
     CodeReviewFinding,
@@ -23,7 +28,7 @@ from .code_review_models import (
 )
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v2"
+CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v3"
 _CODE_REVIEW_PACKAGE_ID_PLANNING = "python-maintenance-work-packages-v1"
 CODE_REVIEW_PLANNING_FINDING_LIMIT = 50
 CODE_REVIEW_WORK_PACKAGE_LIMIT = 1
@@ -47,6 +52,11 @@ _ACCEPTANCE_GATES = (
     "architecture_contracts_not_degraded",
     "no_new_import_cycles",
     "module_complexity_not_displaced",
+    "tests_passed",
+    "coverage_available",
+    "work_package_target_protected",
+    "line_coverage_not_degraded",
+    "branch_coverage_not_degraded",
 )
 _RISK_ORDER = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
 
@@ -331,6 +341,7 @@ def build_code_review_work_packages(
     *,
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
+    test_coverage: CodeCoverageAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
     """Build the single next coherent package; never batch independent roots."""
 
@@ -399,6 +410,22 @@ def build_code_review_work_packages(
         if architecture is not None and architecture.status == "ready"
         else ("architecture_gates_require_a_comparable_ready_publication_diff",)
     )
+    coverage_projection = (
+        None
+        if test_coverage is None
+        else project_work_package_coverage(test_coverage, primary.symbol)
+    )
+    coverage_status = "not_evaluated" if coverage_projection is None else coverage_projection.status
+    coverage_scope = (
+        None
+        if test_coverage is None
+        else project_work_package_coverage_scope(test_coverage, primary.symbol)
+    )
+    coverage_limitations = {
+        "protected": (),
+        "unprotected": ("work_package_target_has_no_observed_protecting_test",),
+        "not_evaluated": ("coverage_gates_require_ready_trusted_deep_evidence",),
+    }[coverage_status]
     return (
         CodeReviewWorkPackage(
             package_rank=1,
@@ -417,6 +444,8 @@ def build_code_review_work_packages(
             ),
             import_chains=import_chains,
             affected_architecture_contracts=affected_contracts,
+            test_coverage=coverage_projection,
+            test_coverage_scope=coverage_scope,
             contracts_to_preserve=_ordered_union(
                 tuple(finding.contracts_to_preserve for finding in package_findings)
             ),
@@ -429,6 +458,12 @@ def build_code_review_work_packages(
                 "bounded_planning_horizon:50",
                 "primary_recommendation_rank:1",
                 architecture_evidence,
+                f"test_coverage:{coverage_status}",
+                *(
+                    ()
+                    if coverage_projection is None
+                    else (f"test_coverage_subject:{coverage_projection.primary_symbol}",)
+                ),
                 *relationship_evidence,
             ),
             limitations=(
@@ -437,6 +472,7 @@ def build_code_review_work_packages(
                 "dynamic_dispatch_is_not_observed",
                 "related_members_require_characterization_before_change",
                 *architecture_limitations,
+                *coverage_limitations,
             ),
             confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
         ),
@@ -450,6 +486,7 @@ def plan_code_review_work_packages(
     *,
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
+    test_coverage: CodeCoverageAnalysis | None = None,
 ) -> tuple[
     tuple[CodeReviewWorkPackage, ...],
     RecommendationStatus,
@@ -463,6 +500,7 @@ def plan_code_review_work_packages(
         links,
         architecture=architecture,
         architecture_root=architecture_root,
+        test_coverage=test_coverage,
     )
     if packages:
         return packages, "ready", None

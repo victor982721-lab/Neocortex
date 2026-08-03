@@ -12,9 +12,20 @@ from _04_Nucleo_Operativo.code_architecture_analysis import (
     ArchitectureModule,
     CodeArchitectureAnalysis,
 )
+from _04_Nucleo_Operativo.code_coverage_analysis import (
+    CODE_COVERAGE_PROVIDER_ID,
+    CodeCoverageAnalysis,
+    CoverageGateEvaluation,
+    CoverageScopeSummary,
+    CoverageTestOutcomes,
+    CoverageToolVersion,
+    CoverageTotals,
+    TestToSymbolRelation as CoverageTestToSymbolRelation,
+)
 from _04_Nucleo_Operativo.code_review_models import (
     CodeReviewFinding,
     CodeReviewImpact,
+    CodeReviewResult,
     build_code_review_recommendations,
 )
 from _04_Nucleo_Operativo.code_review_work_packages import (
@@ -407,6 +418,240 @@ def test_work_package_adds_bounded_architecture_context_without_changing_identit
         "module_complexity_not_displaced",
     }.issubset(enriched.acceptance_gates)
     assert "architecture:ready" in enriched.evidence
+
+
+def test_work_package_projects_protecting_tests_and_missing_target_coverage() -> None:
+    findings = _planning_findings()
+    recommendations = build_code_review_recommendations(findings, limit=3)
+    subject_key = "symbol:document_taxonomy.classify_document:10:240"
+    totals = CoverageTotals(20, 17, 3, 8, 6, 2, 85.0, 75.0)
+    coverage = CodeCoverageAnalysis(
+        database="fixture",
+        analysis_run_id=1,
+        provider_id=CODE_COVERAGE_PROVIDER_ID,
+        tool_run_id=1,
+        effective_tool_run_id=1,
+        status="ready",
+        reason=None,
+        suite_selection="selected",
+        measurement_complete=True,
+        content_executed=True,
+        tool_versions=(CoverageToolVersion("coverage", "7.14.1"),),
+        suite_signature="suite",
+        configuration_signature="configuration",
+        measurement_scope_signature="scope",
+        outcomes=CoverageTestOutcomes(2, 2, 2, 0, 0),
+        totals=totals,
+        modules=(),
+        symbols=(
+            CoverageScopeSummary(
+                "symbol",
+                subject_key,
+                "document_taxonomy",
+                subject_key,
+                "classify_document",
+                10,
+                240,
+                "document_taxonomy.py",
+                totals,
+                ((30, 31), (80, 80)),
+                ((25, 30), (70, 80)),
+                False,
+                False,
+                ("tests/test_document_taxonomy.py::test_classify",),
+            ),
+        ),
+        test_relations=(
+            CoverageTestToSymbolRelation(
+                "relation:classify",
+                "test:test_classify",
+                subject_key,
+                ("tests/test_document_taxonomy.py::test_classify",),
+                (10, 11, 12),
+                ("tests/test_document_taxonomy.py::test_classify|run",),
+                "document_taxonomy.py",
+                "document_taxonomy",
+                subject_key,
+            ),
+        ),
+        failed_test_nodeids=(),
+        gates=(
+            CoverageGateEvaluation("tests_passed", "passed", None),
+            CoverageGateEvaluation("coverage_available", "passed", None),
+        ),
+        limitations=("selected_suite_is_not_claimed_as_full_project_coverage",),
+    )
+
+    legacy = build_code_review_work_packages(findings, recommendations, ())[0]
+    package = build_code_review_work_packages(
+        findings,
+        recommendations,
+        (),
+        test_coverage=coverage,
+    )[0]
+
+    assert package.package_id == legacy.package_id
+    assert package.test_coverage is not None
+    assert package.test_coverage.status == "protected"
+    assert package.test_coverage.primary_symbol == subject_key
+    assert package.test_coverage.protecting_tests == (
+        "tests/test_document_taxonomy.py::test_classify",
+    )
+    assert package.test_coverage.gate.status == "passed"
+    assert package.test_coverage_scope is not None
+    assert package.test_coverage_scope.missing_line_ranges == ((30, 31), (80, 80))
+    assert package.test_coverage_scope.missing_branch_arcs == ((25, 30), (70, 80))
+    assert "work_package_target_protected" in package.acceptance_gates
+    assert "coverage_gates_require_ready_trusted_deep_evidence" not in package.limitations
+
+
+def test_review_json_bounds_coverage_and_work_package_examples_to_twenty() -> None:
+    findings = _planning_findings()
+    recommendations = build_code_review_recommendations(findings, limit=3)
+    subject_key = "symbol:document_taxonomy.classify_document:10:240"
+    tests = tuple(f"tests/test_many.py::test_{index:02d}" for index in range(25))
+    ranges = tuple((index, index) for index in range(1, 26))
+    arcs = tuple((index, index + 1) for index in range(1, 26))
+    totals = CoverageTotals(100, 75, 25, 50, 25, 25, 75.0, 50.0)
+
+    def scope(index: int, *, primary: bool = False) -> CoverageScopeSummary:
+        key = subject_key if primary else f"symbol:module_{index}.target:1:5"
+        return CoverageScopeSummary(
+            "symbol",
+            key,
+            "document_taxonomy" if primary else f"module_{index}",
+            key,
+            "classify_document" if primary else "target",
+            10 if primary else 1,
+            240 if primary else 5,
+            "document_taxonomy.py" if primary else f"module_{index}.py",
+            totals,
+            ranges,
+            arcs,
+            False,
+            False,
+            tests,
+        )
+
+    modules = tuple(
+        CoverageScopeSummary(
+            "module",
+            f"module:{index}",
+            f"module_{index}",
+            None,
+            None,
+            None,
+            None,
+            f"module_{index}.py",
+            totals,
+            ranges,
+            arcs,
+            False,
+            False,
+            tests,
+        )
+        for index in range(25)
+    )
+    symbols = (scope(0, primary=True), *(scope(index) for index in range(1, 25)))
+    relations = tuple(
+        CoverageTestToSymbolRelation(
+            f"relation:{index:02d}",
+            f"test:{index:02d}",
+            subject_key,
+            (tests[index],),
+            tuple(range(1, 26)),
+            tuple(f"context:{item:02d}" for item in range(25)),
+            "document_taxonomy.py",
+            "document_taxonomy",
+            subject_key,
+        )
+        for index in range(25)
+    )
+    coverage = CodeCoverageAnalysis(
+        "fixture",
+        1,
+        CODE_COVERAGE_PROVIDER_ID,
+        1,
+        1,
+        "ready",
+        None,
+        "selected",
+        True,
+        True,
+        (CoverageToolVersion("coverage", "7.14.1"),),
+        "suite",
+        "configuration",
+        "scope",
+        CoverageTestOutcomes(25, 25, 25, 0, 0),
+        totals,
+        modules,
+        symbols,
+        relations,
+        tests,
+        (
+            CoverageGateEvaluation("tests_passed", "passed", None),
+            CoverageGateEvaluation("coverage_available", "passed", None),
+        ),
+        (),
+    )
+    package = build_code_review_work_packages(
+        findings,
+        recommendations,
+        (),
+        test_coverage=coverage,
+    )[0]
+    result = CodeReviewResult(
+        database="fixture",
+        status="ready",
+        reason=None,
+        ranking="fixture",
+        actionability_version="fixture",
+        recommendation_status="ready",
+        recommendation_reason=None,
+        planning_version="fixture",
+        work_package_status="ready",
+        work_package_reason=None,
+        snapshot=None,
+        coverage=None,
+        findings=(),
+        recommendations=(),
+        work_packages=(package,),
+        external_evidence=None,
+        external_evidence_suite=None,
+        architecture=None,
+        test_coverage=coverage,
+        limitations=(),
+        digest=None,
+    )
+
+    payload = result.as_payload()
+    coverage_payload = payload["test_coverage"]
+    packages_payload = payload["work_packages"]
+    assert isinstance(coverage_payload, dict)
+    assert isinstance(packages_payload, list)
+    assert len(coverage_payload["failed_test_examples"]) == 20
+    assert coverage_payload["failed_test_examples_truncated"] is True
+    assert len(coverage_payload["module_missing_examples"]) == 20
+    assert coverage_payload["module_missing_examples_truncated"] is True
+    assert len(coverage_payload["symbol_missing_examples"]) == 20
+    assert coverage_payload["symbol_missing_examples_truncated"] is True
+    assert len(coverage_payload["test_relation_examples"]) == 20
+    assert coverage_payload["test_relation_examples_truncated"] is True
+    package_payload = packages_payload[0]
+    package_coverage = package_payload["test_coverage"]
+    package_scope = package_payload["test_coverage_scope"]
+    assert len(package_coverage["protecting_tests"]) == 20
+    assert package_coverage["protecting_tests_total"] == 25
+    assert package_coverage["protecting_tests_truncated"] is True
+    assert len(package_coverage["relation_ids"]) == 20
+    assert package_coverage["relation_ids_total"] == 25
+    assert package_coverage["relation_ids_truncated"] is True
+    assert len(package_scope["missing_line_ranges"]) == 20
+    assert package_scope["missing_line_ranges_total"] == 25
+    assert package_scope["missing_line_ranges_truncated"] is True
+    assert len(package_scope["missing_branch_arcs"]) == 20
+    assert package_scope["missing_branch_arcs_total"] == 25
+    assert package_scope["missing_branch_arcs_truncated"] is True
 
 
 def _passes_history_policy(

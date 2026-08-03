@@ -13,10 +13,12 @@ from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from .code_architecture_analysis import CodeArchitectureAnalysis
+    from .code_coverage_analysis import CodeCoverageAnalysis
     from .code_publication_diff import CodeArchitectureDelta, CodeModuleArchitectureDelta
 
 
 _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT = 20
+_CODE_CLI_COVERAGE_EXAMPLE_LIMIT = 20
 _CODE_ARCHITECTURE_PROVIDER_IDS = (
     "complexipy-cognitive",
     "grimp-architecture",
@@ -79,6 +81,7 @@ class _CodeStatusSnapshot:
     external_evidence: dict[str, object]
     external_evidence_suite: dict[str, object]
     architecture: dict[str, object]
+    test_coverage: dict[str, object]
 
 
 def _architecture_abstained_payload(
@@ -166,6 +169,83 @@ def _architecture_status_payload(
     }
 
 
+def _coverage_status_payload(
+    analysis: CodeCoverageAnalysis,
+) -> dict[str, object]:
+    """Project bounded status facts without dumping every measured symbol/test edge."""
+
+    return {
+        "kind": "code-coverage-analysis",
+        "schema": "neocortex.code-coverage-analysis/v1",
+        "database": analysis.database,
+        "analysis_run_id": analysis.analysis_run_id,
+        "provider_id": analysis.provider_id,
+        "tool_run_id": analysis.tool_run_id,
+        "effective_tool_run_id": analysis.effective_tool_run_id,
+        "status": analysis.status,
+        "reason": analysis.reason,
+        "suite_selection": analysis.suite_selection,
+        "measurement_complete": analysis.measurement_complete,
+        "content_executed": analysis.content_executed,
+        "tool_versions": [asdict(item) for item in analysis.tool_versions],
+        "suite_signature": analysis.suite_signature,
+        "configuration_signature": analysis.configuration_signature,
+        "measurement_scope_signature": analysis.measurement_scope_signature,
+        "outcomes": None if analysis.outcomes is None else asdict(analysis.outcomes),
+        "totals": None if analysis.totals is None else asdict(analysis.totals),
+        "counts": {
+            "modules": len(analysis.modules),
+            "symbols": len(analysis.symbols),
+            "test_relations": len(analysis.test_relations),
+            "failed_tests": len(analysis.failed_test_nodeids),
+        },
+        "failed_test_examples": list(
+            analysis.failed_test_nodeids[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]
+        ),
+        "failed_test_examples_truncated": (
+            len(analysis.failed_test_nodeids) > _CODE_CLI_COVERAGE_EXAMPLE_LIMIT
+        ),
+        "gates": [asdict(item) for item in analysis.gates],
+        "limitations": list(analysis.limitations),
+    }
+
+
+def _coverage_abstained_payload(
+    database: str,
+    reason: str,
+    *,
+    analysis_run_id: int | None = None,
+) -> dict[str, object]:
+    return {
+        "kind": "code-coverage-analysis",
+        "schema": "neocortex.code-coverage-analysis/v1",
+        "database": database,
+        "analysis_run_id": analysis_run_id,
+        "provider_id": "pytest-coverage-trusted-deep",
+        "tool_run_id": None,
+        "effective_tool_run_id": None,
+        "status": "abstained",
+        "reason": reason,
+        "suite_selection": None,
+        "measurement_complete": None,
+        "content_executed": None,
+        "tool_versions": [],
+        "suite_signature": None,
+        "configuration_signature": None,
+        "measurement_scope_signature": None,
+        "outcomes": None,
+        "totals": None,
+        "counts": {"modules": 0, "symbols": 0, "test_relations": 0, "failed_tests": 0},
+        "failed_test_examples": [],
+        "failed_test_examples_truncated": False,
+        "gates": [
+            {"gate": gate, "status": "not_evaluated", "reason": reason}
+            for gate in ("tests_passed", "coverage_available")
+        ],
+        "limitations": ["trusted_deep_evidence_not_ready"],
+    }
+
+
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
     active_embedding_links = int(
         connection.execute("SELECT COUNT(*) FROM embedding_links WHERE active=1").fetchone()[0]
@@ -244,6 +324,7 @@ def _latest_code_run(connection: sqlite3.Connection) -> sqlite3.Row | None:
 
 def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
     from .code_architecture_analysis import read_code_architecture_analysis
+    from .code_coverage_analysis import read_code_coverage_analysis
     from .code_external_evidence import read_external_evidence
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
     from .external_evidence_store import read_external_evidence_suite
@@ -293,6 +374,25 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                     database=str(path),
                 )
             )
+        if latest is None:
+            test_coverage = _coverage_abstained_payload(
+                str(path),
+                "code_run_missing",
+            )
+        elif latest["status"] != "completed":
+            test_coverage = _coverage_abstained_payload(
+                str(path),
+                f"code_run_not_completed:{latest['status']}",
+                analysis_run_id=int(latest["analysis_run_id"]),
+            )
+        else:
+            test_coverage = _coverage_status_payload(
+                read_code_coverage_analysis(
+                    connection,
+                    int(latest["analysis_run_id"]),
+                    database=str(path),
+                )
+            )
     return _CodeStatusSnapshot(
         version,
         counts,
@@ -300,6 +400,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
         external_evidence,
         suite,
         architecture,
+        test_coverage,
     )
 
 
@@ -361,12 +462,17 @@ def _emit_missing_code_status(
             "gates": [],
         },
         "architecture": architecture,
+        "test_coverage": _coverage_abstained_payload(str(path), "code_state_missing"),
     }
     if json_output:
         _emit(payload, json_output=True)
         return
     _emit(f"CODE_STATUS database={path} exists=false", json_output=False)
     _emit_code_status_architecture(architecture)
+    _emit_code_coverage(
+        "CODE_COVERAGE",
+        _coverage_abstained_payload(str(path), "code_state_missing"),
+    )
 
 
 def _emit_code_status_architecture(architecture: dict[str, object]) -> None:
@@ -418,6 +524,46 @@ def _emit_code_status_architecture(architecture: dict[str, object]) -> None:
             )
 
 
+def _emit_code_coverage(prefix: str, coverage: dict[str, object]) -> None:
+    """Render bounded trusted-deep evidence without assuming it is available."""
+
+    outcomes_value = coverage.get("outcomes")
+    totals_value = coverage.get("totals")
+    outcomes = outcomes_value if isinstance(outcomes_value, dict) else {}
+    totals = totals_value if isinstance(totals_value, dict) else {}
+    _print_console_line(
+        f"{prefix} status={coverage.get('status')} "
+        f"suite={coverage.get('suite_selection')} "
+        f"measurement_complete={int(bool(coverage.get('measurement_complete')))} "
+        f"content_executed={int(bool(coverage.get('content_executed')))} "
+        f"tests={outcomes.get('passed', 0)}/{outcomes.get('selected', 0)} "
+        f"collected={outcomes.get('collected', 0)} "
+        f"failed={outcomes.get('failed', 0)} skipped={outcomes.get('skipped', 0)} "
+        f"lines={totals.get('covered_lines', 0)}/{totals.get('executable_lines', 0)} "
+        f"branches={totals.get('covered_branch_exits', 0)}/"
+        f"{totals.get('branch_exits', 0)} "
+        f"reason={json.dumps(coverage.get('reason'), ensure_ascii=True)}"
+    )
+    gates_value = coverage.get("gates")
+    if not isinstance(gates_value, (list, tuple)):
+        return
+    for gate in gates_value[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]:
+        if not isinstance(gate, dict):
+            continue
+        _print_console_line(
+            f"{prefix}_GATE id={gate.get('gate')} status={gate.get('status')} "
+            f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
+        )
+    failed_tests = coverage.get("failed_test_nodeids")
+    if failed_tests is None:
+        failed_tests = coverage.get("failed_test_examples")
+    if isinstance(failed_tests, (list, tuple)):
+        for nodeid in failed_tests[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]:
+            _print_console_line(
+                f"{prefix}_FAILED_TEST nodeid={json.dumps(nodeid, ensure_ascii=True)}"
+            )
+
+
 def _emit_code_status(
     path: Path,
     analyzers: object,
@@ -440,6 +586,7 @@ def _emit_code_status(
         "analysis_profile": snapshot.external_evidence_suite.get("profile"),
         "external_evidence_suite": snapshot.external_evidence_suite,
         "architecture": snapshot.architecture,
+        "test_coverage": snapshot.test_coverage,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -460,7 +607,11 @@ def _emit_code_status(
             _print_console_line(
                 f"CODE_PROVIDER id={provider.get('provider_id')} "
                 f"status={provider.get('status')} execution={provider.get('execution')} "
-                f"findings={provider.get('findings', 0)} gate={provider.get('gate')}"
+                f"findings={provider.get('findings', 0)} "
+                f"metrics={provider.get('metrics', 0)} "
+                f"relations={provider.get('relations', 0)} "
+                f"content_executed={int(bool(provider.get('content_executed')))} "
+                f"gate={provider.get('gate')}"
             )
     if latest is not None:
         _print_console_line(
@@ -476,6 +627,7 @@ def _emit_code_status(
         f"{external.get('diagnostics', 0)} gate={external.get('gate')}"
     )
     _emit_code_status_architecture(snapshot.architecture)
+    _emit_code_coverage("CODE_COVERAGE", snapshot.test_coverage)
 
 
 def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
@@ -624,6 +776,7 @@ def run_code_review(args: argparse.Namespace) -> int:
     """Rank confirmed Python hotspots in the published self-analysis snapshot."""
 
     from .code_review import review_code_state
+    from .code_review_models import bounded_code_coverage_payload
 
     try:
         result = review_code_state(
@@ -677,6 +830,8 @@ def run_code_review(args: argparse.Namespace) -> int:
             _print_console_line(
                 f"CODE_REVIEW_PROVIDER id={provider.provider_id} "
                 f"status={provider.status} findings={provider.findings} "
+                f"metrics={provider.metrics} relations={provider.relations} "
+                f"content_executed={int(provider.content_executed)} "
                 f"gate={provider.gate}"
             )
     if result.architecture is None:
@@ -685,6 +840,25 @@ def run_code_review(args: argparse.Namespace) -> int:
         )
     else:
         _emit_code_review_architecture(result.architecture)
+    if result.test_coverage is None:
+        _emit_code_coverage(
+            "CODE_REVIEW_TEST_COVERAGE",
+            {
+                "status": "abstained",
+                "reason": "coverage_result_missing",
+                "suite_selection": None,
+                "measurement_complete": False,
+                "content_executed": False,
+                "outcomes": None,
+                "totals": None,
+                "gates": [],
+            },
+        )
+    else:
+        _emit_code_coverage(
+            "CODE_REVIEW_TEST_COVERAGE",
+            bounded_code_coverage_payload(result.test_coverage),
+        )
     if result.recommendation_status == "abstained":
         _print_console_line(
             f"CODE_REVIEW_RECOMMENDATION status=abstained reason={result.recommendation_reason}"
@@ -723,6 +897,57 @@ def run_code_review(args: argparse.Namespace) -> int:
             f"{int(len(package.affected_architecture_contracts) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
             f"architecture_acceptance_gates={json.dumps(architecture_gates, ensure_ascii=True)}"
         )
+        coverage_projection = package.test_coverage
+        if coverage_projection is None:
+            _print_console_line(
+                "CODE_REVIEW_WORK_PACKAGE_COVERAGE status=not_evaluated "
+                f"package_rank={package.package_rank} package_id={package.package_id} "
+                'reason="coverage_projection_missing"'
+            )
+        else:
+            coverage_payload = asdict(coverage_projection)
+            protecting_tests = coverage_payload.get("protecting_tests")
+            bounded_tests = (
+                protecting_tests[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]
+                if isinstance(protecting_tests, (list, tuple))
+                else []
+            )
+            coverage_scope = (
+                {} if package.test_coverage_scope is None else asdict(package.test_coverage_scope)
+            )
+            missing_lines = coverage_scope.get("missing_line_ranges")
+            bounded_lines = (
+                missing_lines[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]
+                if isinstance(missing_lines, (list, tuple))
+                else []
+            )
+            missing_branches = coverage_scope.get("missing_branch_arcs")
+            bounded_branches = (
+                missing_branches[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]
+                if isinstance(missing_branches, (list, tuple))
+                else []
+            )
+            coverage_gate = coverage_payload.get("gate")
+            bounded_gate = coverage_gate if isinstance(coverage_gate, dict) else {}
+            relation_ids = coverage_payload.get("relation_ids")
+            bounded_relations = (
+                relation_ids[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]
+                if isinstance(relation_ids, (list, tuple))
+                else []
+            )
+            _print_console_line(
+                "CODE_REVIEW_WORK_PACKAGE_COVERAGE "
+                f"status={coverage_payload.get('status')} "
+                f"package_rank={package.package_rank} package_id={package.package_id} "
+                f"subject={json.dumps(coverage_payload.get('primary_symbol'), ensure_ascii=True)} "
+                f"tests={json.dumps(bounded_tests, ensure_ascii=True)} "
+                f"relations={json.dumps(bounded_relations, ensure_ascii=True)} "
+                f"missing_lines={json.dumps(bounded_lines, ensure_ascii=True)} "
+                f"missing_branches={json.dumps(bounded_branches, ensure_ascii=True)} "
+                f"details_truncated={int(bool(coverage_scope.get('missing_line_ranges_truncated')) or bool(coverage_scope.get('missing_branch_arcs_truncated')))} "
+                f"gate={bounded_gate.get('status')} "
+                f"reason={json.dumps(bounded_gate.get('reason'), ensure_ascii=True)}"
+            )
     for recommendation in result.recommendations:
         _print_console_line(
             "CODE_REVIEW_RECOMMENDATION status=ready "
@@ -783,6 +1008,7 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         or result.probable_dead_delta is None
         or result.external_evidence is None
         or result.architecture is None
+        or result.test_coverage is None
         or result.digest is None
     ):
         return _error(
@@ -827,6 +1053,28 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
             f"added={provider.added} resolved={provider.resolved} gate={provider.gate}"
         )
     _emit_code_publication_architecture(result.architecture)
+    coverage_delta = asdict(result.test_coverage)
+    _print_console_line(
+        "CODE_PUBLICATION_DIFF_COVERAGE "
+        f"status={coverage_delta.get('status')} "
+        f"line_delta={coverage_delta.get('line_coverage_percent_delta')} "
+        f"branch_delta={coverage_delta.get('branch_coverage_percent_delta')} "
+        f"covered_lines_delta={coverage_delta.get('covered_lines_delta')} "
+        f"missing_lines_delta={coverage_delta.get('missing_lines_delta')} "
+        f"covered_branches_delta={coverage_delta.get('covered_branch_exits_delta')} "
+        f"missing_branches_delta={coverage_delta.get('missing_branch_exits_delta')} "
+        f"reason={json.dumps(coverage_delta.get('reason'), ensure_ascii=True)}"
+    )
+    coverage_gates = coverage_delta.get("gates")
+    if isinstance(coverage_gates, (list, tuple)):
+        for gate in coverage_gates[:_CODE_CLI_COVERAGE_EXAMPLE_LIMIT]:
+            if not isinstance(gate, dict):
+                continue
+            _print_console_line(
+                f"CODE_PUBLICATION_DIFF_COVERAGE_GATE id={gate.get('gate')} "
+                f"status={gate.get('status')} "
+                f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
+            )
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Literal
 
 from .code_architecture_analysis import CodeArchitectureAnalysis
+from .code_coverage_analysis import (
+    CodeCoverageAnalysis,
+    CoverageScopeSummary,
+    TestToSymbolRelation,
+    WorkPackageCoverageProjection,
+)
 from .code_external_evidence import ExternalEvidenceStatus
 from .code_review_actionability import (
     Actionability,
@@ -15,13 +21,15 @@ from .code_review_actionability import (
 )
 from .external_evidence_models import ExternalEvidenceSuiteStatus
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v6"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v7"
 CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v2",
     "neocortex.code-review/v3",
     "neocortex.code-review/v4",
     "neocortex.code-review/v5",
+    "neocortex.code-review/v6",
 )
+CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT = 20
 
 ReviewStatus = Literal["ready", "abstained"]
 ReviewFreshness = Literal["current", "publication_only"]
@@ -195,6 +203,8 @@ class CodeReviewWorkPackage:
     consumer_module_examples: tuple[str, ...]
     import_chains: tuple[tuple[str, ...], ...]
     affected_architecture_contracts: tuple[str, ...]
+    test_coverage: WorkPackageCoverageProjection | None
+    test_coverage_scope: CoverageScopeSummary | None
     contracts_to_preserve: tuple[str, ...]
     steps: tuple[CodeReviewWorkPackageStep, ...]
     recommended_validation: tuple[str, ...]
@@ -263,21 +273,171 @@ class CodeReviewResult:
     external_evidence: ExternalEvidenceStatus | None
     external_evidence_suite: ExternalEvidenceSuiteStatus | None
     architecture: CodeArchitectureAnalysis | None
+    test_coverage: CodeCoverageAnalysis | None
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
 
     def as_payload(self) -> dict[str, object]:
-        payload = asdict(self)
+        payload = asdict(
+            replace(
+                self,
+                work_packages=(),
+                test_coverage=None,
+            )
+        )
+        payload["work_packages"] = [
+            _bounded_work_package_payload(item) for item in self.work_packages
+        ]
         if self.external_evidence is not None:
             payload["external_evidence"] = self.external_evidence.as_payload()
         if self.external_evidence_suite is not None:
             payload["external_evidence_suite"] = self.external_evidence_suite.as_payload()
+        if self.test_coverage is not None:
+            payload["test_coverage"] = bounded_code_coverage_payload(self.test_coverage)
         return {
             "kind": "code-review",
             "schema": CODE_REVIEW_SCHEMA,
             "compatible_schemas": list(CODE_REVIEW_COMPATIBLE_SCHEMAS),
             **payload,
         }
+
+
+def _bounded_scope_payload(scope: CoverageScopeSummary) -> dict[str, object]:
+    limit = CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT
+    return {
+        "subject_kind": scope.subject_kind,
+        "subject_key": scope.subject_key,
+        "module_key": scope.module_key,
+        "symbol_key": scope.symbol_key,
+        "qualified_name": scope.qualified_name,
+        "start_line": scope.start_line,
+        "end_line": scope.end_line,
+        "relative_path": scope.relative_path,
+        "totals": asdict(scope.totals),
+        "missing_line_ranges": [list(item) for item in scope.missing_line_ranges[:limit]],
+        "missing_line_ranges_total": len(scope.missing_line_ranges),
+        "missing_line_ranges_truncated": (
+            scope.missing_line_ranges_truncated or len(scope.missing_line_ranges) > limit
+        ),
+        "missing_branch_arcs": [list(item) for item in scope.missing_branch_arcs[:limit]],
+        "missing_branch_arcs_total": len(scope.missing_branch_arcs),
+        "missing_branch_arcs_truncated": (
+            scope.missing_branch_arcs_truncated or len(scope.missing_branch_arcs) > limit
+        ),
+        "protecting_tests": list(scope.protecting_tests[:limit]),
+        "protecting_tests_total": len(scope.protecting_tests),
+        "protecting_tests_truncated": len(scope.protecting_tests) > limit,
+    }
+
+
+def _bounded_relation_payload(relation: TestToSymbolRelation) -> dict[str, object]:
+    limit = CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT
+    return {
+        "relation_id": relation.relation_id,
+        "test_key": relation.test_key,
+        "production_symbol": relation.production_symbol,
+        "test_nodeids": list(relation.test_nodeids[:limit]),
+        "test_nodeids_total": len(relation.test_nodeids),
+        "test_nodeids_truncated": len(relation.test_nodeids) > limit,
+        "lines": list(relation.lines[:limit]),
+        "lines_total": len(relation.lines),
+        "lines_truncated": len(relation.lines) > limit,
+        "contexts": list(relation.contexts[:limit]),
+        "contexts_total": len(relation.contexts),
+        "contexts_truncated": len(relation.contexts) > limit,
+        "relative_path": relation.relative_path,
+        "module_key": relation.module_key,
+        "symbol_key": relation.symbol_key,
+    }
+
+
+def _missing_scope_examples(
+    scopes: tuple[CoverageScopeSummary, ...],
+) -> tuple[CoverageScopeSummary, ...]:
+    return tuple(
+        item
+        for item in scopes
+        if item.totals.missing_lines > 0 or item.totals.missing_branch_exits > 0
+    )
+
+
+def bounded_code_coverage_payload(
+    analysis: CodeCoverageAnalysis,
+) -> dict[str, object]:
+    limit = CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT
+    missing_modules = _missing_scope_examples(analysis.modules)
+    missing_symbols = _missing_scope_examples(analysis.symbols)
+    return {
+        "kind": "code-coverage-analysis",
+        "schema": "neocortex.code-coverage-analysis/v1",
+        "database": analysis.database,
+        "analysis_run_id": analysis.analysis_run_id,
+        "provider_id": analysis.provider_id,
+        "tool_run_id": analysis.tool_run_id,
+        "effective_tool_run_id": analysis.effective_tool_run_id,
+        "status": analysis.status,
+        "reason": analysis.reason,
+        "suite_selection": analysis.suite_selection,
+        "measurement_complete": analysis.measurement_complete,
+        "content_executed": analysis.content_executed,
+        "tool_versions": [asdict(item) for item in analysis.tool_versions],
+        "suite_signature": analysis.suite_signature,
+        "configuration_signature": analysis.configuration_signature,
+        "measurement_scope_signature": analysis.measurement_scope_signature,
+        "outcomes": None if analysis.outcomes is None else asdict(analysis.outcomes),
+        "totals": None if analysis.totals is None else asdict(analysis.totals),
+        "counts": {
+            "modules": len(analysis.modules),
+            "symbols": len(analysis.symbols),
+            "test_relations": len(analysis.test_relations),
+            "failed_tests": len(analysis.failed_test_nodeids),
+            "modules_with_missing": len(missing_modules),
+            "symbols_with_missing": len(missing_symbols),
+        },
+        "failed_test_examples": list(analysis.failed_test_nodeids[:limit]),
+        "failed_test_examples_truncated": len(analysis.failed_test_nodeids) > limit,
+        "module_missing_examples": [
+            _bounded_scope_payload(item) for item in missing_modules[:limit]
+        ],
+        "module_missing_examples_truncated": len(missing_modules) > limit,
+        "symbol_missing_examples": [
+            _bounded_scope_payload(item) for item in missing_symbols[:limit]
+        ],
+        "symbol_missing_examples_truncated": len(missing_symbols) > limit,
+        "test_relation_examples": [
+            _bounded_relation_payload(item) for item in analysis.test_relations[:limit]
+        ],
+        "test_relation_examples_truncated": len(analysis.test_relations) > limit,
+        "gates": [asdict(item) for item in analysis.gates],
+        "limitations": list(analysis.limitations),
+    }
+
+
+def _bounded_work_package_payload(package: CodeReviewWorkPackage) -> dict[str, object]:
+    payload = asdict(
+        replace(
+            package,
+            test_coverage=None,
+            test_coverage_scope=None,
+        )
+    )
+    projection = package.test_coverage
+    if projection is not None:
+        limit = CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT
+        payload["test_coverage"] = {
+            "primary_symbol": projection.primary_symbol,
+            "status": projection.status,
+            "protecting_tests": list(projection.protecting_tests[:limit]),
+            "protecting_tests_total": len(projection.protecting_tests),
+            "protecting_tests_truncated": len(projection.protecting_tests) > limit,
+            "relation_ids": list(projection.relation_ids[:limit]),
+            "relation_ids_total": len(projection.relation_ids),
+            "relation_ids_truncated": len(projection.relation_ids) > limit,
+            "gate": asdict(projection.gate),
+        }
+    if package.test_coverage_scope is not None:
+        payload["test_coverage_scope"] = _bounded_scope_payload(package.test_coverage_scope)
+    return payload
 
 
 def build_code_review_recommendations(
@@ -330,5 +490,6 @@ __all__ = [
     "WorkPackageMemberRole",
     "WorkPackagePhase",
     "WorkPackageRelationship",
+    "bounded_code_coverage_payload",
     "build_code_review_recommendations",
 ]

@@ -607,13 +607,14 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v6"
-    assert "neocortex.code-review/v5" in first.as_payload()["compatible_schemas"]
+    assert first.as_payload()["schema"] == "neocortex.code-review/v7"
+    assert "neocortex.code-review/v6" in first.as_payload()["compatible_schemas"]
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
         "neocortex.code-review/v4",
         "neocortex.code-review/v5",
+        "neocortex.code-review/v6",
     ]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
@@ -652,6 +653,15 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
         assert "dead" not in finding.category
     assert first.coverage is not None
     assert first.coverage.probable_dead_suppressed > 0
+    assert first.test_coverage is not None
+    assert first.test_coverage.status == "abstained"
+    coverage_payload = first.as_payload()["test_coverage"]
+    assert isinstance(coverage_payload, dict)
+    assert coverage_payload["schema"] == "neocortex.code-coverage-analysis/v1"
+    assert first.work_packages[0].test_coverage is not None
+    assert first.work_packages[0].test_coverage.status == "not_evaluated"
+    assert first.work_packages[0].test_coverage.gate.status == "not_evaluated"
+    assert "test_coverage_not_ready:" in " ".join(first.limitations)
     assert first.digest is not None
 
     monkeypatch.setattr(
