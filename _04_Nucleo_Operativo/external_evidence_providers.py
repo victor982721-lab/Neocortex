@@ -57,6 +57,7 @@ from .external_deep_coverage import (
 )
 from .external_dependency_hygiene import (
     DEPTRY_LIMITATIONS,
+    DEPTRY_PACKAGE_MODULE_NAME_MAP,
     DEPTRY_PROVIDER_ID,
     DEPTRY_PROVIDER_SCHEMA,
     DependencyHygieneExecution,
@@ -2006,6 +2007,9 @@ class DeptryProjectDependenciesProvider:
                 "input": "exact-current-inventory-python",
                 "codes": ["DEP001", "DEP002", "DEP003", "DEP004", "DEP005"],
                 "dev_optional_groups": ["dev"],
+                "package_module_name_map": {
+                    package: list(modules) for package, modules in DEPTRY_PACKAGE_MODULE_NAME_MAP
+                },
                 "notebooks": False,
                 "autofix": False,
                 "network": False,

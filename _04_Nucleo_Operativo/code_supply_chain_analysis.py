@@ -635,11 +635,27 @@ def _observations(
                 duplicates += 1
                 continue
             unique[observation.observation_id] = observation
+
+    def priority(item: SupplyChainObservation) -> int:
+        if item.evidence_kind == "finding":
+            return 0
+        if item.category == "known_vulnerability" and (
+            (item.evidence_kind == "relation" and item.code == "package_has_known_vulnerability")
+            or (
+                item.evidence_kind == "metric"
+                and item.code.startswith("known_vulnerability:")
+                and item.value is not None
+                and item.value > 0
+            )
+        ):
+            return 1
+        return 2 if item.evidence_kind == "metric" else 3
+
     ordered = tuple(
         sorted(
             unique.values(),
             key=lambda item: (
-                {"finding": 0, "metric": 1, "relation": 2}[item.evidence_kind],
+                priority(item),
                 {"error": 0, "warning": 1, "info": 2}.get(item.severity, 3),
                 item.provider_id,
                 item.category,

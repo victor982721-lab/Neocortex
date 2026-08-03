@@ -40,6 +40,21 @@ DEPTRY_PROVIDER_SCHEMA = "neocortex.deptry-project-dependencies/v1"
 DEPENDENCY_HYGIENE_CATEGORY = "dependency_hygiene"
 DEPENDENCY_DECLARATION_GATE = "dependency_declaration_integrity"
 
+# Deptry normally learns package-to-import mappings from installed distribution
+# metadata.  NeoCortex intentionally audits its base candidate without installing
+# every optional multimodal extra, so the import names whose distributions differ
+# must remain explicit and versioned instead of becoming false DEP001 findings.
+DEPTRY_PACKAGE_MODULE_NAME_MAP: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Pillow", ("PIL",)),
+    ("PyMuPDF", ("fitz",)),
+    ("pdfminer.six", ("pdfminer",)),
+    ("faster-whisper", ("faster_whisper",)),
+    ("nudenet", ("nudenet",)),
+    ("numpy", ("numpy",)),
+    ("PySide6", ("PySide6",)),
+    ("pytesseract", ("pytesseract",)),
+)
+
 DEPTRY_LIMITATIONS = (
     "deptry_0_25_static_import_analysis_cannot_observe_all_dynamic_imports",
     "transitive_classification_depends_on_installed_distribution_metadata",
@@ -75,6 +90,12 @@ _PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?
 
 _Classification = Literal["gate", "advisory"]
 _LocationKind = Literal["python", "project"]
+
+
+def _package_module_name_map_argument() -> str:
+    return ",".join(
+        f"{package}={'|'.join(modules)}" for package, modules in DEPTRY_PACKAGE_MODULE_NAME_MAP
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,6 +753,8 @@ def execute_deptry_dependency_hygiene(
             "--no-ansi",
             "--optional-dependencies-dev-groups",
             "dev",
+            "--package-module-name-map",
+            _package_module_name_map_argument(),
             "--ignore-notebooks",
             "--exclude",
             _NEVER_EXCLUDE_PATTERN,
@@ -812,6 +835,7 @@ __all__ = [
     "DEPENDENCY_DECLARATION_GATE",
     "DEPENDENCY_HYGIENE_CATEGORY",
     "DEPTRY_LIMITATIONS",
+    "DEPTRY_PACKAGE_MODULE_NAME_MAP",
     "DEPTRY_PROVIDER_ID",
     "DEPTRY_PROVIDER_SCHEMA",
     "DependencyHygieneExecution",

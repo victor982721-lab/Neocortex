@@ -172,6 +172,11 @@ def test_realistic_json_preserves_file_and_project_issues(
     assert command[:5] == (hygiene.sys.executable, "-I", "-m", "deptry", "source")
     assert command[command.index("--config") + 1].endswith("pyproject.toml")
     assert command[command.index("--optional-dependencies-dev-groups") + 1] == "dev"
+    assert command[command.index("--package-module-name-map") + 1] == (
+        "Pillow=PIL,PyMuPDF=fitz,pdfminer.six=pdfminer,"
+        "faster-whisper=faster_whisper,nudenet=nudenet,numpy=numpy,"
+        "PySide6=PySide6,pytesseract=pytesseract"
+    )
     assert command[command.index("--exclude") + 1] == r"\x00"
     assert "--json-output" in command
     assert "--no-ansi" in command

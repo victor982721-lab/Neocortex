@@ -255,7 +255,41 @@ def _provider_records(
                     metadata=freshness_metadata,
                 )
             )
-        return records, tuple(metric_items), ()
+        relations: tuple[ExternalProviderRelation, ...] = ()
+        if findings:
+            metric_items.append(
+                _metric(
+                    provider_id,
+                    "known_vulnerability:PYSEC-FIXTURE",
+                    1,
+                    category="known_vulnerability",
+                    subject_key="package:fixture-dependency",
+                    metadata={"vulnerability_id": "PYSEC-FIXTURE", **freshness_metadata},
+                )
+            )
+            relation_kind = "package_has_known_vulnerability"
+            relations = (
+                ExternalProviderRelation(
+                    external_relation_identity(
+                        provider_id,
+                        relation_kind=relation_kind,
+                        source_kind="project",
+                        source_key="package:fixture-dependency",
+                        target_kind="contract",
+                        target_key="advisory:PYSEC-FIXTURE",
+                    ),
+                    relation_kind,
+                    "project",
+                    "package:fixture-dependency",
+                    "contract",
+                    "advisory:PYSEC-FIXTURE",
+                    metadata={
+                        "category": "known_vulnerability",
+                        "vulnerability_id": "PYSEC-FIXTURE",
+                    },
+                ),
+            )
+        return records, tuple(metric_items), relations
     records = ()
     metrics = (
         _metric(
@@ -666,6 +700,28 @@ def test_observation_bound_keeps_complete_counts(tmp_path: Path) -> None:
     assert analysis.counts.observations_truncated is True
     assert len(analysis.observations) == CODE_SUPPLY_CHAIN_OBSERVATION_LIMIT
     assert "supply_chain_observations_truncated" in analysis.limitations
+
+
+def test_observation_bound_retains_actionable_vulnerability_identity(tmp_path: Path) -> None:
+    analysis = _read(
+        _database(
+            tmp_path,
+            findings=True,
+            semgrep_count=CODE_SUPPLY_CHAIN_OBSERVATION_LIMIT - 10,
+        ),
+        1,
+    )
+
+    vulnerability_evidence = tuple(
+        item
+        for item in analysis.observations
+        if item.provider_id == "pip-audit-known-vulnerabilities"
+        and item.code in {"known_vulnerability:PYSEC-FIXTURE", "package_has_known_vulnerability"}
+    )
+    assert {item.evidence_kind for item in vulnerability_evidence} == {"metric", "relation"}
+    assert {
+        item.target_key for item in vulnerability_evidence if item.evidence_kind == "relation"
+    } == {"advisory:PYSEC-FIXTURE"}
 
 
 def test_latest_state_reader_is_read_only_and_missing_state_is_not_initialized(
