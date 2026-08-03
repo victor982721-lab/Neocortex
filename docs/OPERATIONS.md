@@ -571,9 +571,12 @@ Pyright aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
 estado y los mismos bytes. En `--code-status --code-json`, los proveedores
-reutilizables deben declarar `execution=cache_replay`, `process_invocations=0`,
-`cache_hits=1` y contadores de verificación coherentes; el inventario del entorno
-instalado se recalcula deliberadamente. Findings, métricas y relaciones se
+reutilizables deben declarar `execution=cache_replay`, `cache_hits=1` y
+contadores de verificación coherentes. El replay no reejecuta el workload del
+analizador, tests o mutantes; probes de validación específicos pueden ser
+distintos de cero y deben quedar explicados y costeados. En Run 10, Git conservó
+dos probes, Coverage uno y Cosmic Ray cero; el inventario del entorno instalado
+se recalcula deliberadamente. Findings, métricas y relaciones se
 referencian desde la publicación original, sin duplicarse. El tiempo y bytes de
 la verificación siguen siendo costos reales del replay; cero procesos no
 significa costo cero. El replay verifica inputs; no significa
