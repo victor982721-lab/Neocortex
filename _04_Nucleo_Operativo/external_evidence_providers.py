@@ -42,6 +42,8 @@ from .code_external_evidence import (
     validate_external_inputs,
 )
 from .code_contracts import (
+    DEEP_CONFIGURATION_SCHEMA,
+    LEGACY_DEEP_CONFIGURATION_SCHEMA,
     deep_configuration_payload as build_deep_configuration_payload,
     deep_configuration_signature as calculate_deep_configuration_signature,
 )
@@ -89,6 +91,16 @@ from .external_git_history import (
     execute_git_history,
     git_history_input_signature,
     inspect_git_repository,
+)
+from .external_mutation_cosmic_ray import (
+    COSMIC_RAY_MUTATION_PROVIDER_ID,
+    COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+    FocalMutationConfig,
+    FocalMutationExecution,
+    MutationAbstentionError,
+    cosmic_ray_tool_version,
+    execute_cosmic_ray_mutation,
+    mutation_input_signature,
 )
 from .external_architecture_providers import (
     ArchitectureProviderExecution,
@@ -147,6 +159,8 @@ _DEPTRY_MEMORY_BYTES = 1024 * 1024 * 1024
 _PIP_AUDIT_MEMORY_BYTES = 512 * 1024 * 1024
 _PACKAGE_INVENTORY_MEMORY_BYTES = 512 * 1024 * 1024
 _GIT_HISTORY_MEMORY_BYTES = 512 * 1024 * 1024
+_FOCAL_MUTATION_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+_FOCAL_MUTATION_OUTPUT_BYTES = 8 * 1024 * 1024 + 256 * 1024
 _DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
 _DEEP_COVERAGE_FINDING_BOUND = 2_000
@@ -241,13 +255,59 @@ def _validated_deep_configuration(
     ):
         raise ValueError("trusted-deep configuration types are invalid")
     selectors = tuple(item for item in selectors_value if isinstance(item, str))
-    normalized = build_deep_configuration_payload(
+    schema = payload.get("schema")
+    mutation_arguments: dict[str, object] = {}
+    if schema == DEEP_CONFIGURATION_SCHEMA:
+        mutation_target = payload.get("mutation_target")
+        mutation_symbol = payload.get("mutation_symbol")
+        mutation_max_mutants = payload.get("mutation_max_mutants")
+        mutation_timeout_seconds = payload.get("mutation_timeout_seconds")
+        mutation_time_budget_seconds = payload.get("mutation_time_budget_seconds")
+        if (
+            (mutation_target is not None and not isinstance(mutation_target, str))
+            or (mutation_symbol is not None and not isinstance(mutation_symbol, str))
+            or isinstance(mutation_max_mutants, bool)
+            or not isinstance(mutation_max_mutants, int)
+            or isinstance(mutation_timeout_seconds, bool)
+            or not isinstance(mutation_timeout_seconds, int)
+            or isinstance(mutation_time_budget_seconds, bool)
+            or not isinstance(mutation_time_budget_seconds, int)
+        ):
+            raise ValueError("trusted-deep mutation configuration types are invalid")
+        mutation_arguments = {
+            "mutation_target": mutation_target,
+            "mutation_symbol": mutation_symbol,
+            "mutation_max_mutants": mutation_max_mutants,
+            "mutation_timeout_seconds": mutation_timeout_seconds,
+            "mutation_time_budget_seconds": mutation_time_budget_seconds,
+        }
+    elif schema != LEGACY_DEEP_CONFIGURATION_SCHEMA:
+        raise ValueError("trusted-deep configuration schema is unsupported")
+    current = build_deep_configuration_payload(
         analysis_profile=str(payload.get("analysis_profile")),
         test_selectors=selectors,
         max_tests=max_tests,
         time_budget_seconds=time_budget_seconds,
         shard_size=shard_size,
+        **mutation_arguments,
     )
+    normalized = current
+    if schema == LEGACY_DEEP_CONFIGURATION_SCHEMA:
+        normalized = {
+            name: value
+            for name, value in current.items()
+            if name
+            in {
+                "analysis_profile",
+                "content_executed",
+                "suite_selection",
+                "test_selectors",
+                "max_tests",
+                "time_budget_seconds",
+                "shard_size",
+            }
+        }
+        normalized["schema"] = LEGACY_DEEP_CONFIGURATION_SCHEMA
     if normalized != dict(payload) or normalized["analysis_profile"] != "trusted-deep":
         raise ValueError("trusted-deep configuration is not canonical")
     observed_signature = calculate_deep_configuration_signature(normalized)
@@ -664,6 +724,88 @@ def _failure(
         False,
         None,
         _portable_publication_id(descriptor, input_signature=input_signature, result_digest=None),
+        limitations=(reason,),
+    )
+
+
+def _abstention(
+    descriptor: ProviderDescriptor,
+    root: Path,
+    files: Sequence[ExternalEvidenceFile],
+    *,
+    tool_version: str,
+    reason: str,
+    started_ns: int,
+    input_signature_override: str | None = None,
+    process_invocations: int = 0,
+    stdout_bytes: int = 0,
+    stderr_bytes: int = 0,
+) -> ExternalProviderPublication:
+    """Publish one terminal advisory abstention without pretending coverage."""
+
+    validate_external_inputs(files)
+    input_signature = (
+        external_input_signature(files)
+        if input_signature_override is None
+        else input_signature_override
+    )
+    result_digest = external_provider_result_digest((), (), ())
+    completed_ns = time.time_ns()
+    inner = ExternalEvidencePublication(
+        descriptor.tool_name,
+        tool_version,
+        descriptor.configuration_signature,
+        "skipped",
+        started_ns,
+        completed_ns,
+        _provenance(
+            descriptor,
+            root,
+            input_signature,
+            execution="skipped",
+            result_digest=result_digest,
+            findings=0,
+            reason=reason,
+        ),
+    )
+    counters = {
+        "eligible_files": len(files),
+        "covered_files": 0,
+        "files_verified": 0,
+        "bytes_verified": 0,
+        "bytes_read": 0,
+        "bytes_staged": 0,
+        "process_invocations": process_invocations,
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "wall_milliseconds": max(0, (completed_ns - started_ns) // 1_000_000),
+        "findings": 0,
+        "metrics": 0,
+        "relations": 0,
+        "comparable": 0,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "errors": 0,
+        "timeouts": 0,
+        "skipped": 1,
+        "unavailable": 0,
+    }
+    return ExternalProviderPublication(
+        descriptor,
+        inner,
+        str(root),
+        external_root_identity(root),
+        input_signature,
+        _input_records(files, covered=False, reason=reason),
+        (),
+        counters,
+        False,
+        result_digest,
+        _portable_publication_id(
+            descriptor,
+            input_signature=input_signature,
+            result_digest=result_digest,
+        ),
         limitations=(reason,),
     )
 
@@ -1541,6 +1683,7 @@ def provider_tool_versions() -> dict[str, str | None]:
         INSTALLED_PACKAGE_PROVIDER_ID: _package_version("neocortex-framework"),
         GIT_HISTORY_PROVIDER_ID: git_version,
         PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
+        COSMIC_RAY_MUTATION_PROVIDER_ID: cosmic_ray_tool_version(),
     }
 
 
@@ -3076,6 +3219,360 @@ class ComplexipyCognitiveProvider(_TrustedArchitectureProvider):
     executor = staticmethod(execute_complexipy_cognitive)
 
 
+_FOCAL_MUTATION_REPLAY_LIMITATIONS = (
+    "focal_declared_target_and_tests_only",
+    "exact_replay_reuses_published_mutation_result",
+    "advisory_only_no_mutation_authority",
+    "mutation_score_is_not_defect_probability",
+)
+
+
+class CosmicRayFocalMutationProvider:
+    """Execute one explicitly declared focal mutation scope in owned scratch."""
+
+    def __init__(
+        self,
+        root: Path,
+        deep_configuration: Mapping[str, object] | None,
+        deep_configuration_signature: str | None,
+        *,
+        executor: Callable[..., FocalMutationExecution] = execute_cosmic_ray_mutation,
+    ) -> None:
+        payload, _coverage_config = _validated_deep_configuration(
+            deep_configuration,
+            deep_configuration_signature,
+        )
+        assert deep_configuration_signature is not None
+        self.root = root
+        self._root_identity = external_root_identity(root)
+        self.deep_configuration = payload
+        self.deep_configuration_signature = deep_configuration_signature
+        self.executor = executor
+        self._version = cosmic_ray_tool_version()
+        version = self._version or "unavailable"
+        target = payload.get("mutation_target")
+        self._abstention_reason: str | None = None
+        self.config: FocalMutationConfig | None = None
+        if payload.get("schema") == LEGACY_DEEP_CONFIGURATION_SCHEMA:
+            self._abstention_reason = "mutation_not_declared_in_legacy_deep_configuration"
+        elif target is None:
+            self._abstention_reason = "mutation_target_not_declared"
+        else:
+            selectors_value = payload.get("test_selectors")
+            symbol = payload.get("mutation_symbol")
+            max_mutants = payload.get("mutation_max_mutants")
+            timeout_seconds = payload.get("mutation_timeout_seconds")
+            budget_seconds = payload.get("mutation_time_budget_seconds")
+            if (
+                not isinstance(target, str)
+                or not isinstance(selectors_value, list)
+                or any(not isinstance(item, str) for item in selectors_value)
+                or (symbol is not None and not isinstance(symbol, str))
+                or isinstance(max_mutants, bool)
+                or not isinstance(max_mutants, int)
+                or isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, int)
+                or isinstance(budget_seconds, bool)
+                or not isinstance(budget_seconds, int)
+            ):
+                raise ValueError("trusted-deep mutation configuration is invalid")
+            self.config = FocalMutationConfig(
+                target,
+                symbol,
+                tuple(item for item in selectors_value if isinstance(item, str)),
+                max_mutants,
+                float(timeout_seconds),
+                float(budget_seconds),
+                deep_configuration_signature,
+            )
+        configured_budget = 10.0 if self.config is None else self.config.time_budget_seconds
+        configured_mutants = 1 if self.config is None else self.config.max_mutants
+        pytest_version = _package_version("pytest") or "unavailable"
+        environment_signature = external_signature(
+            "cosmic-ray-focal-environment-v1",
+            {
+                "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
+                "python_version": platform.python_version(),
+                "implementation": platform.python_implementation(),
+                "platform": platform.platform(),
+                "cosmic_ray_version": version,
+                "pytest_version": pytest_version,
+            },
+        )
+        self.descriptor = _provider_descriptor(
+            provider_id=COSMIC_RAY_MUTATION_PROVIDER_ID,
+            provider_schema=COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+            tool_name="cosmic-ray",
+            tool_version=version,
+            profile="trusted-deep",
+            source="external:cosmic-ray-focal-mutation",
+            configuration_payload={
+                "adapter": COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+                "deep_configuration": payload,
+                "deep_configuration_signature": deep_configuration_signature,
+                "staging": "exact-owned-scratch-copy",
+                "autofix": False,
+                "network": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=environment_signature,
+            root_identity=self._root_identity,
+            execution_strategy="canonical-root-focal-cosmic-ray-v1",
+            invalidation_strategy="dynamic_suite",
+            memory=_FOCAL_MUTATION_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="canonical-neocortex-focal-mutation-v1",
+            limits=ProviderLimits(
+                configured_budget + 15.0,
+                _FOCAL_MUTATION_MEMORY_BYTES,
+                RUFF_MAX_TOTAL_BYTES,
+                _FOCAL_MUTATION_OUTPUT_BYTES,
+                configured_mutants,
+            ),
+            imports_content=True,
+            executes_content=True,
+            uses_network=False,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        validate_external_inputs(files)
+        if self.config is not None:
+            return mutation_input_signature(files, self.config)
+        return external_signature(
+            "cosmic-ray-mutation-abstention-input-v1",
+            {
+                "inventory_signature": external_input_signature(files),
+                "deep_configuration_signature": self.deep_configuration_signature,
+                "reason": self._abstention_reason,
+            },
+        )
+
+    def _abstain(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        reason: str,
+        started_ns: int,
+        process_invocations: int = 0,
+    ) -> ExternalProviderPublication:
+        return _abstention(
+            self.descriptor,
+            root,
+            files,
+            tool_version=self._version or "unavailable",
+            reason=reason,
+            started_ns=started_ns,
+            input_signature_override=self.baseline_input_signature(files),
+            process_invocations=process_invocations,
+        )
+
+    def _attach_execution(
+        self,
+        publication: ExternalProviderPublication,
+        *,
+        configuration: Mapping[str, object],
+        execution: FocalMutationExecution | None,
+    ) -> ExternalProviderPublication:
+        counters = dict(publication.counters)
+        provenance = dict(publication.publication.provenance)
+        provenance["deep_configuration"] = {
+            "payload": dict(configuration),
+            "signature": self.deep_configuration_signature,
+        }
+        mutation_execution: dict[str, object] = {
+            "content_executed": publication.execution == "full",
+            "whole_publication_replay": publication.execution == "cache_replay",
+            "abstained": publication.execution == "skipped",
+            "mutation_authority": False,
+            "uses_network": False,
+        }
+        if execution is not None:
+            generic_wall = counters.get("wall_milliseconds", 0)
+            counters.update({name: int(value) for name, value in execution.counters.items()})
+            counters["wall_milliseconds"] = max(
+                generic_wall,
+                int(execution.counters.get("wall_milliseconds", 0)),
+            )
+            mutation_execution.update(
+                {
+                    "measurement_scope_signature": execution.measurement_scope_signature,
+                    "measurement_complete": execution.measurement_complete,
+                }
+            )
+        provenance["mutation_execution"] = mutation_execution
+        inner = replace(publication.publication, provenance=provenance)
+        return replace(publication, publication=inner, counters=counters)
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        started_ns = time.time_ns()
+        if external_root_identity(root) != self._root_identity:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason="trusted_deep_mutation_root_changed_after_provider_construction",
+                started_ns=started_ns,
+            )
+        if self.config is None:
+            assert self._abstention_reason is not None
+            publication = self._abstain(
+                root,
+                files,
+                reason=self._abstention_reason,
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        input_signature = mutation_input_signature(files, self.config)
+        current_paths = {item.relative_path.casefold() for item in files}
+        if self.config.target_relative_path.casefold() not in current_paths:
+            publication = self._abstain(
+                root,
+                files,
+                reason="mutation_target_not_indexed",
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        if self._version is None:
+            publication = self._abstain(
+                root,
+                files,
+                reason="cosmic_ray_8_4_6_unavailable",
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        if baseline is not None and baseline.input_signature == input_signature:
+            replay = _exact_replay(
+                self.descriptor,
+                root,
+                files,
+                baseline,
+                limitations=_FOCAL_MUTATION_REPLAY_LIMITATIONS,
+                input_signature_override=input_signature,
+            )
+            return self._attach_execution(
+                replay,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            durable_identity = external_signature(
+                "focal-mutation-scratch-v1",
+                {
+                    "root_identity": self._root_identity,
+                    "configuration_signature": self.config.configuration_signature,
+                },
+            ).rsplit(":", 1)[-1]
+            durable_scratch = staging_parent / "m" / durable_identity
+            durable_scratch.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-cosmic-ray-focal-",
+                dir=staging_parent,
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(files, stage_root / "source")
+                environment = _controlled_environment()
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = str(durable_scratch)
+                execution = self.executor(
+                    stage_root,
+                    staged,
+                    environment,
+                    trusted_root=root,
+                    scratch_root=durable_scratch,
+                    config=self.config,
+                )
+            if execution.measurement_scope_signature != input_signature:
+                raise ValueError("focal mutation execution input signature disagrees")
+            if execution.process_invocations != int(
+                execution.counters.get("process_invocations", -1)
+            ):
+                raise ValueError("focal mutation execution process accounting disagrees")
+        except MutationAbstentionError as exc:
+            publication = self._abstain(
+                root,
+                files,
+                reason=exc.reason,
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            files,
+            execution.findings,
+            baseline if execution.measurement_complete else None,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=sum(item.size for item in files),
+            limitations=execution.limitations,
+            input_signature_override=input_signature,
+        )
+        publication = replace(
+            publication,
+            coverage_complete=execution.measurement_complete,
+        )
+        return self._attach_execution(
+            publication,
+            configuration=self.deep_configuration,
+            execution=execution,
+        )
+
+
 _DEEP_COVERAGE_LIMITATIONS = (
     "coverage_main_process_only",
     "subprocess_coverage_not_collected",
@@ -3466,12 +3963,18 @@ def providers_for_profile(
                 deep_configuration,
                 deep_configuration_signature,
             ),
+            CosmicRayFocalMutationProvider(
+                root,
+                deep_configuration,
+                deep_configuration_signature,
+            ),
         )
     raise ValueError("external analysis profile is unsupported")
 
 
 __all__ = [
     "COMPLEXIPY_COGNITIVE_PROVIDER_ID",
+    "COSMIC_RAY_MUTATION_PROVIDER_ID",
     "DEPTRY_PROVIDER_ID",
     "GIT_HISTORY_PROVIDER_ID",
     "GRIMP_ARCHITECTURE_PROVIDER_ID",
@@ -3486,6 +3989,7 @@ __all__ = [
     "SEMGREP_INVARIANTS_PROVIDER_ID",
     "VULTURE_UNUSED_PROVIDER_ID",
     "ComplexipyCognitiveProvider",
+    "CosmicRayFocalMutationProvider",
     "DeptryProjectDependenciesProvider",
     "GitHistoryLocalProvider",
     "GrimpArchitectureProvider",

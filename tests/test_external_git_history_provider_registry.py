@@ -257,7 +257,7 @@ def test_registry_profiles_and_tool_probe_include_local_git(
     )
 
     assert len(static) == 13
-    assert len(deep) == 14
+    assert len(deep) == 15
     static_git = next(
         item for item in static if item.descriptor.provider_id == GIT_HISTORY_PROVIDER_ID
     )
