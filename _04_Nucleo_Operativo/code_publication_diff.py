@@ -21,6 +21,10 @@ from .code_coverage_analysis import (
     compare_code_coverage,
     read_code_coverage_analysis,
 )
+from .code_engineering_analytics import (
+    CodeEngineeringAnalytics,
+    read_code_engineering_analysis,
+)
 from .code_external_evidence import (
     RUFF_CONFIGURATION_SIGNATURE,
     ExternalEvidenceStatus,
@@ -50,7 +54,7 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v7"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v8"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
@@ -58,6 +62,7 @@ CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v4",
     "neocortex.code-publication-diff/v5",
     "neocortex.code-publication-diff/v6",
+    "neocortex.code-publication-diff/v7",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
@@ -171,6 +176,31 @@ class CodeModuleArchitectureDelta:
     current_cycle_ids: tuple[str, ...]
     baseline_contract_ids: tuple[str, ...]
     current_contract_ids: tuple[str, ...]
+    baseline_dependency_reach: int | None = None
+    current_dependency_reach: int | None = None
+    dependency_reach_delta: int | None = None
+    baseline_dependency_reach_truncated: bool = False
+    current_dependency_reach_truncated: bool = False
+    dependency_reach_status: Literal["comparable", "not_comparable"] = "not_comparable"
+    dependency_reach_reason: str | None = "dependency_reach_not_compared"
+    baseline_blast_radius: int | None = None
+    current_blast_radius: int | None = None
+    blast_radius_delta: int | None = None
+    baseline_blast_radius_truncated: bool = False
+    current_blast_radius_truncated: bool = False
+    blast_radius_status: Literal["comparable", "not_comparable"] = "not_comparable"
+    blast_radius_reason: str | None = "blast_radius_not_compared"
+    baseline_directed_degree_centrality: float | None = None
+    current_directed_degree_centrality: float | None = None
+    directed_degree_centrality_delta: float | None = None
+    baseline_cross_owner_fan_in: int | None = None
+    current_cross_owner_fan_in: int | None = None
+    cross_owner_fan_in_delta: int | None = None
+    baseline_cross_owner_fan_out: int | None = None
+    current_cross_owner_fan_out: int | None = None
+    cross_owner_fan_out_delta: int | None = None
+    graph_metrics_status: Literal["comparable", "not_comparable"] = "not_comparable"
+    graph_metrics_reason: str | None = "graph_metrics_not_compared"
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +225,51 @@ class CodeArchitectureDelta:
     architecture_contracts_not_degraded: Literal["passed", "failed", "not_evaluated"]
     no_new_import_cycles: Literal["passed", "failed", "not_evaluated"]
     module_complexity_not_displaced: Literal["passed", "failed", "not_evaluated"]
+
+
+@dataclass(frozen=True, slots=True)
+class CodeEngineeringDimensionState:
+    """Availability of one dimension in each publication; never a combined score."""
+
+    dimension: Literal["complexity", "coverage", "mutation", "history", "graph"]
+    baseline_status: str
+    baseline_reason: str | None
+    current_status: str
+    current_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodeEngineeringGateDelta:
+    gate: Literal["mutation_measurement_complete", "mutation_score_not_degraded"]
+    status: Literal["passed", "failed", "not_evaluated"]
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodeEngineeringAnalyticsDelta:
+    """Comparable mutation evidence alongside independent dimension states."""
+
+    status: Literal["comparable", "not_comparable"]
+    reason: str | None
+    baseline_status: str
+    baseline_reason: str | None
+    current_status: str
+    current_reason: str | None
+    dimensions: tuple[CodeEngineeringDimensionState, ...]
+    baseline_mutation_scope_signature: str | None
+    current_mutation_scope_signature: str | None
+    baseline_mutation_score: float | None
+    current_mutation_score: float | None
+    mutation_score_delta: float | None
+    gates: tuple[CodeEngineeringGateDelta, ...]
+    limitations: tuple[str, ...] = (
+        "engineering_dimensions_are_not_aggregated",
+        "mutation_score_is_not_defect_probability",
+    )
+    authority: Literal["advisory"] = "advisory"
+    mutation_authority: Literal[False] = False
+    aggregate_score: None = None
+    defect_probability: None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +415,7 @@ class CodePublicationDiffResult:
     digest: CodePublicationDiffDigest | None
     unused_analysis: CodeUnusedAnalysisDelta | None = None
     supply_chain: CodeSupplyChainDelta | None = None
+    engineering_analytics: CodeEngineeringAnalyticsDelta | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload = asdict(self)
@@ -379,6 +455,7 @@ class _Publication:
     test_coverage: CodeCoverageAnalysis
     unused_analysis: CodeUnusedAnalysis
     supply_chain: CodeSupplyChainAnalysis
+    engineering_analytics: CodeEngineeringAnalytics
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -648,6 +725,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             int(latest["analysis_run_id"]),
             database=str(database),
         )
+        engineering_analytics = read_code_engineering_analysis(
+            connection,
+            int(latest["analysis_run_id"]),
+            database=str(database),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -674,6 +756,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         test_coverage,
         unused_analysis,
         supply_chain,
+        engineering_analytics,
     )
 
 
@@ -1095,18 +1178,104 @@ def _architecture_module_deltas(
             if baseline_complexity is None or current_complexity is None
             else current_complexity - baseline_complexity
         )
+        dependency_reason: str | None = None
+        blast_reason: str | None = None
+        if left is None or right is None:
+            dependency_reason = blast_reason = "module_not_present_in_both_publications"
+        else:
+            if left.dependency_reach_truncated or right.dependency_reach_truncated:
+                dependency_reason = "dependency_reach_truncated_lower_bound"
+            if left.blast_radius_truncated or right.blast_radius_truncated:
+                blast_reason = "blast_radius_truncated_lower_bound"
+        dependency_comparable = dependency_reason is None
+        blast_comparable = blast_reason is None
+        graph_reason = ";".join(
+            reason for reason in (dependency_reason, blast_reason) if reason is not None
+        ) or None
+        graph_comparable = dependency_comparable and blast_comparable
         modules.append(
             CodeModuleArchitectureDelta(
-                module_id,
-                baseline_complexity,
-                current_complexity,
-                complexity_delta,
-                (0 if right is None else right.fan_in) - (0 if left is None else left.fan_in),
-                (0 if right is None else right.fan_out) - (0 if left is None else left.fan_out),
-                () if left is None else left.cycle_ids,
-                () if right is None else right.cycle_ids,
-                () if left is None else left.contract_ids,
-                () if right is None else right.contract_ids,
+                module_id=module_id,
+                baseline_cognitive_complexity=baseline_complexity,
+                current_cognitive_complexity=current_complexity,
+                cognitive_complexity_delta=complexity_delta,
+                fan_in_delta=(0 if right is None else right.fan_in)
+                - (0 if left is None else left.fan_in),
+                fan_out_delta=(0 if right is None else right.fan_out)
+                - (0 if left is None else left.fan_out),
+                baseline_cycle_ids=() if left is None else left.cycle_ids,
+                current_cycle_ids=() if right is None else right.cycle_ids,
+                baseline_contract_ids=() if left is None else left.contract_ids,
+                current_contract_ids=() if right is None else right.contract_ids,
+                baseline_dependency_reach=None if left is None else left.dependency_reach,
+                current_dependency_reach=None if right is None else right.dependency_reach,
+                dependency_reach_delta=(
+                    right.dependency_reach - left.dependency_reach
+                    if dependency_comparable and left is not None and right is not None
+                    else None
+                ),
+                baseline_dependency_reach_truncated=(
+                    False if left is None else left.dependency_reach_truncated
+                ),
+                current_dependency_reach_truncated=(
+                    False if right is None else right.dependency_reach_truncated
+                ),
+                dependency_reach_status=(
+                    "comparable" if dependency_comparable else "not_comparable"
+                ),
+                dependency_reach_reason=dependency_reason,
+                baseline_blast_radius=None if left is None else left.blast_radius,
+                current_blast_radius=None if right is None else right.blast_radius,
+                blast_radius_delta=(
+                    right.blast_radius - left.blast_radius
+                    if blast_comparable and left is not None and right is not None
+                    else None
+                ),
+                baseline_blast_radius_truncated=(
+                    False if left is None else left.blast_radius_truncated
+                ),
+                current_blast_radius_truncated=(
+                    False if right is None else right.blast_radius_truncated
+                ),
+                blast_radius_status=(
+                    "comparable" if blast_comparable else "not_comparable"
+                ),
+                blast_radius_reason=blast_reason,
+                baseline_directed_degree_centrality=(
+                    None if left is None else left.directed_degree_centrality
+                ),
+                current_directed_degree_centrality=(
+                    None if right is None else right.directed_degree_centrality
+                ),
+                directed_degree_centrality_delta=(
+                    right.directed_degree_centrality - left.directed_degree_centrality
+                    if left is not None and right is not None
+                    else None
+                ),
+                baseline_cross_owner_fan_in=(
+                    None if left is None else left.cross_owner_fan_in
+                ),
+                current_cross_owner_fan_in=(
+                    None if right is None else right.cross_owner_fan_in
+                ),
+                cross_owner_fan_in_delta=(
+                    right.cross_owner_fan_in - left.cross_owner_fan_in
+                    if left is not None and right is not None
+                    else None
+                ),
+                baseline_cross_owner_fan_out=(
+                    None if left is None else left.cross_owner_fan_out
+                ),
+                current_cross_owner_fan_out=(
+                    None if right is None else right.cross_owner_fan_out
+                ),
+                cross_owner_fan_out_delta=(
+                    right.cross_owner_fan_out - left.cross_owner_fan_out
+                    if left is not None and right is not None
+                    else None
+                ),
+                graph_metrics_status=("comparable" if graph_comparable else "not_comparable"),
+                graph_metrics_reason=graph_reason,
             )
         )
     return tuple(modules)
@@ -1146,6 +1315,143 @@ def _architecture_delta(
         "passed" if not added_contracts else "failed",
         "passed" if not added_cycles else "failed",
         "passed" if not displaced else "failed",
+    )
+
+
+def _engineering_dimension_state(
+    analysis: CodeEngineeringAnalytics,
+    dimension: Literal["complexity", "coverage", "mutation", "history", "graph"],
+) -> tuple[str, str | None]:
+    values = tuple(getattr(module, dimension) for module in analysis.modules)
+    if not values:
+        return "abstained", analysis.reason or "engineering_modules_not_recorded"
+    statuses = {item.status for item in values}
+    if len(statuses) != 1:
+        return "partial", "module_dimension_states_mixed"
+    status = next(iter(statuses))
+    reasons = tuple(sorted({item.reason for item in values if item.reason is not None}))
+    reason = None if status == "ready" else (";".join(reasons) or f"{dimension}_not_ready")
+    return status, reason
+
+
+def _engineering_source_gate(
+    analysis: CodeEngineeringAnalytics,
+    gate: str,
+) -> tuple[str, str | None]:
+    evidence = next((item for item in analysis.gates if item.gate == gate), None)
+    if evidence is None:
+        return "not_evaluated", "engineering_gate_not_recorded"
+    return evidence.status, evidence.reason
+
+
+def _engineering_not_comparable_reason(
+    baseline: CodeEngineeringAnalytics,
+    current: CodeEngineeringAnalytics,
+    measurement_gate: CodeEngineeringGateDelta,
+) -> str | None:
+    if baseline.status != "ready" or current.status != "ready":
+        return (
+            "engineering_analytics_not_ready:"
+            f"baseline={baseline.status}:current={current.status}"
+        )
+    if measurement_gate.status != "passed":
+        return measurement_gate.reason or "mutation_measurement_incomplete"
+    if (
+        baseline.mutation_scope_signature is None
+        or current.mutation_scope_signature is None
+    ):
+        return "mutation_measurement_scope_not_recorded"
+    if baseline.mutation_scope_signature != current.mutation_scope_signature:
+        return "mutation_measurement_scope_changed"
+    if baseline.mutation_score is None or current.mutation_score is None:
+        return "mutation_score_not_recorded"
+    return None
+
+
+def _engineering_delta(
+    baseline: CodeEngineeringAnalytics,
+    current: CodeEngineeringAnalytics,
+) -> CodeEngineeringAnalyticsDelta:
+    dimensions = []
+    dimension_names: tuple[
+        Literal["complexity", "coverage", "mutation", "history", "graph"], ...
+    ] = ("complexity", "coverage", "mutation", "history", "graph")
+    for dimension in dimension_names:
+        baseline_status, baseline_reason = _engineering_dimension_state(baseline, dimension)
+        current_status, current_reason = _engineering_dimension_state(current, dimension)
+        dimensions.append(
+            CodeEngineeringDimensionState(
+                dimension=dimension,
+                baseline_status=baseline_status,
+                baseline_reason=baseline_reason,
+                current_status=current_status,
+                current_reason=current_reason,
+            )
+        )
+    before_gate, before_reason = _engineering_source_gate(
+        baseline, "mutation_measurement_complete"
+    )
+    after_gate, after_reason = _engineering_source_gate(
+        current, "mutation_measurement_complete"
+    )
+    if "failed" in {before_gate, after_gate}:
+        measurement_gate = CodeEngineeringGateDelta(
+            "mutation_measurement_complete",
+            "failed",
+            before_reason or after_reason or "mutation_measurement_incomplete",
+        )
+    elif before_gate == after_gate == "passed":
+        measurement_gate = CodeEngineeringGateDelta(
+            "mutation_measurement_complete", "passed", None
+        )
+    else:
+        measurement_gate = CodeEngineeringGateDelta(
+            "mutation_measurement_complete",
+            "not_evaluated",
+            before_reason or after_reason or "mutation_measurement_not_comparable",
+        )
+    reason = _engineering_not_comparable_reason(baseline, current, measurement_gate)
+    if reason is not None:
+        score_gate = CodeEngineeringGateDelta(
+            "mutation_score_not_degraded", "not_evaluated", reason
+        )
+        return CodeEngineeringAnalyticsDelta(
+            status="not_comparable",
+            reason=reason,
+            baseline_status=baseline.status,
+            baseline_reason=baseline.reason,
+            current_status=current.status,
+            current_reason=current.reason,
+            dimensions=tuple(dimensions),
+            baseline_mutation_scope_signature=baseline.mutation_scope_signature,
+            current_mutation_scope_signature=current.mutation_scope_signature,
+            baseline_mutation_score=None,
+            current_mutation_score=None,
+            mutation_score_delta=None,
+            gates=(measurement_gate, score_gate),
+        )
+    assert baseline.mutation_score is not None
+    assert current.mutation_score is not None
+    score_delta = current.mutation_score - baseline.mutation_score
+    score_gate = CodeEngineeringGateDelta(
+        "mutation_score_not_degraded",
+        "passed" if score_delta >= 0.0 else "failed",
+        None if score_delta >= 0.0 else "mutation_score_decreased",
+    )
+    return CodeEngineeringAnalyticsDelta(
+        status="comparable",
+        reason=None,
+        baseline_status=baseline.status,
+        baseline_reason=baseline.reason,
+        current_status=current.status,
+        current_reason=current.reason,
+        dimensions=tuple(dimensions),
+        baseline_mutation_scope_signature=baseline.mutation_scope_signature,
+        current_mutation_scope_signature=current.mutation_scope_signature,
+        baseline_mutation_score=baseline.mutation_score,
+        current_mutation_score=current.mutation_score,
+        mutation_score_delta=score_delta,
+        gates=(measurement_gate, score_gate),
     )
 
 
@@ -1465,6 +1771,7 @@ def _digest_payload(
     test_coverage: CoverageComparison,
     unused_analysis: CodeUnusedAnalysisDelta,
     supply_chain: CodeSupplyChainDelta,
+    engineering_analytics: CodeEngineeringAnalyticsDelta,
     verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
@@ -1499,6 +1806,7 @@ def _digest_payload(
             "test_coverage": asdict(test_coverage),
             "unused_analysis": asdict(unused_analysis),
             "supply_chain": asdict(supply_chain),
+            "engineering_analytics": asdict(engineering_analytics),
             "verdict": verdict,
             "limitations": list(limitations),
         }
@@ -1536,6 +1844,7 @@ def _abstained(
         digest=None,
         unused_analysis=None,
         supply_chain=None,
+        engineering_analytics=None,
     )
 
 
@@ -1581,16 +1890,22 @@ def compare_code_publications(
         baseline.supply_chain,
         current.supply_chain,
     )
+    engineering_analytics = _engineering_delta(
+        baseline.engineering_analytics,
+        current.engineering_analytics,
+    )
     verdict = _provider_verdict(providers)
     limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
-        "provider_verdict_excludes_architecture_test_coverage_unused_and_supply_chain_gates",
+        "provider_verdict_excludes_architecture_test_coverage_unused_supply_chain_and_engineering_gates",
         "unused_analysis_is_advisory_and_never_authorizes_deletion_or_mutation",
         "supply_chain_delta_is_multidimensional_and_has_no_aggregate_score",
         "supply_chain_evidence_is_advisory_and_never_authorizes_mutation",
+        "engineering_dimensions_are_not_aggregated",
+        "engineering_dimensions_and_mutation_score_are_not_defect_probability",
     ]
     if any(item.status != "ready" for item in providers):
         limitations.append("provider_verdict_uses_only_comparable_providers")
@@ -1602,6 +1917,8 @@ def compare_code_publications(
         limitations.append("unused_analysis_delta_not_comparable")
     if supply_chain.status != "ready":
         limitations.append("supply_chain_delta_not_comparable")
+    if engineering_analytics.status != "comparable":
+        limitations.append("engineering_analytics_delta_not_comparable")
     if supply_chain.baseline_observations_truncated or supply_chain.current_observations_truncated:
         limitations.append("supply_chain_observation_deltas_are_visible_examples_only")
     if any(
@@ -1622,6 +1939,7 @@ def compare_code_publications(
         test_coverage,
         unused_analysis,
         supply_chain,
+        engineering_analytics,
         verdict,
         frozen_limitations,
     )
@@ -1645,6 +1963,7 @@ def compare_code_publications(
         digest=digest,
         unused_analysis=unused_analysis,
         supply_chain=supply_chain,
+        engineering_analytics=engineering_analytics,
     )
 
 
@@ -1655,6 +1974,9 @@ __all__ = [
     "CodeCallResolutionChange",
     "CodeCallResolutionDelta",
     "CodeComplexityDisplacement",
+    "CodeEngineeringAnalyticsDelta",
+    "CodeEngineeringDimensionState",
+    "CodeEngineeringGateDelta",
     "CodeExternalEvidenceDelta",
     "CodeHotspotDelta",
     "CodeModuleArchitectureDelta",
