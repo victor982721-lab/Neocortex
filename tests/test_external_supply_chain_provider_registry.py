@@ -199,23 +199,32 @@ def test_environment_providers_replay_declared_snapshots_with_real_inventory_cos
         "advisory_only_no_fix_or_mutation_authority",
     )
     pip_provider = PipAuditKnownVulnerabilitiesProvider(root)
-    pip_provider.executor = lambda _environment: PipAuditExecution(
-        (),
-        (),
-        PipAuditCounters(5, 5, 0, 0, 0, 0),
-        "test-1",
-        "fixture",
-        f"{pip_provider._utc_date}T00:00:00Z",
-        pip_provider._utc_date,
-        "snapshot:pip",
-        "fresh_at_observation",
-        f"{pip_provider._utc_date}T23:59:59Z",
-        19,
-        0,
-        1,
-        True,
-        pip_limitations,
-    )
+
+    def execute_pip_audit(environment: dict[str, str]) -> PipAuditExecution:
+        temporary_paths = {Path(environment[name]) for name in ("TEMP", "TMP", "TMPDIR")}
+        assert len(temporary_paths) == 1
+        temporary = temporary_paths.pop()
+        assert temporary.is_dir()
+        assert temporary.parent == scratch
+        return PipAuditExecution(
+            (),
+            (),
+            PipAuditCounters(5, 5, 0, 0, 0, 0),
+            "test-1",
+            "fixture",
+            f"{pip_provider._utc_date}T00:00:00Z",
+            pip_provider._utc_date,
+            "snapshot:pip",
+            "fresh_at_observation",
+            f"{pip_provider._utc_date}T23:59:59Z",
+            19,
+            0,
+            1,
+            True,
+            pip_limitations,
+        )
+
+    pip_provider.executor = execute_pip_audit
     pip_publication = pip_provider.run(root, (), baseline=None, scratch_root=scratch)
     assert pip_publication.status == "completed"
     assert pip_publication.descriptor.uses_network is True

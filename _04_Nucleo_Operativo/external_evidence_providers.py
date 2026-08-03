@@ -2222,7 +2222,7 @@ class PipAuditKnownVulnerabilitiesProvider:
         baseline: ExternalProviderBaseline | None,
         scratch_root: Path,
     ) -> ExternalProviderPublication:
-        del files, scratch_root
+        del files
         started_ns = time.time_ns()
         if self._environment_error is not None:
             return _failure(
@@ -2279,7 +2279,14 @@ class PipAuditKnownVulnerabilitiesProvider:
                 },
             )
         try:
-            execution = self.executor(_controlled_environment())
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-pip-audit-", dir=staging_parent
+            ) as temporary:
+                environment = _controlled_environment()
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = temporary
+                execution = self.executor(environment)
             if execution.tool_version != self._version:
                 raise ValueError("pip-audit execution version disagrees with provider")
             if execution.observed_date_utc != self._utc_date:
