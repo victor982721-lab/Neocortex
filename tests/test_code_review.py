@@ -607,7 +607,7 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v9"
+    assert first.as_payload()["schema"] == "neocortex.code-review/v10"
     assert "neocortex.code-review/v6" in first.as_payload()["compatible_schemas"]
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
@@ -617,6 +617,7 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
         "neocortex.code-review/v6",
         "neocortex.code-review/v7",
         "neocortex.code-review/v8",
+        "neocortex.code-review/v9",
     ]
     assert first.supply_chain is not None
     assert first.supply_chain.status == "abstained"
@@ -669,6 +670,18 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert first.work_packages[0].test_coverage.status == "not_evaluated"
     assert first.work_packages[0].test_coverage.gate.status == "not_evaluated"
     assert "test_coverage_not_ready:" in " ".join(first.limitations)
+    assert first.engineering_analytics is not None
+    assert first.engineering_analytics.status == "abstained"
+    engineering_payload = first.as_payload()["engineering_analytics"]
+    assert isinstance(engineering_payload, dict)
+    assert engineering_payload["schema"] == "neocortex.code-engineering-analytics/v1"
+    assert engineering_payload["aggregate_score"] is None
+    assert engineering_payload["defect_probability"] is None
+    assert [gate["gate"] for gate in engineering_payload["gates"]] == [
+        "mutation_test_baseline",
+        "mutation_measurement_complete",
+        "mutation_score_recorded",
+    ]
     assert first.digest is not None
 
     monkeypatch.setattr(

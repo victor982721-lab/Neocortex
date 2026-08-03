@@ -12,6 +12,13 @@ from .code_coverage_analysis import (
     TestToSymbolRelation,
     WorkPackageCoverageProjection,
 )
+from .code_engineering_analytics import (
+    CODE_ENGINEERING_ANALYTICS_SCHEMA,
+    CodeEngineeringAnalytics,
+    EngineeringDimension,
+    EngineeringGate,
+    ModuleEngineeringProfile,
+)
 from .code_external_evidence import ExternalEvidenceStatus
 from .code_supply_chain_analysis import (
     CodeSupplyChainAnalysis,
@@ -27,7 +34,7 @@ from .code_review_actionability import (
 )
 from .external_evidence_models import ExternalEvidenceSuiteStatus
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v9"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v10"
 CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v2",
     "neocortex.code-review/v3",
@@ -36,8 +43,10 @@ CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v6",
     "neocortex.code-review/v7",
     "neocortex.code-review/v8",
+    "neocortex.code-review/v9",
 )
 CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT = 20
+CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT = 20
 CODE_REVIEW_UNUSED_EXAMPLE_LIMIT = 20
 
 ReviewStatus = Literal["ready", "abstained"]
@@ -228,6 +237,8 @@ class CodeReviewWorkPackage:
     supply_chain_observations: tuple[SupplyChainObservation, ...] = ()
     supply_chain_relations: tuple[SupplyChainObservation, ...] = ()
     supply_chain_gates: tuple[SupplyChainGateEvaluation, ...] = ()
+    engineering_profile: ModuleEngineeringProfile | None = None
+    engineering_gates: tuple[EngineeringGate, ...] = ()
     requires_human_confirmation: bool = False
     mutation_authority: Literal[False] = False
 
@@ -296,6 +307,7 @@ class CodeReviewResult:
     digest: CodeReviewDigest | None
     unused_analysis: CodeUnusedAnalysis | None = None
     supply_chain: CodeSupplyChainAnalysis | None = None
+    engineering_analytics: CodeEngineeringAnalytics | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload = asdict(
@@ -305,6 +317,7 @@ class CodeReviewResult:
                 test_coverage=None,
                 unused_analysis=None,
                 supply_chain=None,
+                engineering_analytics=None,
             )
         )
         payload["work_packages"] = [
@@ -320,6 +333,10 @@ class CodeReviewResult:
             payload["unused_analysis"] = bounded_code_unused_payload(self.unused_analysis)
         if self.supply_chain is not None:
             payload["supply_chain"] = self.supply_chain.as_payload()
+        if self.engineering_analytics is not None:
+            payload["engineering_analytics"] = bounded_code_engineering_payload(
+                self.engineering_analytics
+            )
         return {
             "kind": "code-review",
             "schema": CODE_REVIEW_SCHEMA,
@@ -477,6 +494,77 @@ def bounded_code_coverage_payload(
     }
 
 
+def _bounded_engineering_dimension_payload(
+    dimension: EngineeringDimension,
+) -> dict[str, object]:
+    limit = CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT
+    return {
+        "dimension": dimension.dimension,
+        "status": dimension.status,
+        "reason": dimension.reason,
+        "metrics": [asdict(item) for item in dimension.metrics[:limit]],
+        "metrics_total": len(dimension.metrics),
+        "metrics_truncated": len(dimension.metrics) > limit,
+        "provenance": list(dimension.provenance[:limit]),
+        "provenance_total": len(dimension.provenance),
+        "provenance_truncated": len(dimension.provenance) > limit,
+        "limitations": list(dimension.limitations[:limit]),
+        "limitations_total": len(dimension.limitations),
+        "limitations_truncated": len(dimension.limitations) > limit,
+    }
+
+
+def _bounded_engineering_profile_payload(
+    profile: ModuleEngineeringProfile,
+) -> dict[str, object]:
+    return {
+        "module_id": profile.module_id,
+        "owner_id": profile.owner_id,
+        "complexity": _bounded_engineering_dimension_payload(profile.complexity),
+        "coverage": _bounded_engineering_dimension_payload(profile.coverage),
+        "mutation": _bounded_engineering_dimension_payload(profile.mutation),
+        "history": _bounded_engineering_dimension_payload(profile.history),
+        "graph": _bounded_engineering_dimension_payload(profile.graph),
+    }
+
+
+def bounded_code_engineering_payload(
+    analysis: CodeEngineeringAnalytics,
+) -> dict[str, object]:
+    """Project bounded module examples without changing analytics authority."""
+
+    limit = CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT
+    return {
+        "kind": "code-engineering-analytics",
+        "schema": CODE_ENGINEERING_ANALYTICS_SCHEMA,
+        "database": analysis.database,
+        "analysis_run_id": analysis.analysis_run_id,
+        "status": analysis.status,
+        "reason": analysis.reason,
+        "providers": [asdict(item) for item in analysis.providers[:limit]],
+        "providers_total": len(analysis.providers),
+        "providers_truncated": len(analysis.providers) > limit,
+        "modules": [
+            _bounded_engineering_profile_payload(item) for item in analysis.modules[:limit]
+        ],
+        "modules_total": len(analysis.modules),
+        "modules_truncated": len(analysis.modules) > limit,
+        "gates": [asdict(item) for item in analysis.gates[:limit]],
+        "gates_total": len(analysis.gates),
+        "gates_truncated": len(analysis.gates) > limit,
+        "mutation_scope_signature": analysis.mutation_scope_signature,
+        "mutation_score": analysis.mutation_score,
+        "limitations": list(analysis.limitations[:limit]),
+        "limitations_total": len(analysis.limitations),
+        "limitations_truncated": len(analysis.limitations) > limit,
+        "digest": analysis.digest,
+        "authority": analysis.authority,
+        "mutation_authority": analysis.mutation_authority,
+        "aggregate_score": analysis.aggregate_score,
+        "defect_probability": analysis.defect_probability,
+    }
+
+
 def _bounded_work_package_payload(package: CodeReviewWorkPackage) -> dict[str, object]:
     payload = asdict(
         replace(
@@ -484,6 +572,8 @@ def _bounded_work_package_payload(package: CodeReviewWorkPackage) -> dict[str, o
             test_coverage=None,
             test_coverage_scope=None,
             unused_candidates=(),
+            engineering_profile=None,
+            engineering_gates=(),
         )
     )
     projection = package.test_coverage
@@ -509,6 +599,18 @@ def _bounded_work_package_payload(package: CodeReviewWorkPackage) -> dict[str, o
     payload["unused_candidates_total"] = len(package.unused_candidates)
     payload["unused_candidates_truncated"] = (
         len(package.unused_candidates) > CODE_REVIEW_UNUSED_EXAMPLE_LIMIT
+    )
+    if package.engineering_profile is not None:
+        payload["engineering_profile"] = _bounded_engineering_profile_payload(
+            package.engineering_profile
+        )
+    payload["engineering_gates"] = [
+        asdict(item)
+        for item in package.engineering_gates[:CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT]
+    ]
+    payload["engineering_gates_total"] = len(package.engineering_gates)
+    payload["engineering_gates_truncated"] = (
+        len(package.engineering_gates) > CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT
     )
     return payload
 
@@ -565,6 +667,7 @@ __all__ = [
     "WorkPackagePhase",
     "WorkPackageRelationship",
     "bounded_code_coverage_payload",
+    "bounded_code_engineering_payload",
     "bounded_code_unused_payload",
     "build_code_review_recommendations",
 ]

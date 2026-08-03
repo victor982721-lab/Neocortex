@@ -23,6 +23,14 @@ from _04_Nucleo_Operativo.code_coverage_analysis import (
     CoverageTotals,
     TestToSymbolRelation as CoverageTestToSymbolRelation,
 )
+from _04_Nucleo_Operativo.code_engineering_analytics import (
+    CodeEngineeringAnalytics,
+    EngineeringDimension,
+    EngineeringGate,
+    EngineeringMetric,
+    EngineeringProviderSummary,
+    ModuleEngineeringProfile,
+)
 from _04_Nucleo_Operativo.code_review_models import (
     CodeReviewFinding,
     CodeReviewImpact,
@@ -45,6 +53,111 @@ from _04_Nucleo_Operativo.code_unused_analysis import (
 HISTORY_FIXTURE = (
     Path(__file__).parent / "fixtures" / "code_review" / "rc14_rc19_work_package_outcomes_v1.json"
 )
+
+
+def _engineering_dimension(
+    dimension: str,
+    module_id: str,
+    *,
+    ready: bool,
+    metric_count: int = 1,
+) -> EngineeringDimension:
+    return EngineeringDimension(
+        dimension,  # type: ignore[arg-type]
+        "ready" if ready else "not_recorded",
+        None if ready else f"{dimension}_not_recorded",
+        (
+            tuple(
+                EngineeringMetric(
+                    f"{dimension}_{index:02d}",
+                    float(index),
+                    "count",
+                    "fixture",
+                    "module",
+                    module_id,
+                )
+                for index in range(metric_count)
+            )
+            if ready
+            else ()
+        ),
+        ("fixture",),
+        (f"{dimension}_is_advisory",),
+    )
+
+
+def _engineering_profile(
+    module_id: str,
+    *,
+    complete: bool,
+    metric_count: int = 1,
+) -> ModuleEngineeringProfile:
+    return ModuleEngineeringProfile(
+        module_id,
+        "fixture-owner",
+        _engineering_dimension("complexity", module_id, ready=True, metric_count=metric_count),
+        _engineering_dimension("coverage", module_id, ready=True, metric_count=metric_count),
+        _engineering_dimension("mutation", module_id, ready=complete, metric_count=metric_count),
+        _engineering_dimension("history", module_id, ready=complete, metric_count=metric_count),
+        _engineering_dimension("graph", module_id, ready=True, metric_count=metric_count),
+    )
+
+
+def _engineering_analysis(
+    module_ids: tuple[str, ...],
+    *,
+    complete: bool,
+    metric_count: int = 1,
+) -> CodeEngineeringAnalytics:
+    gate_status = "passed" if complete else "not_evaluated"
+    gate_reason = None if complete else "mutation_provider_not_ready"
+    return CodeEngineeringAnalytics(
+        "fixture",
+        1,
+        "ready" if complete else "partial",
+        None if complete else "one_or_more_engineering_dimensions_not_ready",
+        (
+            EngineeringProviderSummary(
+                "git-history-local",
+                "ready" if complete else "not_recorded",
+                None if complete else "provider_missing",
+                1 if complete else None,
+                1 if complete else None,
+                1 if complete else 0,
+                0,
+            ),
+            EngineeringProviderSummary(
+                "cosmic-ray-focal-mutation",
+                "ready" if complete else "not_recorded",
+                None if complete else "provider_missing",
+                2 if complete else None,
+                2 if complete else None,
+                1 if complete else 0,
+                0,
+            ),
+        ),
+        tuple(
+            _engineering_profile(
+                module_id,
+                complete=complete,
+                metric_count=metric_count,
+            )
+            for module_id in module_ids
+        ),
+        (
+            EngineeringGate("mutation_test_baseline", gate_status, gate_reason),
+            EngineeringGate("mutation_measurement_complete", gate_status, gate_reason),
+            EngineeringGate("mutation_score_recorded", gate_status, gate_reason),
+        ),
+        "fixture-scope" if complete else None,
+        0.75 if complete else None,
+        (
+            "no_aggregate_score_is_computed",
+            "no_dimension_is_a_defect_probability",
+            "mutation_findings_are_advisory_and_have_zero_mutation_authority",
+        ),
+        "code-engineering-v1:xxh3_128:fixture",
+    )
 
 
 def _impact(symbol: str) -> CodeReviewImpact:
@@ -582,6 +695,7 @@ def test_work_package_adds_bounded_architecture_context_without_changing_identit
             connection,
             {1: findings[0].finding_id, 3: findings[1].finding_id},
         )
+    engineering = _engineering_analysis(("document_taxonomy",), complete=True)
 
     legacy = build_code_review_work_packages(findings, recommendations, links)[0]
     enriched = build_code_review_work_packages(
@@ -590,6 +704,7 @@ def test_work_package_adds_bounded_architecture_context_without_changing_identit
         links,
         architecture=architecture,
         architecture_root=r"C:\repo",
+        engineering_analytics=engineering,
     )[0]
 
     assert enriched.package_id == legacy.package_id
@@ -602,6 +717,38 @@ def test_work_package_adds_bounded_architecture_context_without_changing_identit
         "module_complexity_not_displaced",
     }.issubset(enriched.acceptance_gates)
     assert "architecture:ready" in enriched.evidence
+    assert enriched.engineering_profile == engineering.modules[0]
+    assert [gate.gate for gate in enriched.engineering_gates] == [
+        "mutation_test_baseline",
+        "mutation_measurement_complete",
+        "mutation_score_recorded",
+    ]
+    assert {gate.status for gate in enriched.engineering_gates} == {"passed"}
+    assert "engineering:ready" in enriched.evidence
+
+
+def test_partial_engineering_evidence_never_hides_a_work_package() -> None:
+    findings = _planning_findings()
+    recommendations = build_code_review_recommendations(findings, limit=3)
+    engineering = _engineering_analysis(("document_taxonomy",), complete=False)
+
+    packages = build_code_review_work_packages(
+        findings,
+        recommendations,
+        (),
+        architecture_root=r"C:\repo",
+        engineering_analytics=engineering,
+    )
+
+    assert len(packages) == 1
+    package = packages[0]
+    assert package.engineering_profile is engineering.modules[0]
+    assert package.engineering_profile.mutation.status == "not_recorded"
+    assert package.engineering_profile.history.status == "not_recorded"
+    assert {gate.status for gate in package.engineering_gates} == {"not_evaluated"}
+    assert "engineering:partial" in package.evidence
+    assert any(item.startswith("engineering_analytics_not_ready:") for item in package.limitations)
+    assert package.mutation_authority is False
 
 
 def test_work_package_projects_protecting_tests_and_missing_target_coverage() -> None:
@@ -778,11 +925,18 @@ def test_review_json_bounds_coverage_and_work_package_examples_to_twenty() -> No
         ),
         (),
     )
+    engineering = _engineering_analysis(
+        ("document_taxonomy", *(f"module_{index}" for index in range(1, 25))),
+        complete=True,
+        metric_count=25,
+    )
     package = build_code_review_work_packages(
         findings,
         recommendations,
         (),
+        architecture_root=r"C:\repo",
         test_coverage=coverage,
+        engineering_analytics=engineering,
     )[0]
     result = CodeReviewResult(
         database="fixture",
@@ -806,6 +960,7 @@ def test_review_json_bounds_coverage_and_work_package_examples_to_twenty() -> No
         test_coverage=coverage,
         limitations=(),
         digest=None,
+        engineering_analytics=engineering,
     )
 
     payload = result.as_payload()
@@ -824,6 +979,7 @@ def test_review_json_bounds_coverage_and_work_package_examples_to_twenty() -> No
     package_payload = packages_payload[0]
     package_coverage = package_payload["test_coverage"]
     package_scope = package_payload["test_coverage_scope"]
+    engineering_payload = payload["engineering_analytics"]
     assert len(package_coverage["protecting_tests"]) == 20
     assert package_coverage["protecting_tests_total"] == 25
     assert package_coverage["protecting_tests_truncated"] is True
@@ -836,6 +992,19 @@ def test_review_json_bounds_coverage_and_work_package_examples_to_twenty() -> No
     assert len(package_scope["missing_branch_arcs"]) == 20
     assert package_scope["missing_branch_arcs_total"] == 25
     assert package_scope["missing_branch_arcs_truncated"] is True
+    assert len(engineering_payload["modules"]) == 20
+    assert engineering_payload["modules_total"] == 25
+    assert engineering_payload["modules_truncated"] is True
+    package_engineering = package_payload["engineering_profile"]
+    assert package_engineering["module_id"] == "document_taxonomy"
+    assert len(package_engineering["mutation"]["metrics"]) == 20
+    assert package_engineering["mutation"]["metrics_total"] == 25
+    assert package_engineering["mutation"]["metrics_truncated"] is True
+    assert [gate["gate"] for gate in package_payload["engineering_gates"]] == [
+        "mutation_test_baseline",
+        "mutation_measurement_complete",
+        "mutation_score_recorded",
+    ]
 
 
 def _passes_history_policy(
