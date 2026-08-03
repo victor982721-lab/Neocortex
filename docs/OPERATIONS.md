@@ -123,10 +123,10 @@ el piloto del perfil estático es:
 Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
 ```
 
-`trusted-static` ejecuta doce proveedores independientes: Ruff basic, Ruff
+`trusted-static` ejecuta 13 proveedores independientes: Ruff basic, Ruff
 con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp, Complexipy, Vulture, Semgrep, Deptry, pip-audit e inventario del entorno
-instalado. Las familias
+Grimp, Complexipy, Vulture, Semgrep, Deptry, pip-audit, inventario del entorno
+instalado e historial Git local. Las familias
 Ruff `I,PT,SIM,UP` quedan fuera para priorizar defectos y mantenibilidad sobre
 estilo/modernización. No escale si status muestra un
 proveedor `abstained`/`not_recorded`, cobertura incompleta o una limitación que
@@ -207,8 +207,10 @@ hipótesis de no uso.
 
 ### Perfil `trusted-deep`
 
-Úselo sólo para ejecutar la suite declarada de NeoCortex y correlacionar pruebas
-con líneas, ramas, símbolos, módulos y el work package vigente. No es
+Úselo sólo para ejecutar la suite declarada de Neocortex y correlacionar pruebas,
+mutación focal e historia con líneas, ramas, símbolos, módulos y el work package
+vigente. Conserva los 13 proveedores estáticos y añade Coverage y Cosmic Ray,
+para un total de 15. No es
 predeterminado y la CLI rechaza cualquier raíz que no sea la identidad física
 exacta de `C:\Users\Victor\Neocortex\Repository`. El perfil ejecuta código del
 proyecto, pruebas y `conftest.py`; no procesa corpus ni modifica el estado
@@ -225,6 +227,14 @@ Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-d
 Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
   --deep-test-selector tests/test_bounded_subprocess.py `
   --deep-time-budget-seconds 600 --deep-max-tests 3000 --deep-shard-size 20
+
+# Objetivo focal publicado por el work package H6.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
+  --deep-test-selector tests/test_external_deep_coverage.py `
+  --deep-mutation-target _04_Nucleo_Operativo/external_deep_coverage.py `
+  --deep-mutation-symbol external_deep_coverage._normalize `
+  --deep-mutation-max-mutants 20 --deep-mutation-timeout-seconds 30 `
+  --deep-mutation-time-budget-seconds 600
 ```
 
 Los límites admitidos son 30–900 segundos, 1–5000 tests y shards de 1–50;
@@ -232,6 +242,12 @@ Los límites admitidos son 30–900 segundos, 1–5000 tests y shards de 1–50;
 declara `suite_selection=full`; con uno o más, `selected`. Si `max_tests` trunca
 lo recolectado, `measurement_complete=false` y los gates que necesitan cobertura
 completa se abstienen.
+
+La mutación requiere target y al menos un selector explícito; symbol es
+opcional. Admite 1–100 mutantes (20 por defecto), 1–120 segundos por mutante
+(30) y 10–900 segundos totales (600). Cosmic Ray sólo muta la copia staged y
+nunca el repositorio, pero ejecuta las pruebas elegidas y éstas pueden usar red.
+Toda la salida es advisory y conserva `mutation_authority=false`.
 
 Coverage usa branch coverage y contextos dinámicos por test/fase de Pytest, pero
 mide sólo el proceso principal. Un subprocess creado por las pruebas puede
@@ -247,6 +263,17 @@ selección, completitud, resultados, líneas/ramas y limitaciones. El work packa
 debe mostrar pruebas protectoras o `unprotected`/`not_evaluated`; jamás infiera
 protección por nombre. Un publication diff sólo puede aprobar los deltas de
 líneas y ramas cuando suite, alcance, configuración y herramientas coinciden.
+
+La corrida canónica H6 Run 9 terminó en 343.168 s: 585 candidatos, 2 procesados,
+583 por caché, 15 proveedores y 0 errores. Sobre
+`_04_Nucleo_Operativo.external_deep_coverage` /
+`external_deep_coverage._normalize`, Cosmic Ray seleccionó y completó 20/20 de
+524 mutantes generados: 5 killed, 5 survived, 10 incompetent, 0 timeout y score
+0.50. Run 10 tardó 23.996 s con 585/585 candidatos por caché, cero
+bytes/analyze/persist/graph y 14 replays; `installed-package-inventory` se
+recalculó. Las consultas read-only status, review y diff tardaron 38.982,
+47.675 y 57.856 s. Sus envelopes son architecture v2, engineering v1, review
+v10 compatible con v2-v9 y publication diff v8 compatible con v1-v7.
 
 El manifest guarda `Neocortex` como primer elemento de su argv canónico. Antes
 de promover el launcher estable, use la ruta exacta del runtime versionado para
@@ -483,7 +510,7 @@ Neocortex --code-doctor
   intérprete, con caché efímera propiedad de la corrida.
 - Pyright `1.1.411` se instala como paquete npm aislado junto al runtime y se
   invoca mediante Node. `--code-doctor --code-json` informa por separado los
-  doce proveedores estáticos y el proveedor profundo; la corrida incorpora la
+  13 proveedores estáticos y los dos proveedores profundos; la corrida incorpora la
   resolución exacta a su firma de entorno y comparabilidad.
 - Vulture `2.16` pertenece al runtime base y se invoca mediante su API
   programática aislada. Su finding es advisory y sólo el consumidor de consenso
@@ -498,6 +525,8 @@ Neocortex --code-doctor
   autofix deshabilitado; Deptry no instala ni retira dependencias; pip-audit
   declara acceso de red al crear su snapshot y nunca ejecuta `--fix`; el
   inventario instalado es local y no emite conclusiones jurídicas.
+- Git alimenta únicamente la historia local; Cosmic Ray `8.4.6` pertenece al
+  runtime base y sólo se activa con target y tests focales en `trusted-deep`.
 - La primera transcripción puede descargar el modelo Whisper. Use
   `--audio-local-models-only` para prohibir descargas.
 - Los modelos semánticos sólo se adquieren mediante
@@ -536,14 +565,15 @@ incremental. Tests de staging no sustituyen esa prueba end-to-end.
 No ejecute manualmente herramientas externas ni descargue modelos para validar
 una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
 validación del wheel debe confirmar Ruff, Mypy, Grimp, Complexipy, Vulture,
-Pytest, Coverage, Semgrep, Deptry, pip-audit y Packaging en la base, y la
-preparación de los perfiles trusted debe confirmar Node y el paquete Pyright
-aislado.
+Pytest, Coverage, Cosmic Ray, Semgrep, Deptry, pip-audit y Packaging en la base,
+y la preparación de los perfiles trusted debe confirmar Git, Node y el paquete
+Pyright aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
-estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo
-debe declarar `execution=cache_replay`, `process_invocations=0`, `cache_hits=1`
-y contadores de verificación coherentes. Findings, métricas y relaciones se
+estado y los mismos bytes. En `--code-status --code-json`, los proveedores
+reutilizables deben declarar `execution=cache_replay`, `process_invocations=0`,
+`cache_hits=1` y contadores de verificación coherentes; el inventario del entorno
+instalado se recalcula deliberadamente. Findings, métricas y relaciones se
 referencian desde la publicación original, sin duplicarse. El tiempo y bytes de
 la verificación siguen siendo costos reales del replay; cero procesos no
 significa costo cero. El replay verifica inputs; no significa
