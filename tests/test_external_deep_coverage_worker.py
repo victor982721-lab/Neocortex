@@ -20,6 +20,19 @@ from _04_Nucleo_Operativo.code_external_evidence import ExternalEvidenceFile
 from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes
 
 
+def test_bounded_diagnostic_preserves_the_root_cause_tail(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    scratch = tmp_path / "scratch"
+    diagnostic = f"{project}:" + ("setup context\n" * 100) + f"{scratch}: filename too long"
+
+    bounded = worker._bounded_diagnostic(diagnostic, project, scratch, 256)
+
+    assert len(bounded) == 256
+    assert bounded.startswith("$PROJECT:")
+    assert "...[truncated]..." in bounded
+    assert bounded.endswith("$SCRATCH: filename too long")
+
+
 def _project(root: Path) -> tuple[Path, Path]:
     project = root / "project"
     tests = project / "tests"
@@ -382,10 +395,11 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
         "    assert choose(True) == 1\n"
         "    git = shutil.which('git')\n"
         "    assert git is not None\n"
-        "    subprocess.run(\n"
-        "        [git, 'init', '--quiet', str(tmp_path / 'nested-repository')],\n"
-        "        check=True, capture_output=True, timeout=20,\n"
-        "    )\n\n"
+        "    completed = subprocess.run(\n"
+        "        [git, 'init', '--quiet', str(tmp_path / 'r')],\n"
+        "        capture_output=True, text=True, timeout=20,\n"
+        "    )\n"
+        "    assert completed.returncode == 0, completed.stderr\n\n"
         "def test_false():\n"
         "    assert choose(False) == 2\n",
         encoding="utf-8",
@@ -399,6 +413,9 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
         "    root = Path(os.environ['NEOCORTEX_AUDIT_LAB_ROOT']).resolve()\n"
         "    for name in ('TEMP', 'TMP', 'TMPDIR', 'PYTHONPYCACHEPREFIX'):\n"
         "        assert Path(os.environ[name]).resolve().is_relative_to(root)\n"
+        "    assert os.environ['GIT_CONFIG_COUNT'] == '1'\n"
+        "    assert os.environ['GIT_CONFIG_KEY_0'] == 'core.longpaths'\n"
+        "    assert os.environ['GIT_CONFIG_VALUE_0'] == 'true'\n"
         "    assert Path.home().is_dir()\n"
         "    assert shutil.which('git') is not None\n",
         encoding="utf-8",
@@ -438,8 +455,8 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
             digest.xxh3_64_guard,
         )
         owners[os.path.normcase(os.path.abspath(path))] = owner
-    stage = tmp_path / "stage"
-    scratch = tmp_path / "adapter-scratch"
+    stage = tmp_path / "g"
+    scratch = tmp_path / "s"
     stage.mkdir()
     scratch.mkdir()
     monkeypatch.setattr(deep, "_canonical_repository_root", lambda: project)
@@ -463,7 +480,7 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
     )
 
     assert first.measurement_complete is True
-    assert first.counters["tests_passed"] == 2
+    assert first.counters["tests_passed"] == 2, tuple(finding.message for finding in first.findings)
     assert first.counters["shards_reused"] == 0
     assert any(
         endpoint < 0

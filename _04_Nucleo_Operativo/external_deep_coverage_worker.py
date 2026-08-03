@@ -433,7 +433,10 @@ def _runtime_paths(scratch_root: Path, request_signature: str) -> RuntimePaths:
     worker_runs.mkdir(exist_ok=True)
     if not worker_runs.is_dir() or _is_reparse_point(worker_runs):
         raise WorkerContractError("unsafe_path", "worker scratch root is unsafe")
-    prefix = hashlib.sha256(request_signature.encode("utf-8")).hexdigest()[:16] + "-"
+    # The random suffix supplied by mkdtemp provides invocation uniqueness; an
+    # eight-character signature prefix is enough for local diagnostics and
+    # leaves headroom when trusted-deep tests exercise the worker recursively.
+    prefix = hashlib.sha256(request_signature.encode("utf-8")).hexdigest()[:8] + "-"
     invocation_root = Path(tempfile.mkdtemp(prefix=prefix, dir=worker_runs)).resolve(strict=True)
     _require_plain_tree_path(invocation_root, scratch_root, label="worker invocation scratch")
     _RUNTIME_ROOTS.append(invocation_root)
@@ -532,6 +535,9 @@ def _validate_tool_versions(raw: object, observed: Mapping[str, str]) -> None:
 def _execution_environment(project_root: Path, paths: RuntimePaths) -> Iterator[None]:
     updates = {
         "COVERAGE_FILE": os.fspath(paths.coverage_data),
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.longpaths",
+        "GIT_CONFIG_VALUE_0": "true",
         "NEOCORTEX_AUDIT_LAB_ROOT": os.fspath(paths.scratch_root),
         "NO_COLOR": "1",
         "PYTEST_ADDOPTS": "",
@@ -764,7 +770,10 @@ def _bounded_diagnostic(text: str, project_root: Path, scratch_root: Path, maxim
         normalized = "pytest did not provide a diagnostic"
     if len(normalized) <= maximum:
         return normalized
-    return normalized[: maximum - 14] + "...[truncated]"
+    marker = "\n...[truncated]...\n"
+    available = maximum - len(marker)
+    head = available // 2
+    return normalized[:head] + marker + normalized[-(available - head) :]
 
 
 def _test_evidence(
