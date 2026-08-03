@@ -28,7 +28,7 @@ No es una consulta read-only: crea o actualiza `framework.sqlite3`,
 trata como datos; nunca se ejecuta ni adquiere autoridad para pedir
 herramientas, permisos, red o mutaciones.
 
-## Plataforma de evidencia externa v1
+## Plataforma genérica de evidencia externa
 
 Code entrega a cada proveedor una lista explícita de versiones Python vigentes,
 con fingerprint exacto, no generadas y no vendorizadas; ningún proveedor
@@ -44,7 +44,7 @@ estado AST ni los demás resultados válidos.
 | Perfil | Proveedores | Configuración y confianza |
 |---|---|---|
 | `protected` (predeterminado) | `ruff-protected-basic` | Ruff `E4,E7,E9,F` con `--isolated`, sin configuración del proyecto. Es la frontera `untrusted-safe`. |
-| `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project` | Añade una política estática versionada sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
+| `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture`, `complexipy-cognitive` | Añade política estática, tipos, grafo de imports, contratos arquitectónicos y complejidad cognitiva sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
 
 Ruff trusted selecciona `E4,E7,E9,F,B,C4,PIE,RUF`. Omite deliberadamente
 `I,PT,SIM,UP`: ordenar imports, convenciones pytest, simplificación y
@@ -56,6 +56,32 @@ ejecutar todas las reglas configuradas en el repositorio.
 Ruff y Mypy se resuelven desde el mismo intérprete de NeoCortex; ambos forman
 parte de la base Python. Pyright `1.1.411` se mantiene como paquete npm aislado
 junto al runtime y se ejecuta mediante Node, no mediante scripts del proyecto.
+Grimp `3.15` y Complexipy `6.2.0` pertenecen también a la base Python. La
+selección focal conservó Grimp directo en lugar de envolver Import Linter
+`2.13`: ambos resultaron viables, pero Grimp entrega el grafo directamente en
+una API legible por máquina, mientras el reporte de contratos de Import Linter
+no ofrece un contrato JSON y duplicaría la misma dimensión. Complexipy se usa
+mediante su API `file_complexity`; su CLI devuelve un código distinto de cero al
+superar su umbral predeterminado, semántica que no equivale por sí misma a un
+fallo de proveedor.
+
+Los proveedores arquitectónicos conservan responsabilidades separadas:
+
+- `ruff-analyze-imports` ejecuta Ruff Analyze como oráculo diferencial de
+  imports, no como segundo dueño de los contratos;
+- `grimp-architecture` produce el grafo normalizado, relaciones
+  `module_import`, fan-in/fan-out, SCC/ciclos y evalúa los contratos v1;
+- `complexipy-cognitive` publica complejidad cognitiva por símbolo y agregados
+  total/máximo por módulo.
+
+El dominio arquitectónico exacto son `neocortex`, `_01_Enumeracion`,
+`_02_Deduplicacion`, `_03_Progreso`, `_04_Nucleo_Operativo` y
+`_05_Interfaz`. `tests`, `tools`, `benchmarks` y el módulo de compatibilidad
+independiente `Orquestador.py` quedan fuera de ese grafo de producción. Los
+contratos `neocortex.code-architecture-contracts/v1` fijan fronteras reales,
+allowlists explícitas y la membresía exacta de los SCC ya conocidos como
+baseline `no-new`; no afirman que la arquitectura actual sea acíclica.
+
 Cada adaptador usa salida estructurada, cwd/entorno controlados, caché efímera o
 deshabilitada, límites de proceso, tiempo, memoria, inputs, diagnósticos y
 salida. Todas las formas de fix permanecen deshabilitadas. Los descriptores
@@ -69,12 +95,21 @@ interpreta silencio como aprobación. Si uno no está listo, el resumen queda
 `not_comparable`. El estado reserva la categoría `contradictory`, pero la
 versión vigente no infiere contradicciones semánticas entre mensajes.
 
-Cada ejecución registra contrato, inputs y findings normalizados en Code v3,
-además de contadores como archivos/bytes verificados, bytes leídos o staged,
+Cada ejecución registra contrato, inputs y findings normalizados. Code schema
+v4 conserva compatibilidad de lectura/migración con v1-v3 y añade
+`external_metrics` y `external_relations`: identidades portables, sujeto o
+extremos tipados, categoría/nombre/valor/unidad, dirección, confianza y metadata
+determinista. Estas tablas tienen productor en los proveedores arquitectónicos
+y consumidores en status, review, diff y work packages; no son un almacén
+genérico sin uso. También registra contadores como archivos/bytes verificados,
+bytes leídos o staged,
 invocaciones, stdout/stderr, tiempo, findings, errores, timeouts y hits/misses de
 caché. Un replay exacto vuelve a verificar todos los fingerprints, registra
 `execution=cache_replay`, referencia la publicación completa y no abre procesos
-ni duplica findings. La suite, sus proyecciones compatibles y la finalización
+ni duplica findings, métricas o relaciones. Counters de replay deben declarar
+`process_invocations=0`, hits de caché y el costo real de volver a verificar los
+inputs; no se reetiqueta ese costo como cero. La suite, sus proyecciones
+compatibles y la finalización
 de Code se confirman atómicamente. Una corrida parcial, indisponible o fallida
 no puede aprobar su gate ni aparentar frescura.
 
@@ -239,9 +274,15 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v5` conserva las capas v2/v3 y la proyección
+El contrato `neocortex.code-review/v6` conserva compatibilidad con v2-v5 y la proyección
 legacy `external_evidence`; añade `external_evidence_suite` con perfil, estado,
-proveedores, cobertura, counters, gates y consenso de tipos. Esta evidencia no
+proveedores, cobertura, counters, gates y consenso de tipos. Añade además
+`architecture_analysis`, que consume métricas/relaciones persistidas y resume
+módulos, símbolos, imports, SCC, ciclos, contratos y tres estados explícitos:
+`import_graph_consensus`, `architecture_contracts` y
+`module_complexity_displacement`. Cada estado puede quedar `not_evaluated`; la
+ausencia de un proveedor o baseline comparable nunca equivale a aprobación.
+Esta evidencia no
 cambia ranking, actionability o selección de paquetes. `findings` selecciona
 sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
 enumera hasta 10 000 hotspots y mantiene el ranking v2 auditable. Devuelve 10
@@ -281,10 +322,13 @@ hotspots, aunque la vista solicitada sea menor. Sólo incorpora
 a través de un símbolo Python vigente, completo, no generado y de producción.
 No usa coincidencias de nombre, ruta, módulo ni caller compartido. Cada relación
 conserva profundidad, símbolo puente, confianza mínima y provenance; el paquete
-expone riesgo conservador, contratos, orden de ejecución, validación y los gates
+expone riesgo conservador, módulo primario, contratos afectados, cadenas de
+imports acotadas, orden de ejecución, validación y los gates
 históricos de caracterización exacta, cero hotspots sustitutos, cero
 resoluciones corregidas/perdidas y replay completamente incremental. También
-expone los gates de proveedor normalizados. Cada uno sólo puede aprobarse frente
+expone los gates de proveedor normalizados y los gates arquitectónicos
+`architecture_contracts_not_degraded`, `no_new_import_cycles` y
+`module_complexity_not_displaced`. Cada uno sólo puede aprobarse frente
 a una línea base comparable del mismo adaptador, versión, configuración y
 entorno. La primera publicación sana queda `baseline`; si falta el proveedor o
 cambia su firma queda `not_evaluated` o `abstained` sin borrar los demás. Los
@@ -380,9 +424,9 @@ iguales.
 ## Comparación read-only entre publicaciones
 
 `--code-publication-diff` convierte la comparación de dos publicaciones Code
-en una operación canónica, acotada y determinista. El envelope v3 conserva
-compatibilidad declarada con v1/v2 y añade deltas por proveedor y un veredicto
-agregado. El argumento identifica el
+en una operación canónica, acotada y determinista. El envelope v4 conserva
+compatibilidad declarada con v1-v3 y añade deltas arquitectónicos a los deltas
+por proveedor y al veredicto agregado. El argumento identifica el
 estado baseline; `--state-directory` identifica la publicación actual:
 
 ```powershell
@@ -409,6 +453,15 @@ la proyección compatible; los proveedores ausentes o incompatibles producen
 `not_evaluated`, no corrupción ni un falso aprobado. El veredicto no convierte
 una suite parcial en certeza y conserva las limitaciones observadas.
 
+Cuando los proveedores arquitectónicos y su dominio son comparables, el diff
+informa por módulo deltas de fan-in, fan-out y complejidad total/máxima, cambios
+de relaciones de import y SCC/ciclos, así como contratos que mejoran o se
+degradan. `module_complexity_displacement` sólo puede evaluarse en esa
+comparación: detecta que una reducción aparente de un objetivo reaparezca en
+otro símbolo o módulo relacionado, sin convertir la métrica en probabilidad de
+defecto. Un primer snapshot queda `baseline`; cambio de versión, configuración,
+entorno, raíz o cobertura deja la dimensión `not_evaluated` y explica la causa.
+
 ## Mini-root de laboratorio
 
 Use contenido sintético y dos hermanos disjuntos. No copie el corpus real para
@@ -427,7 +480,7 @@ Neocortex --state-directory $MiniState --code-review --code-json
 El ejemplo presupone que un fixture sintético de 20–50 archivos ya creó
 `$MiniRoot`; esa raíz acotada es el límite físico y permite una publicación
 completa del perfil `protected`. Para probar `trusted-static`, el fixture debe
-incluir su `pyproject.toml` versionado y el runtime debe contener los cuatro
+incluir su `pyproject.toml` versionado y el runtime debe contener los siete
 proveedores. No autoriza
 crear, copiar o limpiar datos fuera del laboratorio. Use un estado nuevo por
 secuencia aislada; para validar full→incremental/no-op/cambio, reutilice ese

@@ -134,8 +134,11 @@ argv canónicos `analyze`/`status` como arrays, no como texto de shell.
 `--analysis-profile protected` es el valor predeterminado: Ruff observa los
 Python vigentes publicados por Code con fingerprint exacto y usa la política
 aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade Ruff con
-la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright como ejecuciones
-separadas. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
+la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
+Grimp y Complexipy como ejecuciones separadas. Ruff Analyze funciona como
+oráculo diferencial del grafo; Grimp produce imports, fan-in/fan-out, SCC,
+ciclos y contratos; Complexipy produce complejidad cognitiva por símbolo y
+módulo. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
 modernización en el resultado prioritario. Sólo debe usarse con una raíz
 confiable porque lee `pyproject.toml`;
 aun así no importa ni ejecuta sus módulos, no usa red, no aplica fixes y toda la
@@ -155,15 +158,21 @@ cualquiera de ellas, causa abstención total con código `2` sin tocar el estado
 La salida añade `analysis_profile` y `external_evidence_suite`: lista cada
 proveedor, versión, ejecución, cobertura, findings, comparabilidad, gate y
 counters; `type_consensus` conserva por separado coincidencias y discrepancias
-Mypy/Pyright.
+Mypy/Pyright. `architecture_analysis` muestra consenso del grafo, módulos,
+imports, SCC, contratos, complejidad y limitaciones. Un proveedor ausente o una
+publicación no comparable queda `not_evaluated`, no `passed`. En review, el
+work package expone `architecture_contracts_not_degraded`,
+`no_new_import_cycles` y `module_complexity_not_displaced`; no son permisos de
+edición.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v5` conserva los campos y significados v2/v3 y
+envelope `neocortex.code-review/v6` conserva compatibilidad con v2-v5 y
 la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
 recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
 ranking, además de un `work_package`
 determinista con una sola recomendación raíz, guards alcanzados por llamadas
-confirmadas a uno o dos saltos, riesgo agregado, contratos, pasos y gates. El
+confirmadas a uno o dos saltos, riesgo agregado, módulo primario, contratos
+afectados, cadenas de imports acotadas, pasos y gates. El
 pool del planificador siempre es el top 50, independientemente de la vista; no
 agrupa por nombre o directorio y los guards exigen caracterización antes de
 cualquier cambio. `--code-review-limit N --code-json` permite inspeccionar entre
@@ -176,12 +185,13 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v3`, compatible con v1/v2, informa calls comunes y
-exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
+envelope `neocortex.code-publication-diff/v4`, compatible con v1-v3, informa
+calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
 gate y veredicto agregado; los restantes quedan `not_evaluated` con su
-limitación. Nunca aplica cambios.
+limitación. Cuando la arquitectura es comparable añade deltas por módulo,
+imports, SCC/ciclos, contratos y complejidad desplazada. Nunca aplica cambios.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -270,7 +280,8 @@ audio, código y estado semántico.
 `--code-doctor --code-json` proyecta además
 `external_evidence_providers` para `ruff-protected-basic`,
 `ruff-trusted-project`, `mypy-trusted-project` y
-`pyright-trusted-project`, con disponibilidad, versión y autoridad advisory.
+`pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture` y
+`complexipy-cognitive`, con disponibilidad, versión y autoridad advisory.
 La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
 por sí sola al proveedor protected.
 

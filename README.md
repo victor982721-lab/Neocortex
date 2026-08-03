@@ -223,12 +223,22 @@ sólo lectura. El perfil predeterminado `protected` ejecuta Ruff con una políti
 fija `E4,E7,E9,F`, aislada de la configuración del proyecto. Para una raíz que
 Victor haya declarado confiable, `--analysis-profile trusted-static` añade,
 como proveedores independientes, Ruff con la política versionada del proyecto,
-acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright. Ruff trusted omite
+acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze, Grimp y
+Complexipy. Ruff trusted omite
 deliberadamente `I,PT,SIM,UP`: esas familias de estilo, tests y modernización no
 deben ahogar la señal de mantenimiento en esta etapa. Los dos type checkers
 conservan hallazgos separados y publican
 un resumen explícito de coincidencias y discrepancias; la ausencia de uno queda
 `not_comparable`, nunca se disfraza de consenso.
+
+Los tres proveedores de arquitectura tienen contratos distintos: Ruff Analyze
+(`ruff-analyze-imports`) actúa como oráculo diferencial del grafo; Grimp
+(`grimp-architecture`) produce relaciones de import, fan-in/fan-out, SCC,
+ciclos y evaluaciones de contratos; Complexipy (`complexipy-cognitive`) publica
+complejidad cognitiva por símbolo y sus agregados por módulo. Los contratos v1
+se derivan de los seis paquetes de producción y conservan explícitamente las
+fronteras permitidas y los ciclos ya existentes como baseline `no-new`; no
+presentan la arquitectura actual como acíclica.
 
 Todos los proveedores trabajan sobre copias verificadas, tienen límites,
 publican versión, firmas, cobertura, contadores de proceso/bytes/tiempo/caché y
@@ -252,14 +262,20 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v5 conserva las capas anteriores, el ranking bruto y
+explicable. El envelope v6 conserva las capas anteriores, el ranking bruto y
 hasta tres recomendaciones `act_now`, y añade
 `external_evidence_suite` con los proveedores y gates normalizados sin alterar
-ranking ni actionability. Mantiene un
+ranking ni actionability. La proyección `architecture_analysis` consume las
+métricas y relaciones portables del schema Code v4 y muestra módulos, imports,
+SCC, contratos y los estados `import_graph_consensus`,
+`architecture_contracts` y `module_complexity_displacement`; ausencia o falta
+de comparabilidad nunca se convierte en `passed`. Mantiene un
 único `work_package` como siguiente cambio coherente.
 Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
 los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
-y enumera contratos, orden, validación y gates de publicación. El horizonte de
+y enumera contratos, cadenas de imports acotadas, orden, validación y gates de
+arquitectura/publicación: `architecture_contracts_not_degraded`,
+`no_new_import_cycles` y `module_complexity_not_displaced`. El horizonte de
 planeación permanece fijo en 50 aunque la vista muestre 10; no agrupa por nombre,
 directorio ni prefijo de módulo. `--code-review-limit N --code-json` amplía de 1
 a 50 la vista auditable. La consulta es estrictamente read-only y el paquete es
@@ -269,11 +285,13 @@ resolución de llamadas. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` v3 compara dos publicaciones Code completadas sin
+`--code-publication-diff` v4 compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
 hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
-coinciden, además de un veredicto agregado que conserva limitaciones parciales.
+coinciden. Añade deltas de métricas por módulo, contratos, ciclos y complejidad
+desplazada cuando ambas publicaciones son comparables, además de un veredicto
+agregado que conserva limitaciones parciales.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
