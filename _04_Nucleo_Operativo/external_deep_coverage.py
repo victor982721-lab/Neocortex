@@ -781,9 +781,20 @@ def _validate_arc(value: object, *, label: str) -> tuple[int, int]:
     raw = _required_list(value, label=label)
     if len(raw) != 2:
         raise ValueError(f"{label} must contain two lines")
+
+    def endpoint(candidate: object, *, endpoint_label: str) -> int:
+        if (
+            isinstance(candidate, bool)
+            or not isinstance(candidate, int)
+            or candidate == 0
+            or abs(candidate) > 10_000_000
+        ):
+            raise ValueError(f"{endpoint_label} is invalid")
+        return candidate
+
     return (
-        _required_int(raw[0], label=f"{label} source"),
-        _required_int(raw[1], label=f"{label} target"),
+        endpoint(raw[0], endpoint_label=f"{label} source"),
+        endpoint(raw[1], endpoint_label=f"{label} target"),
     )
 
 

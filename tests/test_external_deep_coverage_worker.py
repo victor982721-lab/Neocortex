@@ -365,7 +365,13 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
     tests.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "logic.py").write_text(
-        "def choose(value):\n    if value:\n        return 1\n    return 2\n",
+        "def choose(value):\n"
+        "    if value:\n"
+        "        return 1\n"
+        "    return 2\n\n"
+        "def uncovered_exit(value):\n"
+        "    if value:\n"
+        "        return 3\n",
         encoding="utf-8",
     )
     (tests / "test_logic.py").write_text(
@@ -449,6 +455,12 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
     assert first.measurement_complete is True
     assert first.counters["tests_passed"] == 2
     assert first.counters["shards_reused"] == 0
+    assert any(
+        endpoint < 0
+        for metric in first.metrics
+        for arc in metric.metadata.get("missing_branch_arcs", ())
+        for endpoint in arc
+    )
     assert any(
         metric.subject_kind == "symbol" and metric.metadata["qualified_name"].endswith(".choose")
         for metric in first.metrics

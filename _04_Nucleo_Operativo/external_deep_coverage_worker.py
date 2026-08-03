@@ -47,6 +47,7 @@ HARD_MAX_CONTEXTS = 250_000
 HARD_MAX_REQUEST_BYTES = 16 * 1024 * 1024
 HARD_MAX_NODEID_CHARS = 16_384
 HARD_MAX_PATH_CHARS = 4_096
+HARD_MAX_LINE_MAGNITUDE = 10_000_000
 _FINGERPRINT_GUARD_SEED = 0x4E454F43
 
 _COMMON_REQUEST_KEYS = frozenset(
@@ -936,7 +937,10 @@ def _coverage_payloads(
                     not isinstance(value, list)
                     or len(value) != 2
                     or any(
-                        not isinstance(part, int) or isinstance(part, bool) or part < 0
+                        not isinstance(part, int)
+                        or isinstance(part, bool)
+                        or part == 0
+                        or abs(part) > HARD_MAX_LINE_MAGNITUDE
                         for part in value
                     )
                 ):

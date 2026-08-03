@@ -411,6 +411,10 @@ def test_trusted_root_and_public_bounds_fail_closed(
     with pytest.raises(ValueError, match="deterministically sorted"):
         _config(selectors=("tests/test_z.py", "tests/test_a.py"))
 
+    assert deep._validate_arc([12, -5], label="coverage branch") == (12, -5)
+    with pytest.raises(ValueError, match="source is invalid"):
+        deep._validate_arc([0, 5], label="coverage branch")
+
 
 def test_prepared_input_reports_real_support_cost_and_is_reusable(
     tmp_path: Path,
