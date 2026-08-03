@@ -1,77 +1,72 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 6 aceptado desde wheel aislado; listo para publicación.
+> Actualizado: 2026-08-03, Hito 7 aceptado desde wheel aislado; listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-Los Hitos 1 a 5 ya están publicados. El candidato
-`codex/neocortex-mutation-history-graph-v1` cerró la aceptación instalada del
-**Hito 6** y está listo para commit, push, PR y merge. `trusted-static` tiene
-trece proveedores y `trusted-deep`, quince: el primero añade historia Git local
-y el segundo añade mutación focal con Cosmic Ray a la suite Coverage ya
-existente. Los contratos públicos vigentes son
-`neocortex.code-architecture-analysis/v2`,
-`neocortex.code-engineering-analytics/v1`, `neocortex.code-review/v10`
-compatible con v2-v9 y `neocortex.code-publication-diff/v8` compatible con
-v1-v7. Los proveedores nuevos publican
-`neocortex.git-history-local/v1` y
-`neocortex.cosmic-ray-focal-mutation/v1`.
+Los Hitos 1 a 6 ya están publicados mediante los PR #14 a #19. El candidato
+`codex/neocortex-self-analysis-integration-v1` cerró la aceptación instalada del
+**Hito 7** y con ello la implementación funcional del programa multianalizador.
+`Neocortex --code-query` consume status, review y diff publicados y filtra por
+proveedor, categoría, módulo, estado, delta y work package. Su schema es
+`neocortex.code-analysis-query/v1`; conserva `aggregate_score=null`,
+`defect_probability=null`, `authority=advisory` y
+`mutation_authority=false`.
 
 El wheel candidato está en
-`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito6-mutation-history-20260803-rc3\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
-Tiene 1 580 823 bytes, 297 miembros, integridad ZIP y `pip check` limpios, y
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito7-integration-20260803-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 589 930 bytes, 298 miembros, integridad ZIP y `pip check` limpios, y
 SHA-256
-`7CA6C693847869DF5D18139F9C2F2D22D7F890991077A06A2A86A96D9B54CA11`.
-Los 23 módulos de producción comparados fueron byte-idénticos entre fuente,
-wheel e instalación. La aceptación usó Python 3.13.14, Cosmic Ray 8.4.6, Node
-24.18.1 y Pyright 1.1.411. El launcher estable no fue promovido.
+`3B5687DE15B51EA5A2A22190AF999D11CFC720CED8BA617AD068D08D0B4B9087`.
+Los cuatro módulos públicos comparados fueron byte-idénticos entre fuente,
+wheel e instalación. La aceptación usó Python 3.13.14, Node 24.18.1 y Pyright
+1.1.411; `doctor capabilities` confirmó la capacidad Code del venv candidato.
+El launcher estable no fue promovido.
 
-La corrida instalada final (`analysis_run_id=9`) inventarió 598 archivos,
-evaluó 585 candidatos Code, procesó 2 y reutilizó 583. Persistió 172 712 bytes,
-terminó sin errores y dejó los quince proveedores `ready`: 308 962 ms de ruta
-externa y 343 168 ms totales. Cosmic Ray aprobó su baseline en 2 915 ms, generó
-524 mutantes y seleccionó/completó 20: 5 `killed`, 5 `survived`, 10
-`incompetent` y 0 timeout. La medición focal quedó completa, con mutation score
-0.50, 66 765 ms de pared, 22 procesos y 523 archivos/9 721 508 bytes
-staged y verificados; publicó 15 findings, 13 métricas y 3 relaciones.
+La corrida instalada 11 inventarió 604 archivos y evaluó 591 candidatos Code:
+procesó 64, reutilizó 527, publicó 18 444 símbolos, 98 681 referencias y 1 584
+diagnósticos de los quince proveedores, sin errores. Duró 356 807 ms, de los
+cuales 319 299 ms pertenecen a la ruta externa. Los proveedores abrieron 70
+procesos, leyeron 122 267 845 bytes, staged 95 242 230 y verificaron
+114 800 744, con 0 timeouts y 0 errores.
 
-La corrida 10 demostró replay exacto: 585/585 hits de caché, 0 bytes y 0 ms de
-análisis, persistencia y grafo, catorce proveedores reproducidos desde caché,
-2 860 ms externos y 23 996 ms totales. El replay de Cosmic reutilizó la
-publicación de la corrida 9, abrió 0 procesos y reverificó 9 721 508 bytes en
-aproximadamente 70 ms. `installed-package-inventory` se recalcula en cada
-corrida, sin subprocesos, para comprobar el wheel instalado efectivo.
-Los 3 findings Deptry y 3 avisos pip-audit de Hito 5, junto con sus gates
-fallidos, siguen publicados en la corrida 10; Hito 6 no los resolvió ni los
-oculta.
+La corrida 12 demostró replay exacto en 25 076 ms: 591/591 hits, 0 bytes Code,
+0 ms de read/analyze/persist/graph, catorce publicaciones externas desde caché
+y 2 751 ms externos. `installed-package-inventory` se recalculó; los probes
+de replay sumaron tres procesos acotados. El status final registra 15
+proveedores `ready` y cero errores.
 
-Las lecturas instaladas terminaron con JSON válido, stderr vacío y cero
-sidecars: status en 38 982 ms, review en 47 675 ms y diff en 57 856 ms.
-Engineering quedó `ready` sobre 283 módulos, mutation score 0.50 y gates
-`baseline`, `complete` y `recorded` aprobados; no publica `aggregate_score` ni
-`defect_probability`. Arquitectura v2 registró 283 módulos, 1 115 imports,
-4 SCC cíclicos, 6 contratos evaluados/0 fallos y 0 desacuerdos del grafo.
+Las superficies instaladas devolvieron JSON válido y stderr vacío: status v4
+en 33 029 ms, review v10 en 41 311 ms y diff v8 contra Hito 6 en 66 279 ms.
+Las tres consultas públicas demostraron 3/256 registros para Pyright, 1/591 para
+la combinación mutación+módulo+estado+work package y 1/32 para
+`deptry-project-dependencies + unchanged`. El diff está `ready` con veredicto
+`incomparable` por cambio de firma; supply chain conserva deltas iguales a cero
+y no se inventa una mejora o regresión.
 
-La suite Coverage declarada aprobó 8/8 pruebas. La medición parcial del proyecto
-fue 1 669/57 536 líneas (2.9008 %) y 248/18 388 ramas (1.3487 %); el módulo
-objetivo obtuvo 632/765 líneas (82.61 %) y 162/258 ramas (62.79 %). Historia Git
-publicó 10 460 métricas y 859 relaciones; para el objetivo observó 5 commits y
-churn 1 718. El work package vigente es
-`_04_Nucleo_Operativo.external_deep_coverage`, símbolo
-`external_deep_coverage._normalize`, con objetivo
-`reduce_confirmed_hotspots_without_contract_regression`.
+Arquitectura quedó `ready`: 284 módulos, 1 116 imports, 4 SCC conocidos, 6
+contratos y 0 discrepancias del grafo. Coverage aprobó 8/8 pruebas; la medición
+parcial fue 1 669/57 965 líneas (2.8793 %) y 248/18 602 ramas (1.3332 %). El
+símbolo objetivo obtuvo 152/169 líneas (89.94 %) y 48/66 ramas (72.73 %) con
+siete pruebas protectoras. Mutación conserva score 0.50 y sus tres gates
+aprobados. El consenso no usado publicó 255 candidatos: 47 explicados, 14 con
+uso dinámico posible, 194 insuficientes y 0 de consenso alto.
 
-El diff contra Hito 5 está `ready`, pero su veredicto es `incomparable`. La
-arquitectura queda `not_evaluated` porque cambiaron firmas y Hito 6 no existía
-en el baseline; no se inventa mejora ni regresión. Toda la evidencia conserva
-`authority=advisory` y `mutation_authority=false`. `trusted-deep` sólo acepta la
-identidad física exacta de la raíz canónica y ejecuta contenido/pruebas. Cosmic
-Ray declara `uses_network=true` porque esas pruebas podrían usar red, pero muta
-únicamente una copia staged verificada: no tiene autoridad para modificar el
-repositorio, el corpus ni el estado durable. No se procesó corpus personal.
+Permanecen visibles 3 findings Deptry, 3 advisories actuales de `mcp`, 157
+findings Ruff trusted y la deuda SQLite `journal_mode=delete`. Sus gates fallidos
+o no evaluados no se ocultan. El único work package vigente sigue siendo
+`_04_Nucleo_Operativo.external_deep_coverage` /
+`external_deep_coverage._normalize`, con siete pruebas, quince cadenas de import
+y gates de arquitectura, Coverage, tipos, mutación y supply chain.
+
+El workflow `Neocortex CI` separa carriles Windows/Python 3.13 `fast`,
+`standard` y `deep`; standard construye e instala el wheel, y deep permanece
+semanal/manual y limitado a contratos/fixtures. El informe factual único está
+en `docs/SELF_ANALYSIS_PROGRAM_REPORT_2026-08-03.md`. No se procesó corpus,
+no se tocó estado durable vivo y no se promovió el launcher estable.
 
 ## Checkpoints anteriores
 
@@ -1305,14 +1300,16 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Publicar y fusionar el Hito 6.** Crear el PR desde el candidato aceptado,
-   fusionarlo y verificar `main == origin/main` antes de abrir el siguiente
-   corte. La comparabilidad ausente frente a Hito 5 es evidencia explícita, no
-   motivo para inventar un veredicto.
-2. **Implementar y aceptar el Hito 7.** Unificar filtros, modelo
-   multidimensional, fixtures, pruebas adversariales/property, CI por carriles,
-   wheel instalado, baseline/replay/diff, documentación y cierre factual del
-   programa. Sólo entonces marcar el objetivo compuesto como completado.
+1. **Publicar y fusionar el Hito 7.** Crear el PR desde el candidato aceptado,
+   fusionarlo sin esperar checks remotos por autorización de Victor y verificar
+   `main == origin/main`. Éste es el cierre del programa compuesto.
+2. **Usar el work package publicado.** Caracterizar y reducir
+   `external_deep_coverage._normalize`, preservar sus siete pruebas y gates, y
+   cerrar el cambio con un único replay/diff comparable. Reconciliar antes los
+   gates Deptry/pip-audit o declarar su no aplicabilidad con evidencia.
+3. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
+   33-66 s; una proyección publicada de consultas es trabajo futuro justificable,
+   pero no invalida la entrega funcional actual.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
 autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni

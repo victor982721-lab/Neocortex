@@ -412,6 +412,15 @@ s: 585/585 candidatos por caché, cero bytes/analyze/persist/graph y 14 replays;
 el inventario instalado se recalculó. Status, review y diff tardaron 38.982,
 47.675 y 57.856 s, respectivamente.
 
+La aceptación H7 desde wheel ejecutó run 11 en 356.807 s sobre 591 candidatos
+(64 procesados, 527 por caché), 15 proveedores y cero errores. Run 12 demostró
+replay exacto en 25.076 s con 591/591 hits, cero bytes y cero milisegundos de
+read/analyze/persist/graph. Status, review y diff públicos tardaron 33.029,
+41.311 y 66.279 s; las consultas instaladas combinaron proveedor, categoría,
+módulo, estado, delta y work package con resultados acotados y sin score mágico.
+El cierre factual completo está en
+[Programa de autoanálisis multianalizador](docs/SELF_ANALYSIS_PROGRAM_REPORT_2026-08-03.md).
+
 La corrida normal usa el mismo baseline portable cuando USN no existe o deja
 de estar disponible: publica el snapshot completo con cursor nulo y las rutas
 comparan ese inventario contra sus caches. USN permanece como acelerador en
