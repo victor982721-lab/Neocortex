@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import _04_Nucleo_Operativo.external_evidence_providers as providers_module
+import _04_Nucleo_Operativo.external_mutation_cosmic_ray as mutation_module
 from _04_Nucleo_Operativo.code_contracts import (
     LEGACY_DEEP_CONFIGURATION_SCHEMA,
     deep_configuration_payload,
@@ -118,12 +119,28 @@ def test_full_stages_exact_copy_and_replay_preserves_adapter_costs(
     scratch.mkdir()
     payload, signature = _deep_payload()
     monkeypatch.setattr(providers_module, "cosmic_ray_tool_version", lambda: "8.4.6")
+    executable_path = str(tmp_path / "trusted-tools")
+    executable_extensions = ".EXE;.CMD"
+    home_directory = tmp_path / "trusted-home"
+    home_directory.mkdir()
+    monkeypatch.setattr(
+        providers_module,
+        "trusted_deep_home_directory",
+        lambda: str(home_directory),
+    )
+    monkeypatch.setenv("PATH", executable_path)
+    monkeypatch.setenv("PATHEXT", executable_extensions)
     observed_stage_roots: list[Path] = []
 
-    def execute(stage_root, staged, _environment, *, trusted_root, scratch_root, config):
+    def execute(stage_root, staged, environment, *, trusted_root, scratch_root, config):
         observed_stage_roots.append(stage_root)
         assert trusted_root == root
         assert scratch_root.is_dir()
+        assert environment["PATH"] == executable_path
+        assert environment["PATHEXT"] == executable_extensions
+        assert environment["HOME"] == str(home_directory)
+        if providers_module.os.name == "nt":
+            assert environment["USERPROFILE"] == str(home_directory)
         assert config.target_relative_path == "pkg/logic.py"
         assert tuple(sorted(item.relative_path for item in staged.values())) == (
             "pkg/logic.py",
@@ -186,6 +203,81 @@ def test_full_stages_exact_copy_and_replay_preserves_adapter_costs(
     assert replay.counters["bytes_staged"] == 0
     assert replay.counters["files_verified"] == 2
     assert replay.counters["bytes_verified"] == sum(item.size for item in files)
+
+
+def test_mutation_environment_signature_covers_executable_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _target, _files = _project(tmp_path)
+    payload, signature = _deep_payload()
+    monkeypatch.setattr(providers_module, "cosmic_ray_tool_version", lambda: "8.4.6")
+    monkeypatch.setenv("PATH", str(tmp_path / "tools-a"))
+    monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
+    first = CosmicRayFocalMutationProvider(root, payload, signature)
+
+    monkeypatch.setenv("PATH", str(tmp_path / "tools-b"))
+    second = CosmicRayFocalMutationProvider(root, payload, signature)
+
+    assert first.descriptor.environment_signature != second.descriptor.environment_signature
+
+
+def test_real_provider_baseline_preserves_git_executable_discovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if mutation_module.cosmic_ray_tool_version() != "8.4.6":
+        pytest.skip("Cosmic Ray 8.4.6 is not installed in the active test runtime")
+    root = tmp_path / "root"
+    package = root / "pkg"
+    tests = root / "tests"
+    package.mkdir(parents=True)
+    tests.mkdir()
+    target = package / "logic.py"
+    target.write_text("def choose(value):\n    return 1 if value else 2\n", encoding="utf-8")
+    test = tests / "test_logic.py"
+    test.write_text(
+        "import shutil\n\n"
+        "from pkg.logic import choose\n\n"
+        "def test_choose_and_git_discovery():\n"
+        "    assert shutil.which('git') is not None\n"
+        "    assert choose(True) == 1\n",
+        encoding="utf-8",
+    )
+    (root / "pyproject.toml").write_text(
+        "[tool.ruff]\n[tool.mypy]\n[tool.pyright]\n",
+        encoding="utf-8",
+    )
+    files = (_owner(root, "pkg/logic.py", 1), _owner(root, "tests/test_logic.py", 2))
+    payload = deep_configuration_payload(
+        analysis_profile="trusted-deep",
+        test_selectors=("tests/test_logic.py::test_choose_and_git_discovery",),
+        max_tests=1,
+        time_budget_seconds=60,
+        shard_size=1,
+        mutation_target="pkg/logic.py",
+        mutation_symbol="pkg.logic.choose",
+        mutation_max_mutants=2,
+        mutation_timeout_seconds=10,
+        mutation_time_budget_seconds=60,
+    )
+    signature = deep_configuration_signature(payload)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    before = target.read_bytes()
+    monkeypatch.setattr(mutation_module, "_canonical_repository_root", lambda: root)
+    publication = CosmicRayFocalMutationProvider(root, payload, signature).run(
+        root,
+        files,
+        baseline=None,
+        scratch_root=scratch,
+    )
+
+    assert publication.status == "completed", publication.publication.provenance.get("error")
+    assert publication.execution == "full"
+    assert publication.coverage_complete is True
+    assert publication.counters["process_invocations"] >= 2
+    assert target.read_bytes() == before
 
 
 def test_legacy_and_missing_target_abstain_without_execution(

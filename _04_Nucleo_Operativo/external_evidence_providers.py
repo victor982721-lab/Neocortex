@@ -3292,6 +3292,7 @@ class CosmicRayFocalMutationProvider:
         configured_budget = 10.0 if self.config is None else self.config.time_budget_seconds
         configured_mutants = 1 if self.config is None else self.config.max_mutants
         pytest_version = _package_version("pytest") or "unavailable"
+        self._home_directory = trusted_deep_home_directory()
         environment_signature = external_signature(
             "cosmic-ray-focal-environment-v1",
             {
@@ -3301,6 +3302,9 @@ class CosmicRayFocalMutationProvider:
                 "platform": platform.platform(),
                 "cosmic_ray_version": version,
                 "pytest_version": pytest_version,
+                "home_directory": self._home_directory,
+                "path": os.environ.get("PATH"),
+                "pathext": os.environ.get("PATHEXT"),
             },
         )
         self.descriptor = _provider_descriptor(
@@ -3501,6 +3505,17 @@ class CosmicRayFocalMutationProvider:
                 stage_root = Path(temporary)
                 staged = _stage_external_inputs(files, stage_root / "source")
                 environment = _controlled_environment()
+                # trusted-deep executes the repository's declared tests.  Keep
+                # their executable discovery equivalent to the validated host
+                # environment (notably Git-based fixtures) while retaining the
+                # generic provider's otherwise minimal environment.
+                environment["HOME"] = self._home_directory
+                if os.name == "nt":
+                    environment["USERPROFILE"] = self._home_directory
+                for name in ("PATH", "PATHEXT"):
+                    value = os.environ.get(name)
+                    if value:
+                        environment[name] = value
                 for name in ("TEMP", "TMP", "TMPDIR"):
                     environment[name] = str(durable_scratch)
                 execution = self.executor(

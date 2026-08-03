@@ -174,10 +174,7 @@ def test_real_current_work_package_external_deep_coverage_normalize(tmp_path: Pa
         "scratch_root": str(scratch.resolve()),
         "target": target_relative,
         "symbol": "external_deep_coverage._normalize",
-        "test_selectors": [
-            "tests/test_external_deep_coverage.py::"
-            "test_normalizes_canonical_metrics_context_relations_and_missing_ranges"
-        ],
+        "test_selectors": ["tests/test_external_deep_coverage.py"],
         "configuration_signature": "deep-configuration-v2:current-work-package",
         "measurement_scope_signature": "cosmic-ray-mutation-input-v1:current-work-package",
         "source_manifest": manifest,
@@ -193,7 +190,7 @@ def test_real_current_work_package_external_deep_coverage_normalize(tmp_path: Pa
     request_path = tmp_path / "work-package-request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
 
-    payload = _run(python, request_path, timeout=210)
+    payload = _run(python, request_path, timeout=180)
 
     assert payload["canonical_symbol"] == ("_04_Nucleo_Operativo.external_deep_coverage._normalize")
     assert payload["counts"]["selected"] == payload["counts"]["completed"] == 2
