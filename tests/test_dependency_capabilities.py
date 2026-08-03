@@ -1,4 +1,4 @@
-"""Minimal-install metadata and safe optional-capability boundaries."""
+"""Canonical-install metadata and safe optional-capability boundaries."""
 
 
 # region [01] Imports, metadata expectations and isolated harness
@@ -25,8 +25,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 BASE_DEPENDENCIES = (
     "complexipy>=6.2,<7",
+    "coverage>=7.14,<8",
     "grimp>=3.15,<4",
     "mypy>=2.1,<3",
+    "pytest>=9.1,<10",
     "rich>=15,<16",
     "ruff>=0.15,<0.16",
     "xxhash>=3.8,<4",
@@ -34,8 +36,6 @@ BASE_DEPENDENCIES = (
 
 DEV_DEPENDENCIES = (
     "build>=1.5,<2",
-    "coverage>=7.14,<8",
-    "pytest>=9.1,<10",
     "vulture>=2.16,<3",
 )
 
@@ -95,7 +95,7 @@ def _run_isolated(
 # region [02] Package dependency contract
 
 
-def test_project_metadata_separates_minimal_base_and_runtime_extras() -> None:
+def test_project_metadata_separates_canonical_runtime_and_extras() -> None:
     with (PROJECT_ROOT / "pyproject.toml").open("rb") as stream:
         metadata_document = tomllib.load(stream)
     project = metadata_document["project"]
@@ -106,6 +106,8 @@ def test_project_metadata_separates_minimal_base_and_runtime_extras() -> None:
     for name, expected in OPTIONAL_DEPENDENCIES.items():
         assert tuple(extras[name]) == expected
     assert tuple(extras["dev"]) == DEV_DEPENDENCIES
+    assert {"coverage>=7.14,<8", "pytest>=9.1,<10"} <= set(project["dependencies"])
+    assert {"coverage>=7.14,<8", "pytest>=9.1,<10"}.isdisjoint(extras["dev"])
 
     full_union = {
         dependency
