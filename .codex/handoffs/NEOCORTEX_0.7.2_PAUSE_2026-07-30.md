@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, contrato Hito 4 integrado; aceptación instalada pendiente.
+> Actualizado: 2026-08-03, Hito 4 aceptado desde wheel aislado; listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > Su contenido sustituye por completo el handoff de release del 30–31 de julio.
 > El historial anterior permanece recuperable en Git; no debe ejecutarse como
@@ -8,8 +8,8 @@
 
 ## Resultado actual
 
-La rama vigente `codex/neocortex-unused-consensus-v1` ya integra el contrato del
-**Hito 4**, pero todavía no constituye una publicación aceptada. Añade
+El candidato de la rama `codex/neocortex-unused-consensus-v1` ya superó la
+aceptación instalada del **Hito 4**. Añade
 `vulture-unused-static` 2.16 a `trusted-static` y `trusted-deep` como octavo
 proveedor estático; el perfil profundo queda con nueve proveedores. Vulture
 produce findings heurísticos `unused_code` sobre copias verificadas, sin cargar
@@ -31,11 +31,48 @@ paquetes `unused_characterization` sólo pueden aparecer si pasan los gates de
 precisión de calibración y holdout; exigen caracterización dinámica, pruebas,
 confirmación humana y replay comparable, nunca una eliminación automática.
 
-Las métricas reales del repositorio, tiempos, bytes, procesos, findings por
-estado, calibration/holdout, replay, diff y wheel permanecen **pendientes** hasta
-ejecutar las barreras focales, construir e instalar el candidato y completar el
-autoanálisis real. No atribuir al Hito 4 cifras de fixtures unitarios ni tratar
-este checkpoint de código como publicado.
+El wheel candidato instalado tiene 1 493 459 bytes, 288 miembros, integridad ZIP
+y `pip check` limpios, y SHA-256
+`D3068DF16E1E06930E896B3246B96C57B3BCE73F06BF5D8F324819194FF7D8A6`.
+La primera corrida instalada detectó que Pyright no estaba aprovisionado dentro
+del runtime candidato; se corrigió la ruta canónica del propio runtime y
+`code-doctor` confirmó los nueve proveedores disponibles, schema válido y cero
+violaciones de foreign keys. La corrida corregida (`analysis_run_id=16`) dejó
+los nueve proveedores `ready`, 1 393 findings, 54 027 métricas y 2 601
+relaciones, con siete cache hits, tres procesos y 46.482 s agregados de
+proveedores. No se promovió el launcher estable.
+
+El replay exacto (`analysis_run_id=17`) inventarió 571 archivos y reutilizó
+558/558 candidatos Code y 9/9 proveedores. No releyó bytes Code ni repitió
+análisis, persistencia o grafo; conservó 17 113 símbolos, 92 072 referencias y
+426 diagnósticos Code. Terminó en aproximadamente 18.43 s de pared; los
+contadores de proveedores sumaron 723 ms, 70 175 430 bytes verificados, una
+invocación acotada de preparación de Coverage y 20 776 bytes de stdout. No hubo
+errores, timeouts ni proveedores indisponibles.
+
+La publicación real conserva 0 findings Ruff protected, 157 Ruff trusted, 388
+Mypy, 677 Pyright y 171 Vulture. El consenso tipado registra 242 coincidencias,
+92 sólo Mypy, 293 sólo Pyright, cero contradicciones y cero incomparables. El
+consenso de uso evaluó 216 candidatos: 48 `explained_usage`, 14
+`dynamic_usage_possible`, 154 `insufficient_evidence` y cero
+`probable_unused_high_consensus`. No confundió ausencia de Coverage con desuso.
+Calibración obtuvo precision 1.0, recall 0.6667 y abstención 0.25; holdout obtuvo
+precision 1.0, recall 0.3333 y abstención 0.50. Los cuatro gates de precision y
+recall observado aprobaron; la autoridad permanece advisory y sin mutación.
+
+La selección `trusted-deep` aprobó 34/34 pruebas. Coverage publicó 47 799
+métricas y 457 relaciones: 5 705/53 178 líneas (10.7281 %) y 279/17 016 salidas
+de rama (1.6396 %), con `tests_passed` y `coverage_available` aprobados. Review
+v8 está `ready`, digest `febf319f1a25baa73004a9cbf3d66765`, y propone un
+único paquete de mantenimiento para `external_deep_coverage._normalize`; no
+creó paquete de borrado ni de código no usado.
+
+Publication diff v6 contra una copia quiescente y migrada del baseline Hito 3
+está `ready`, digest `c45530b9439944acc82dab80393ce363`, con veredicto
+`incomparable`: el baseline no tenía Vulture ni Coverage comparable y cambiaron
+versiones o firmas de los proveedores. Conserva cero calls corregidas o perdidas
+y no inventa mejora o regresión. El launcher estable, el corpus personal y el
+estado durable vivo permanecieron intactos.
 
 El último checkpoint publicado cierra el **Hito 3 de la plataforma
 multianalizador** en `codex/neocortex-trusted-deep-v1`. El perfil explícito
@@ -1182,22 +1219,23 @@ ausentes y su candidate limit, no evidencia inventada.
   neutral, igualdad SHA-256 fuente/instalado, ocho capacidades, siete proveedores,
   foreign keys, aceptación instalada, replay y diff rc22 verificados. El estable
   no se promovió y ningún estado durable o corpus personal fue modificado.
+- Plataforma Hito 4: barrera integrada de 34 casos aprobada; wheel de 288
+  miembros con integridad y dependencias limpias; autoanálisis instalado con los
+  nueve proveedores `ready`; replay exacto 558/558 + 9/9; status, review v8,
+  diff v6, calibración, holdout, capacidades, schema y foreign keys verificados.
+  El consenso real se abstuvo de producir falsos candidatos de alta confianza.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar las barreras focales del Hito 4.** Validar proveedor, registry,
-   correlación, calibration/holdout, status, review v8, diff v6 y work packages;
-   corregir únicamente la barrera afectada.
-2. **Construir e instalar el wheel candidato.** Ejecutar un único autoanálisis
-   real con `trusted-static` o `trusted-deep` según la cobertura necesaria,
-   seguido por replay exacto, status, review y publication diff. Registrar aquí
-   las métricas reales pendientes.
-3. **Publicar y fusionar el Hito 4.** Commit/push/PR/merge sólo después de que
-   las barreras pasen; verificar `main == origin/main` y abrir Hito 5 desde ese
-   estado.
-4. **Continuar Hitos 5–7 en el orden autorizado.** Semgrep/supply chain,
-   mutación/historia Git/analítica del grafo y la integración final se abren sólo
-   después de publicar y fusionar su hito anterior.
+1. **Publicar y fusionar el Hito 4.** Crear el PR desde el candidato aceptado,
+   fusionarlo y verificar `main == origin/main` antes de abrir el siguiente
+   corte.
+2. **Implementar y aceptar el Hito 5.** Integrar Semgrep, higiene de
+   dependencias, vulnerabilidades, integridad de paquete y licencia mediante un
+   corte vertical consumido por status, review, diff y work packages.
+3. **Continuar Hitos 6–7 en el orden autorizado.** Mutación focal, historia Git,
+   analítica del grafo y la integración final se abren sólo después de publicar
+   y fusionar su hito anterior.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
 autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni
