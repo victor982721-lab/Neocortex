@@ -347,14 +347,19 @@ def _coverage_dimensions(coverage: CodeCoverageAnalysis | None) -> dict[str, Eng
             metrics.append(
                 _metric(name, value, unit, coverage.provider_id, "module", scope.subject_key)
             )
-        for name, value in (
+        for name, percentage in (
             ("line_coverage_percent", totals.line_coverage_percent),
             ("branch_coverage_percent", totals.branch_coverage_percent),
         ):
-            if value is not None:
+            if percentage is not None:
                 metrics.append(
                     _metric(
-                        name, value, "percent", coverage.provider_id, "module", scope.subject_key
+                        name,
+                        percentage,
+                        "percent",
+                        coverage.provider_id,
+                        "module",
+                        scope.subject_key,
                     )
                 )
         result[scope.subject_key] = _dimension(

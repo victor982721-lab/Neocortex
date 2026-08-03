@@ -582,9 +582,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 database=str(path),
             ).as_payload()
         if latest is None:
-            engineering_analytics = _engineering_abstained_payload(
-                str(path), "code_run_missing"
-            )
+            engineering_analytics = _engineering_abstained_payload(str(path), "code_run_missing")
         elif latest["status"] != "completed":
             engineering_analytics = _engineering_abstained_payload(
                 str(path),
@@ -674,9 +672,7 @@ def _emit_missing_code_status(
         "test_coverage": _coverage_abstained_payload(str(path), "code_state_missing"),
         "unused_analysis": _unused_abstained_payload(str(path), "code_state_missing"),
         "supply_chain": _supply_chain_abstained_payload(str(path), "code_state_missing"),
-        "engineering_analytics": _engineering_abstained_payload(
-            str(path), "code_state_missing"
-        ),
+        "engineering_analytics": _engineering_abstained_payload(str(path), "code_state_missing"),
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -695,9 +691,7 @@ def _emit_missing_code_status(
         "CODE_SUPPLY_CHAIN",
         _supply_chain_abstained_payload(str(path), "code_state_missing"),
     )
-    _emit_code_engineering(
-        _engineering_abstained_payload(str(path), "code_state_missing")
-    )
+    _emit_code_engineering(_engineering_abstained_payload(str(path), "code_state_missing"))
 
 
 def _emit_code_supply_chain(prefix: str, payload: dict[str, object]) -> None:

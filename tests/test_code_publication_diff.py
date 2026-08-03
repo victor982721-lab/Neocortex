@@ -642,9 +642,24 @@ def test_architecture_delta_never_passes_when_provider_evidence_is_missing() -> 
 
 def test_architecture_v2_graph_deltas_preserve_truncation_honesty() -> None:
     baseline = ArchitectureModule(
-        "pkg.module", 1, 2, 4.0, 4.0, 1, (), (), None, None, None, None,
-        owner_id="pkg", dependency_reach=4, blast_radius=7,
-        directed_degree_centrality=0.25, cross_owner_fan_in=1, cross_owner_fan_out=2,
+        "pkg.module",
+        1,
+        2,
+        4.0,
+        4.0,
+        1,
+        (),
+        (),
+        None,
+        None,
+        None,
+        None,
+        owner_id="pkg",
+        dependency_reach=4,
+        blast_radius=7,
+        directed_degree_centrality=0.25,
+        cross_owner_fan_in=1,
+        cross_owner_fan_out=2,
     )
     current = replace(
         baseline,
@@ -700,9 +715,7 @@ def _engineering_analysis(
 
 
 def test_engineering_delta_requires_ready_matching_measurement_scope() -> None:
-    h5 = _engineering_analysis(
-        "partial", scope=None, score=None, gate_status="not_evaluated"
-    )
+    h5 = _engineering_analysis("partial", scope=None, score=None, gate_status="not_evaluated")
     current = _engineering_analysis("ready", scope="scope-v1", score=0.8, gate_status="passed")
 
     delta = _engineering_delta(h5, current)

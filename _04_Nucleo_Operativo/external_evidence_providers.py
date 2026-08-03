@@ -256,7 +256,6 @@ def _validated_deep_configuration(
         raise ValueError("trusted-deep configuration types are invalid")
     selectors = tuple(item for item in selectors_value if isinstance(item, str))
     schema = payload.get("schema")
-    mutation_arguments: dict[str, object] = {}
     if schema == DEEP_CONFIGURATION_SCHEMA:
         mutation_target = payload.get("mutation_target")
         mutation_symbol = payload.get("mutation_symbol")
@@ -274,23 +273,28 @@ def _validated_deep_configuration(
             or not isinstance(mutation_time_budget_seconds, int)
         ):
             raise ValueError("trusted-deep mutation configuration types are invalid")
-        mutation_arguments = {
-            "mutation_target": mutation_target,
-            "mutation_symbol": mutation_symbol,
-            "mutation_max_mutants": mutation_max_mutants,
-            "mutation_timeout_seconds": mutation_timeout_seconds,
-            "mutation_time_budget_seconds": mutation_time_budget_seconds,
-        }
+        current = build_deep_configuration_payload(
+            analysis_profile=str(payload.get("analysis_profile")),
+            test_selectors=selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+            mutation_target=mutation_target,
+            mutation_symbol=mutation_symbol,
+            mutation_max_mutants=mutation_max_mutants,
+            mutation_timeout_seconds=mutation_timeout_seconds,
+            mutation_time_budget_seconds=mutation_time_budget_seconds,
+        )
     elif schema != LEGACY_DEEP_CONFIGURATION_SCHEMA:
         raise ValueError("trusted-deep configuration schema is unsupported")
-    current = build_deep_configuration_payload(
-        analysis_profile=str(payload.get("analysis_profile")),
-        test_selectors=selectors,
-        max_tests=max_tests,
-        time_budget_seconds=time_budget_seconds,
-        shard_size=shard_size,
-        **mutation_arguments,
-    )
+    else:
+        current = build_deep_configuration_payload(
+            analysis_profile=str(payload.get("analysis_profile")),
+            test_selectors=selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+        )
     normalized = current
     if schema == LEGACY_DEEP_CONFIGURATION_SCHEMA:
         normalized = {

@@ -605,8 +605,7 @@ def _bounded_work_package_payload(package: CodeReviewWorkPackage) -> dict[str, o
             package.engineering_profile
         )
     payload["engineering_gates"] = [
-        asdict(item)
-        for item in package.engineering_gates[:CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT]
+        asdict(item) for item in package.engineering_gates[:CODE_REVIEW_ENGINEERING_EXAMPLE_LIMIT]
     ]
     payload["engineering_gates_total"] = len(package.engineering_gates)
     payload["engineering_gates_truncated"] = (

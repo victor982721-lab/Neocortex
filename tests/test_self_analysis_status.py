@@ -97,9 +97,7 @@ def _append_completed_run(
     *,
     cursor: JournalCursor,
 ) -> _PreparedStatus:
-    inventory_policy = build_self_analysis_inventory_policy(
-        prepared.root, prepared.state
-    )
+    inventory_policy = build_self_analysis_inventory_policy(prepared.root, prepared.state)
     access_policy = CorpusAccessPolicy.capture("analyze_only", prepared.root)
     with FrameworkState(prepared.state / "framework.sqlite3") as framework:
         run_id = framework.begin_self_analysis_run(
@@ -796,9 +794,7 @@ def test_corrupt_manifest_evidence_is_structured_invalid_in_cli(
     assert not payload["self_analysis"]["freshness"]["current"]
 
 
-@pytest.mark.parametrize(
-    "column", ("valid", "scan_id", "volume", "journal_id", "next_usn")
-)
+@pytest.mark.parametrize("column", ("valid", "scan_id", "volume", "journal_id", "next_usn"))
 def test_checkpoint_mismatch_never_claims_freshness(
     prepared_status: _PreparedStatus,
     column: str,
@@ -1084,9 +1080,7 @@ def test_future_framework_schema_returns_structured_invalid_without_mutation(
     assert database.read_bytes() == before_bytes
     assert {path.name for path in prepared_status.state.iterdir()} == before_names
     with quiescent_sqlite_database(database) as readonly:
-        row = readonly.execute(
-            "SELECT value FROM metadata WHERE key='schema_version'"
-        ).fetchone()
+        row = readonly.execute("SELECT value FROM metadata WHERE key='schema_version'").fetchone()
         assert row is not None
         assert row[0] == str(framework_schema.SCHEMA_VERSION + 1)
 

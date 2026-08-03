@@ -467,10 +467,7 @@ def _annotate_engineering(
             *(
                 ()
                 if analysis.status == "ready"
-                else (
-                    "engineering_analytics_not_ready:"
-                    + (analysis.reason or analysis.status),
-                )
+                else ("engineering_analytics_not_ready:" + (analysis.reason or analysis.status),)
             ),
             *(
                 ()
@@ -719,9 +716,7 @@ def _unused_characterization_packages(
                             f"coverage_status:{analysis.coverage_status}",
                             "architecture:"
                             + (
-                                architecture.status
-                                if architecture is not None
-                                else "not_evaluated"
+                                architecture.status if architecture is not None else "not_evaluated"
                             ),
                         ),
                         limitations=(

@@ -19,6 +19,7 @@ from .external_evidence_models import (
     ExternalProviderFinding,
     ExternalProviderMetric,
     ExternalProviderRelation,
+    ExternalSubjectKind,
     external_metric_identity,
     external_relation_identity,
     external_signature,
@@ -249,7 +250,7 @@ def _metric(
     unit: str,
     common_metadata: Mapping[str, object],
 ) -> ExternalProviderMetric:
-    subject_kind = "symbol" if canonical_symbol is not None else "file"
+    subject_kind: ExternalSubjectKind = "symbol" if canonical_symbol is not None else "file"
     subject_key = canonical_symbol or owner.relative_path
     return ExternalProviderMetric(
         external_metric_identity(
@@ -368,7 +369,7 @@ def _relations(
             metadata=common,
         )
     ]
-    source_kind = "file"
+    source_kind: ExternalSubjectKind = "file"
     source_key = owner.relative_path
     if canonical_symbol is not None:
         source_kind = "symbol"

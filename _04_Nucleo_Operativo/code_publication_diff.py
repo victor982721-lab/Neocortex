@@ -1189,9 +1189,10 @@ def _architecture_module_deltas(
                 blast_reason = "blast_radius_truncated_lower_bound"
         dependency_comparable = dependency_reason is None
         blast_comparable = blast_reason is None
-        graph_reason = ";".join(
-            reason for reason in (dependency_reason, blast_reason) if reason is not None
-        ) or None
+        graph_reason = (
+            ";".join(reason for reason in (dependency_reason, blast_reason) if reason is not None)
+            or None
+        )
         graph_comparable = dependency_comparable and blast_comparable
         modules.append(
             CodeModuleArchitectureDelta(
@@ -1237,9 +1238,7 @@ def _architecture_module_deltas(
                 current_blast_radius_truncated=(
                     False if right is None else right.blast_radius_truncated
                 ),
-                blast_radius_status=(
-                    "comparable" if blast_comparable else "not_comparable"
-                ),
+                blast_radius_status=("comparable" if blast_comparable else "not_comparable"),
                 blast_radius_reason=blast_reason,
                 baseline_directed_degree_centrality=(
                     None if left is None else left.directed_degree_centrality
@@ -1252,23 +1251,15 @@ def _architecture_module_deltas(
                     if left is not None and right is not None
                     else None
                 ),
-                baseline_cross_owner_fan_in=(
-                    None if left is None else left.cross_owner_fan_in
-                ),
-                current_cross_owner_fan_in=(
-                    None if right is None else right.cross_owner_fan_in
-                ),
+                baseline_cross_owner_fan_in=(None if left is None else left.cross_owner_fan_in),
+                current_cross_owner_fan_in=(None if right is None else right.cross_owner_fan_in),
                 cross_owner_fan_in_delta=(
                     right.cross_owner_fan_in - left.cross_owner_fan_in
                     if left is not None and right is not None
                     else None
                 ),
-                baseline_cross_owner_fan_out=(
-                    None if left is None else left.cross_owner_fan_out
-                ),
-                current_cross_owner_fan_out=(
-                    None if right is None else right.cross_owner_fan_out
-                ),
+                baseline_cross_owner_fan_out=(None if left is None else left.cross_owner_fan_out),
+                current_cross_owner_fan_out=(None if right is None else right.cross_owner_fan_out),
                 cross_owner_fan_out_delta=(
                     right.cross_owner_fan_out - left.cross_owner_fan_out
                     if left is not None and right is not None
@@ -1351,15 +1342,11 @@ def _engineering_not_comparable_reason(
 ) -> str | None:
     if baseline.status != "ready" or current.status != "ready":
         return (
-            "engineering_analytics_not_ready:"
-            f"baseline={baseline.status}:current={current.status}"
+            f"engineering_analytics_not_ready:baseline={baseline.status}:current={current.status}"
         )
     if measurement_gate.status != "passed":
         return measurement_gate.reason or "mutation_measurement_incomplete"
-    if (
-        baseline.mutation_scope_signature is None
-        or current.mutation_scope_signature is None
-    ):
+    if baseline.mutation_scope_signature is None or current.mutation_scope_signature is None:
         return "mutation_measurement_scope_not_recorded"
     if baseline.mutation_scope_signature != current.mutation_scope_signature:
         return "mutation_measurement_scope_changed"
@@ -1388,12 +1375,8 @@ def _engineering_delta(
                 current_reason=current_reason,
             )
         )
-    before_gate, before_reason = _engineering_source_gate(
-        baseline, "mutation_measurement_complete"
-    )
-    after_gate, after_reason = _engineering_source_gate(
-        current, "mutation_measurement_complete"
-    )
+    before_gate, before_reason = _engineering_source_gate(baseline, "mutation_measurement_complete")
+    after_gate, after_reason = _engineering_source_gate(current, "mutation_measurement_complete")
     if "failed" in {before_gate, after_gate}:
         measurement_gate = CodeEngineeringGateDelta(
             "mutation_measurement_complete",
@@ -1401,9 +1384,7 @@ def _engineering_delta(
             before_reason or after_reason or "mutation_measurement_incomplete",
         )
     elif before_gate == after_gate == "passed":
-        measurement_gate = CodeEngineeringGateDelta(
-            "mutation_measurement_complete", "passed", None
-        )
+        measurement_gate = CodeEngineeringGateDelta("mutation_measurement_complete", "passed", None)
     else:
         measurement_gate = CodeEngineeringGateDelta(
             "mutation_measurement_complete",

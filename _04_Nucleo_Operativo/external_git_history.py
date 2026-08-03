@@ -23,6 +23,7 @@ from .external_evidence_models import (
     ExternalProviderFinding,
     ExternalProviderMetric,
     ExternalProviderRelation,
+    ExternalSubjectKind,
     external_metric_identity,
     external_relation_identity,
     external_signature,
@@ -286,6 +287,8 @@ def _resolve_root_and_head(
     config: GitHistoryConfig,
     git_executable: str,
 ) -> tuple[str, int, int]:
+    if not (root / ".git").exists():
+        raise ValueError("Git history root is not the repository top level")
     completed = _run_git(
         (
             "rev-parse",
@@ -500,7 +503,7 @@ def _module_from_path(relative_path: str) -> str | None:
 
 def _metric(
     *,
-    subject_kind: str,
+    subject_kind: ExternalSubjectKind,
     subject_key: str,
     metric_name: str,
     value: float,
@@ -532,7 +535,7 @@ def _metric(
 
 def _metrics_for_subject(
     *,
-    subject_kind: str,
+    subject_kind: ExternalSubjectKind,
     subject_key: str,
     version_id: int | None,
     aggregate: _HistoryAggregate,

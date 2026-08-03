@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from .code_external_evidence import (
     ExternalEvidenceStatus,
@@ -35,6 +35,8 @@ _FINDING_LIMIT = 10_000
 _METRIC_LIMIT = 100_000
 _RELATION_LIMIT = 250_000
 _COUNTER_LIMIT = 128
+_ProviderStatusGate = Literal["passed", "failed", "baseline", "not_evaluated"]
+_SuiteStatus = Literal["ready", "partial", "abstained", "not_recorded"]
 
 
 def _lastrowid(cursor: sqlite3.Cursor) -> int:
@@ -766,7 +768,7 @@ def _abstained_provider(
     return ExternalProviderStatus(
         str(row["provider_id"]),
         str(row["provider_schema"]),
-        str(row["profile"]),  # type: ignore[arg-type]
+        cast(AnalysisProfile, str(row["profile"])),
         str(row["tool_name"]),
         str(row["tool_version"]),
         "abstained",
@@ -916,7 +918,7 @@ def _provider_status(
         status = ExternalProviderStatus(
             str(row["provider_id"]),
             str(row["provider_schema"]),
-            str(row["profile"]),  # type: ignore[arg-type]
+            cast(AnalysisProfile, str(row["profile"])),
             str(row["tool_name"]),
             str(row["tool_version"]),
             "ready",
@@ -930,7 +932,7 @@ def _provider_status(
             comparable,
             digest,
             str(row["comparability_signature"]),
-            gate,  # type: ignore[arg-type]
+            cast(_ProviderStatusGate, gate),
             limitations,
             content_executed=bool(row["executes_content"]),
             counters=counters,
@@ -1175,7 +1177,7 @@ def read_external_evidence_suite(
         suite_status = "abstained"
     return ExternalEvidenceSuiteStatus(
         profile,
-        suite_status,  # type: ignore[arg-type]
+        cast(_SuiteStatus, suite_status),
         tuple(statuses),
         _type_consensus(findings, status_map),
         _gate_evaluations(status_map),
