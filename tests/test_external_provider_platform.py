@@ -169,11 +169,14 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
             )
         }
     providers = {item.provider_id: item for item in suite.providers}
-    assert summary.external_tool_runs == 4
-    assert replay_summary.external_tool_runs == 4
+    assert summary.external_tool_runs == 7
+    assert replay_summary.external_tool_runs == 7
     assert tuple(row[0] for row in provider_rows) == (
+        "complexipy-cognitive",
+        "grimp-architecture",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "ruff-analyze-imports",
         "ruff-protected-basic",
         "ruff-trusted-project",
     )
@@ -181,6 +184,14 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
     assert providers["ruff-trusted-project"].status == "ready"
     assert providers["mypy-trusted-project"].status == "ready"
     assert providers["pyright-trusted-project"].status in {"ready", "abstained"}
+    for provider_id in (
+        "complexipy-cognitive",
+        "grimp-architecture",
+        "ruff-analyze-imports",
+    ):
+        assert providers[provider_id].status == "abstained"
+        assert providers[provider_id].eligible_files == 0
+        assert providers[provider_id].covered_files == 0
     assert "external:ruff-protected-basic" in sources
     assert "external:ruff-trusted-project" in sources
     assert "external:mypy" in sources
@@ -613,7 +624,7 @@ def test_status_review_and_diff_consume_the_normalized_provider_contract(
     second_diff = compare_code_publications(baseline_state, current_state)
     assert first_diff == second_diff
     assert first_diff.status == "ready"
-    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v3"
+    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v4"
     assert first_diff.analysis_profile == "protected"
     assert len(first_diff.providers) == 1
     assert first_diff.providers[0].provider_id == "ruff-protected-basic"

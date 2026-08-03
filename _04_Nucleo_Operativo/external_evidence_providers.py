@@ -13,17 +13,23 @@ import sys
 import tempfile
 import time
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .bounded_subprocess import SubprocessOutputLimitError, run_bounded_capture
+from .code_architecture_contracts import (
+    ARCHITECTURE_BASELINE_ID,
+    ARCHITECTURE_CONTRACT_SCHEMA,
+    PRODUCTION_ROOT_PACKAGES,
+)
 from .code_external_evidence import (
     RUFF_CONFIGURATION_SIGNATURE,
     RUFF_MAX_DIAGNOSTICS,
     RUFF_MAX_TOTAL_BYTES,
     ExternalEvidenceFile,
     ExternalEvidencePublication,
+    ExternalRunStatus,
     RuffEvidenceProvider,
     _controlled_environment,
     _parse_diagnostics,
@@ -37,13 +43,22 @@ from .external_evidence_models import (
     ExternalEvidenceProvider,
     ExternalProviderBaseline,
     ExternalProviderFinding,
+    ExternalProviderMetric,
     ExternalProviderPublication,
+    ExternalProviderRelation,
     ExternalRunInput,
+    InvalidationStrategy,
     ProviderDescriptor,
     ProviderLimits,
-    external_findings_digest,
+    external_provider_result_digest,
     external_root_identity,
     external_signature,
+)
+from .external_architecture_providers import (
+    ArchitectureProviderExecution,
+    execute_complexipy_cognitive,
+    execute_grimp_architecture,
+    execute_ruff_analyze_imports,
 )
 from .semantic_models import fingerprint_bytes
 
@@ -51,6 +66,9 @@ RUFF_PROTECTED_PROVIDER_ID = "ruff-protected-basic"
 RUFF_TRUSTED_PROVIDER_ID = "ruff-trusted-project"
 MYPY_PROVIDER_ID = "mypy-trusted-project"
 PYRIGHT_PROVIDER_ID = "pyright-trusted-project"
+RUFF_ANALYZE_PROVIDER_ID = "ruff-analyze-imports"
+GRIMP_ARCHITECTURE_PROVIDER_ID = "grimp-architecture"
+COMPLEXIPY_COGNITIVE_PROVIDER_ID = "complexipy-cognitive"
 
 _CONFIG_LIMIT_BYTES = 1024 * 1024
 _STDOUT_LIMIT_BYTES = 8 * 1024 * 1024
@@ -59,6 +77,8 @@ _TOOL_TIMEOUT_SECONDS = 180.0
 _MYPY_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _PYRIGHT_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _RUFF_MEMORY_BYTES = 512 * 1024 * 1024
+_GRIMP_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+_COMPLEXIPY_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _unexpected_exit_message(
@@ -156,9 +176,10 @@ def _provider_descriptor(
     environment_signature: str,
     root_identity: str,
     execution_strategy: str,
-    invalidation_strategy: str,
+    invalidation_strategy: InvalidationStrategy,
     memory: int,
     loads_project_configuration: bool,
+    scope: str = "current-inventory-python",
 ) -> ProviderDescriptor:
     configuration_signature = external_signature(
         f"{provider_id}-configuration-v1", configuration_payload
@@ -175,7 +196,7 @@ def _provider_descriptor(
             "project_configuration_digest": project_configuration_digest,
             "environment_signature": environment_signature,
             "root_identity": root_identity,
-            "scope": "current-inventory-python",
+            "scope": scope,
             "execution_strategy": execution_strategy,
         },
     )
@@ -185,14 +206,14 @@ def _provider_descriptor(
         tool_name,
         profile,
         "untrusted-safe" if profile == "protected" else "trusted-static",
-        "current-inventory-python",
+        scope,
         source,
         configuration_signature,
         project_configuration_digest,
         environment_signature,
         comparability_signature,
         execution_strategy,
-        invalidation_strategy,  # type: ignore[arg-type]
+        invalidation_strategy,
         "exact-publication-replay-v1",
         _limits(memory=memory),
         loads_project_configuration=loads_project_configuration,
@@ -233,6 +254,8 @@ def _portable_publication_id(
 def _result_counters(
     files: Sequence[ExternalEvidenceFile],
     findings: Sequence[ExternalProviderFinding],
+    metrics: Sequence[ExternalProviderMetric],
+    relations: Sequence[ExternalProviderRelation],
     baseline: ExternalProviderBaseline | None,
     *,
     wall_milliseconds: int,
@@ -244,6 +267,10 @@ def _result_counters(
 ) -> dict[str, int]:
     current_ids = {item.portable_finding_id for item in findings}
     baseline_ids = set(() if baseline is None else baseline.portable_finding_ids)
+    current_metric_ids = {item.portable_metric_id for item in metrics}
+    baseline_metric_ids = set(() if baseline is None else baseline.portable_metric_ids)
+    current_relation_ids = {item.portable_relation_id for item in relations}
+    baseline_relation_ids = set(() if baseline is None else baseline.portable_relation_ids)
     counters = {
         "eligible_files": len(files),
         "covered_files": len(files),
@@ -256,6 +283,8 @@ def _result_counters(
         "stderr_bytes": stderr_bytes,
         "wall_milliseconds": max(0, wall_milliseconds),
         "findings": len(findings),
+        "metrics": len(metrics),
+        "relations": len(relations),
         "comparable": int(baseline is not None),
         "cache_hits": 0,
         "cache_misses": 1,
@@ -267,6 +296,10 @@ def _result_counters(
     if baseline is not None:
         counters["added"] = len(current_ids - baseline_ids)
         counters["resolved"] = len(baseline_ids - current_ids)
+        counters["metrics_added"] = len(current_metric_ids - baseline_metric_ids)
+        counters["metrics_resolved"] = len(baseline_metric_ids - current_metric_ids)
+        counters["relations_added"] = len(current_relation_ids - baseline_relation_ids)
+        counters["relations_resolved"] = len(baseline_relation_ids - current_relation_ids)
     return counters
 
 
@@ -278,6 +311,8 @@ def _provenance(
     execution: str,
     result_digest: str | None,
     findings: int,
+    metrics: int = 0,
+    relations: int = 0,
     reason: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -288,7 +323,12 @@ def _provenance(
         "input": {"signature": input_signature},
         "result": None
         if result_digest is None
-        else {"digest": result_digest, "findings": findings},
+        else {
+            "digest": result_digest,
+            "findings": findings,
+            "metrics": metrics,
+            "relations": relations,
+        },
         "authority": "advisory",
         "mutation_authority": False,
         "content_executed": descriptor.executes_content,
@@ -304,7 +344,7 @@ def _failure(
     files: Sequence[ExternalEvidenceFile],
     *,
     tool_version: str,
-    status: str,
+    status: ExternalRunStatus,
     reason: str,
     started_ns: int,
 ) -> ExternalProviderPublication:
@@ -314,7 +354,7 @@ def _failure(
         descriptor.tool_name,
         tool_version,
         descriptor.configuration_signature,
-        status,  # type: ignore[arg-type]
+        status,
         started_ns,
         time.time_ns(),
         _provenance(
@@ -339,6 +379,8 @@ def _failure(
         "stderr_bytes": 0,
         "wall_milliseconds": max(0, (time.time_ns() - started_ns) // 1_000_000),
         "findings": 0,
+        "metrics": 0,
+        "relations": 0,
         "comparable": 0,
         "cache_hits": 0,
         "cache_misses": 1,
@@ -386,9 +428,15 @@ def _exact_replay(
         "stderr_bytes": 0,
         "wall_milliseconds": max(0, (time.time_ns() - started_ns) // 1_000_000),
         "findings": len(baseline.portable_finding_ids),
+        "metrics": len(baseline.portable_metric_ids),
+        "relations": len(baseline.portable_relation_ids),
         "comparable": 1,
         "added": 0,
         "resolved": 0,
+        "metrics_added": 0,
+        "metrics_resolved": 0,
+        "relations_added": 0,
+        "relations_resolved": 0,
         "cache_hits": 1,
         "cache_misses": 0,
         "errors": 0,
@@ -410,6 +458,8 @@ def _exact_replay(
             execution="cache_replay",
             result_digest=baseline.result_digest,
             findings=len(baseline.portable_finding_ids),
+            metrics=len(baseline.portable_metric_ids),
+            relations=len(baseline.portable_relation_ids),
         ),
     )
     verification = external_signature(
@@ -451,6 +501,8 @@ def _success(
     findings: Sequence[ExternalProviderFinding],
     baseline: ExternalProviderBaseline | None,
     *,
+    metrics: Sequence[ExternalProviderMetric] = (),
+    relations: Sequence[ExternalProviderRelation] = (),
     tool_version: str,
     started_ns: int,
     stdout_bytes: int,
@@ -462,12 +514,24 @@ def _success(
     ordered_findings = tuple(sorted(findings, key=lambda item: item.portable_finding_id))
     if len({item.portable_finding_id for item in ordered_findings}) != len(ordered_findings):
         raise ValueError("external provider produced duplicate finding identities")
+    ordered_metrics = tuple(sorted(metrics, key=lambda item: item.portable_metric_id))
+    if len({item.portable_metric_id for item in ordered_metrics}) != len(ordered_metrics):
+        raise ValueError("external provider produced duplicate metric identities")
+    ordered_relations = tuple(sorted(relations, key=lambda item: item.portable_relation_id))
+    if len({item.portable_relation_id for item in ordered_relations}) != len(ordered_relations):
+        raise ValueError("external provider produced duplicate relation identities")
     validate_external_inputs(files)
-    result_digest = external_findings_digest(ordered_findings)
+    result_digest = external_provider_result_digest(
+        ordered_findings,
+        ordered_metrics,
+        ordered_relations,
+    )
     input_signature = external_input_signature(files)
     counters = _result_counters(
         files,
         ordered_findings,
+        ordered_metrics,
+        ordered_relations,
         baseline,
         wall_milliseconds=(time.time_ns() - started_ns) // 1_000_000,
         stdout_bytes=stdout_bytes,
@@ -490,6 +554,8 @@ def _success(
             execution="full",
             result_digest=result_digest,
             findings=len(ordered_findings),
+            metrics=len(ordered_metrics),
+            relations=len(ordered_relations),
         ),
     )
     return ExternalProviderPublication(
@@ -509,6 +575,8 @@ def _success(
             result_digest=result_digest,
         ),
         limitations=tuple(limitations),
+        metrics=ordered_metrics,
+        relations=ordered_relations,
     )
 
 
@@ -1183,6 +1251,9 @@ def provider_tool_versions() -> dict[str, str | None]:
         RUFF_TRUSTED_PROVIDER_ID: ruff_version,
         MYPY_PROVIDER_ID: _package_version("mypy"),
         PYRIGHT_PROVIDER_ID: pyright_version,
+        RUFF_ANALYZE_PROVIDER_ID: ruff_version,
+        GRIMP_ARCHITECTURE_PROVIDER_ID: _package_version("grimp"),
+        COMPLEXIPY_COGNITIVE_PROVIDER_ID: _package_version("complexipy"),
     }
 
 
@@ -1363,6 +1434,184 @@ class PyrightTrustedProjectProvider(_TrustedStaticProvider):
         )
 
 
+def _architecture_files(
+    files: Sequence[ExternalEvidenceFile],
+) -> tuple[ExternalEvidenceFile, ...]:
+    """Select the exact versioned production-package domain for Hito 2."""
+
+    roots = frozenset(PRODUCTION_ROOT_PACKAGES)
+    selected = []
+    for item in files:
+        parts = PurePosixPath(item.relative_path).parts
+        if parts and parts[0] in roots:
+            selected.append(item)
+    return tuple(sorted(selected, key=lambda item: item.relative_path.casefold()))
+
+
+class _TrustedArchitectureProvider:
+    provider_id: str
+    provider_schema: str
+    tool_name: str
+    distribution: str
+    source: str
+    memory_bound: int
+    execution_strategy: str
+    executor: Callable[
+        [Path, Mapping[str, ExternalEvidenceFile], Mapping[str, str]],
+        ArchitectureProviderExecution,
+    ]
+
+    def __init__(self, root: Path):
+        self.root = root
+        self._version = _package_version(self.distribution)
+        version = self._version or "unavailable"
+        configuration = {
+            "adapter": self.provider_schema,
+            "architecture_contract_schema": ARCHITECTURE_CONTRACT_SCHEMA,
+            "architecture_baseline_id": ARCHITECTURE_BASELINE_ID,
+            "domain": list(PRODUCTION_ROOT_PACKAGES),
+            "static_only": True,
+            "autofix": False,
+            "network": False,
+            "cache": False,
+        }
+        self.descriptor = _provider_descriptor(
+            provider_id=self.provider_id,
+            provider_schema=self.provider_schema,
+            tool_name=self.tool_name,
+            tool_version=version,
+            profile="trusted-static",
+            source=self.source,
+            configuration_payload=configuration,
+            project_configuration_digest=None,
+            environment_signature=_environment_signature(
+                tool_name=self.tool_name,
+                tool_version=version,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy=self.execution_strategy,
+            invalidation_strategy="project_wide",
+            memory=self.memory_bound,
+            loads_project_configuration=False,
+            scope="production-packages-python-v1",
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        selected = _architecture_files(files)
+        if baseline is not None and baseline.input_signature == external_input_signature(selected):
+            return _exact_replay(self.descriptor, root, selected, baseline)
+        started_ns = time.time_ns()
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version="unavailable",
+                status="unavailable",
+                reason=f"{self.tool_name}_unavailable",
+                started_ns=started_ns,
+            )
+        if not selected:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="failed",
+                reason="architecture_production_domain_empty",
+                started_ns=started_ns,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix=f"neocortex-{self.provider_id}-", dir=staging_parent
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(selected, stage_root / "source")
+                environment = _controlled_environment()
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = str(stage_root)
+                result = self.executor(stage_root, staged, environment)
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        return _success(
+            self.descriptor,
+            root,
+            selected,
+            result.findings,
+            baseline,
+            metrics=result.metrics,
+            relations=result.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=result.stdout_bytes,
+            stderr_bytes=result.stderr_bytes,
+            process_invocations=result.process_invocations,
+            bytes_staged=sum(item.size for item in selected),
+        )
+
+
+class RuffAnalyzeImportsProvider(_TrustedArchitectureProvider):
+    provider_id = RUFF_ANALYZE_PROVIDER_ID
+    provider_schema = "neocortex.ruff-analyze-imports/v1"
+    tool_name = "ruff"
+    distribution = "ruff"
+    source = "external:ruff-analyze-imports"
+    memory_bound = _RUFF_MEMORY_BYTES
+    execution_strategy = "isolated-ruff-analyze-graph-v1"
+    executor = staticmethod(execute_ruff_analyze_imports)
+
+
+class GrimpArchitectureProvider(_TrustedArchitectureProvider):
+    provider_id = GRIMP_ARCHITECTURE_PROVIDER_ID
+    provider_schema = "neocortex.grimp-architecture/v1"
+    tool_name = "grimp"
+    distribution = "grimp"
+    source = "external:grimp-architecture"
+    memory_bound = _GRIMP_MEMORY_BYTES
+    execution_strategy = "isolated-python-worker-grimp-v1"
+    executor = staticmethod(execute_grimp_architecture)
+
+
+class ComplexipyCognitiveProvider(_TrustedArchitectureProvider):
+    provider_id = COMPLEXIPY_COGNITIVE_PROVIDER_ID
+    provider_schema = "neocortex.complexipy-cognitive/v1"
+    tool_name = "complexipy"
+    distribution = "complexipy"
+    source = "external:complexipy-cognitive"
+    memory_bound = _COMPLEXIPY_MEMORY_BYTES
+    execution_strategy = "isolated-python-worker-complexipy-v1"
+    executor = staticmethod(execute_complexipy_cognitive)
+
+
 def providers_for_profile(
     profile: AnalysisProfile,
     root: Path,
@@ -1375,17 +1624,26 @@ def providers_for_profile(
             RuffTrustedProjectProvider(root),
             MypyTrustedProjectProvider(root),
             PyrightTrustedProjectProvider(root),
+            RuffAnalyzeImportsProvider(root),
+            GrimpArchitectureProvider(root),
+            ComplexipyCognitiveProvider(root),
         )
     raise ValueError("trusted-deep providers are not implemented")
 
 
 __all__ = [
+    "COMPLEXIPY_COGNITIVE_PROVIDER_ID",
+    "GRIMP_ARCHITECTURE_PROVIDER_ID",
     "MYPY_PROVIDER_ID",
     "PYRIGHT_PROVIDER_ID",
+    "RUFF_ANALYZE_PROVIDER_ID",
     "RUFF_PROTECTED_PROVIDER_ID",
     "RUFF_TRUSTED_PROVIDER_ID",
+    "ComplexipyCognitiveProvider",
+    "GrimpArchitectureProvider",
     "MypyTrustedProjectProvider",
     "PyrightTrustedProjectProvider",
+    "RuffAnalyzeImportsProvider",
     "RuffProtectedBasicProvider",
     "RuffTrustedProjectProvider",
     "provider_tool_versions",

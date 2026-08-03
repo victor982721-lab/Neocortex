@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .code_architecture_analysis import (
+    CodeArchitectureAnalysis,
+    read_code_architecture_analysis,
+)
 from .code_external_evidence import (
     ExternalEvidenceStatus,
     read_external_evidence,
@@ -117,6 +121,7 @@ class _ReviewRead:
     enumeration_truncated: bool
     external_evidence: ExternalEvidenceStatus
     external_evidence_suite: ExternalEvidenceSuiteStatus
+    architecture: CodeArchitectureAnalysis
 
 
 _CANDIDATE_SQL = """
@@ -700,6 +705,11 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
             -1 if latest_run is None else latest_run.analysis_run_id,
             enforce_current_runtime=True,
         )
+        architecture = read_code_architecture_analysis(
+            connection,
+            -1 if latest_run is None else latest_run.analysis_run_id,
+            database=str(path),
+        )
     return _ReviewRead(
         latest_run=latest_run,
         coverage=CodeReviewCoverage(
@@ -718,6 +728,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         enumeration_truncated=total_candidates > len(candidates),
         external_evidence=external_evidence,
         external_evidence_suite=external_evidence_suite,
+        architecture=architecture,
     )
 
 
@@ -740,6 +751,7 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         work_packages=(),
         external_evidence=None,
         external_evidence_suite=None,
+        architecture=None,
         limitations=(),
         digest=None,
     )
@@ -797,6 +809,10 @@ def review_code_state(
             )
         elif provider.gate == "baseline":
             limitations.append(f"provider_baseline_only:{provider.provider_id}")
+    if read.architecture.status != "ready":
+        limitations.append(
+            "architecture_not_ready:" + (read.architecture.reason or read.architecture.status)
+        )
     snapshot = CodeReviewSnapshot(
         analysis_run_id=read.latest_run.analysis_run_id,
         framework_run_id=read.latest_run.framework_run_id,
@@ -823,6 +839,8 @@ def review_code_state(
         read.planning_findings,
         planning_recommendations,
         read.planning_links,
+        architecture=read.architecture,
+        architecture_root=snapshot.root,
     )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
@@ -843,6 +861,7 @@ def review_code_state(
         work_packages=work_packages,
         external_evidence=read.external_evidence,
         external_evidence_suite=read.external_evidence_suite,
+        architecture=read.architecture,
         limitations=limitation_tuple,
         digest=build_code_review_digest(
             snapshot,
@@ -859,6 +878,7 @@ def review_code_state(
             work_packages=work_packages,
             external_evidence=read.external_evidence,
             external_evidence_suite=read.external_evidence_suite,
+            architecture=read.architecture,
             limitations=limitation_tuple,
         ),
     )

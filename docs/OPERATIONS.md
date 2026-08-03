@@ -123,13 +123,22 @@ el piloto del perfil estático es:
 Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
 ```
 
-`trusted-static` ejecuta cuatro proveedores independientes: Ruff basic, Ruff
-con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright. Las familias
+`trusted-static` ejecuta siete proveedores independientes: Ruff basic, Ruff
+con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
+Grimp y Complexipy. Las familias
 Ruff `I,PT,SIM,UP` quedan fuera para priorizar defectos y mantenibilidad sobre
 estilo/modernización. No escale si status muestra un
 proveedor `abstained`/`not_recorded`, cobertura incompleta o una limitación que
 impida interpretar el resultado. La falta de Pyright no invalida la evidencia
 Ruff/Mypy, pero deja el consenso de tipos `not_comparable`.
+
+Ruff Analyze es el oráculo diferencial del grafo de imports; Grimp es el
+productor de relaciones, SCC y contratos, y Complexipy produce complejidad
+cognitiva. El status arquitectónico debe mostrar
+`import_graph_consensus`, `architecture_contracts` y
+`module_complexity_displacement`. En la primera publicación, las dimensiones
+que necesitan comparación permanecen `baseline` o `not_evaluated`; sólo un diff
+comparable permite aprobar que no hubo degradación o desplazamiento.
 
 El manifest guarda `Neocortex` como primer elemento de su argv canónico. Antes
 de promover el launcher estable, use la ruta exacta del runtime versionado para
@@ -366,8 +375,13 @@ Neocortex --code-doctor
   intérprete, con caché efímera propiedad de la corrida.
 - Pyright `1.1.411` se instala como paquete npm aislado junto al runtime y se
   invoca mediante Node. `--code-doctor --code-json` informa por separado los
-  cuatro proveedores; la corrida incorpora la resolución exacta a su firma de
+  siete proveedores; la corrida incorpora la resolución exacta a su firma de
   entorno y comparabilidad.
+- Grimp `3.15` y Complexipy `6.2.0` pertenecen al runtime Python base. Grimp se
+  consume directamente como grafo legible por máquina; Import Linter `2.13` se
+  midió viable pero no se integra porque duplicaría esa dimensión sin salida de
+  contratos JSON. Complexipy se invoca por API para separar findings reales de
+  la semántica de umbral de su CLI.
 - La primera transcripción puede descargar el modelo Whisper. Use
   `--audio-local-models-only` para prohibir descargas.
 - Los modelos semánticos sólo se adquieren mediante
@@ -405,13 +419,17 @@ incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
 No ejecute manualmente herramientas externas ni descargue modelos para validar
 una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
-validación del wheel debe confirmar Ruff y Mypy en la base, y la preparación del
-perfil `trusted-static` debe confirmar Node y el paquete Pyright aislado.
+validación del wheel debe confirmar Ruff, Mypy, Grimp y Complexipy en la base,
+y la preparación del perfil `trusted-static` debe confirmar Node y el paquete
+Pyright aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
 estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo
 debe declarar `execution=cache_replay`, `process_invocations=0`, `cache_hits=1`
-y contadores de verificación coherentes. El replay verifica inputs; no significa
+y contadores de verificación coherentes. Findings, métricas y relaciones se
+referencian desde la publicación original, sin duplicarse. El tiempo y bytes de
+la verificación siguen siendo costos reales del replay; cero procesos no
+significa costo cero. El replay verifica inputs; no significa
 que se haya omitido la comprobación de frescura.
 
 ## Cancelación de una corrida normal

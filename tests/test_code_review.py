@@ -607,11 +607,13 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v5"
+    assert first.as_payload()["schema"] == "neocortex.code-review/v6"
+    assert "neocortex.code-review/v5" in first.as_payload()["compatible_schemas"]
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
         "neocortex.code-review/v4",
+        "neocortex.code-review/v5",
     ]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11

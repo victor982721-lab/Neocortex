@@ -26,9 +26,10 @@ Las versiones siguientes son las instaladas en el entorno indicado, no una prome
 
 ### Addendum de declaración fuente 0.7.2
 
-Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15 y Mypy
-2.1 pasaron de desarrollo a la base como proveedores de External Evidence v1;
-ambos conservan la declaración MIT observada aquí. El perfil `trusted-static`
+Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15, Mypy
+2.1, Grimp 3.15 y Complexipy 6.2 pasaron a la base como proveedores de evidencia
+externa; Ruff, Mypy y Complexipy declaran MIT, mientras Grimp declara
+BSD-2-Clause. El perfil `trusted-static`
 añade Pyright `1.1.411`, también MIT, como paquete npm aislado junto al runtime,
 ejecutado mediante Node. Pyright y Node no son dependencias Python ni se
 redistribuyen dentro del wheel de NeoCortex; cualquier bundle que los incluya
@@ -38,6 +39,8 @@ debe inventariar por separado el paquete npm, Node y sus avisos transitivos.
 |---|---|---|---|
 | Ruff `0.15.17` | dependencia Python base, pin en `constraints.txt` | perfiles `protected` y `trusted-static` | MIT |
 | Mypy `2.1.0` | dependencia Python base, pin en `constraints.txt` | perfil `trusted-static` | MIT |
+| Grimp `3.15` | dependencia Python base, pin en `constraints.txt` | grafo de imports y contratos en `trusted-static` | BSD-2-Clause |
+| Complexipy `6.2.0` | dependencia Python base, pin en `constraints.txt` | complejidad cognitiva en `trusted-static` | MIT |
 | Pyright `1.1.411` | paquete npm aislado junto al runtime | perfil `trusted-static`, mediante Node | MIT |
 | Node | runtime externo | host de Pyright; no ejecuta scripts del proyecto | inventariar la distribución instalada antes de redistribuir |
 

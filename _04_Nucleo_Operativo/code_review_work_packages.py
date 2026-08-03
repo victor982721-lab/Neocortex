@@ -6,6 +6,11 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from .code_architecture_analysis import (
+    CodeArchitectureAnalysis,
+    bounded_import_chains,
+    module_id_from_path,
+)
 from .code_review_actionability import classify_source_role
 from .code_review_models import (
     CodeReviewFinding,
@@ -18,7 +23,8 @@ from .code_review_models import (
 )
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v1"
+CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v2"
+_CODE_REVIEW_PACKAGE_ID_PLANNING = "python-maintenance-work-packages-v1"
 CODE_REVIEW_PLANNING_FINDING_LIMIT = 50
 CODE_REVIEW_WORK_PACKAGE_LIMIT = 1
 CODE_REVIEW_WORK_PACKAGE_MEMBER_LIMIT = 5
@@ -38,6 +44,9 @@ _ACCEPTANCE_GATES = (
     "public_type_surface_not_degraded",
     "type_coverage_not_degraded",
     "provider_cache_or_rerun_explained",
+    "architecture_contracts_not_degraded",
+    "no_new_import_cycles",
+    "module_complexity_not_displaced",
 )
 _RISK_ORDER = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
 
@@ -287,7 +296,9 @@ def _package_id(
 ) -> str:
     payload = canonical_json(
         {
-            "planning": CODE_REVIEW_PLANNING,
+            # The architecture context enriches validation but does not change
+            # the legacy finding membership identity of the package.
+            "planning": _CODE_REVIEW_PACKAGE_ID_PLANNING,
             "primary_hotspot_id": primary.hotspot_id,
             "members": [
                 {
@@ -317,6 +328,9 @@ def build_code_review_work_packages(
     findings: tuple[CodeReviewFinding, ...],
     recommendations: tuple[CodeReviewRecommendation, ...],
     links: tuple[CodeReviewPlanningLink, ...],
+    *,
+    architecture: CodeArchitectureAnalysis | None = None,
+    architecture_root: str | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
     """Build the single next coherent package; never batch independent roots."""
 
@@ -351,6 +365,40 @@ def build_code_review_work_packages(
     relationship_evidence = tuple(
         item for _finding, link in related for item in _link_evidence(link)
     )
+    primary_module = (
+        None if architecture_root is None else module_id_from_path(primary.path, architecture_root)
+    )
+    import_chains = (
+        ()
+        if architecture is None or primary_module is None
+        else bounded_import_chains(architecture, primary_module)
+    )
+    affected_contracts = (
+        ()
+        if architecture is None or primary_module is None
+        else tuple(
+            sorted(
+                contract.contract_id
+                for contract in architecture.contracts
+                if primary_module in contract.importer_modules
+                or primary_module in contract.imported_modules
+            )
+        )
+    )
+    architecture_evidence = (
+        "architecture:not_evaluated"
+        if architecture is None
+        else (
+            "architecture:ready"
+            if architecture.status == "ready"
+            else f"architecture:abstained:{architecture.reason}"
+        )
+    )
+    architecture_limitations = (
+        ()
+        if architecture is not None and architecture.status == "ready"
+        else ("architecture_gates_require_a_comparable_ready_publication_diff",)
+    )
     return (
         CodeReviewWorkPackage(
             package_rank=1,
@@ -360,12 +408,15 @@ def build_code_review_work_packages(
             primary_finding_id=primary.finding_id,
             primary_hotspot_id=primary.hotspot_id,
             primary_symbol=primary.symbol,
+            primary_module=primary_module,
             change_risk=_package_risk(primary, related),
             members=members,
             members_truncated=members_truncated,
             consumer_module_examples=_ordered_union(
                 tuple(finding.impact.consumer_module_examples for finding in package_findings)
             ),
+            import_chains=import_chains,
+            affected_architecture_contracts=affected_contracts,
             contracts_to_preserve=_ordered_union(
                 tuple(finding.contracts_to_preserve for finding in package_findings)
             ),
@@ -377,6 +428,7 @@ def build_code_review_work_packages(
             evidence=(
                 "bounded_planning_horizon:50",
                 "primary_recommendation_rank:1",
+                architecture_evidence,
                 *relationship_evidence,
             ),
             limitations=(
@@ -384,6 +436,7 @@ def build_code_review_work_packages(
                 "relationship_graph_is_bounded_to_two_static_call_hops",
                 "dynamic_dispatch_is_not_observed",
                 "related_members_require_characterization_before_change",
+                *architecture_limitations,
             ),
             confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
         ),
@@ -394,6 +447,9 @@ def plan_code_review_work_packages(
     findings: tuple[CodeReviewFinding, ...],
     recommendations: tuple[CodeReviewRecommendation, ...],
     links: tuple[CodeReviewPlanningLink, ...],
+    *,
+    architecture: CodeArchitectureAnalysis | None = None,
+    architecture_root: str | None = None,
 ) -> tuple[
     tuple[CodeReviewWorkPackage, ...],
     RecommendationStatus,
@@ -401,7 +457,13 @@ def plan_code_review_work_packages(
 ]:
     """Return packages and their explicit ready or abstained envelope state."""
 
-    packages = build_code_review_work_packages(findings, recommendations, links)
+    packages = build_code_review_work_packages(
+        findings,
+        recommendations,
+        links,
+        architecture=architecture,
+        architecture_root=architecture_root,
+    )
     if packages:
         return packages, "ready", None
     return (

@@ -24,6 +24,8 @@ from neocortex.capabilities import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 BASE_DEPENDENCIES = (
+    "complexipy>=6.2,<7",
+    "grimp>=3.15,<4",
     "mypy>=2.1,<3",
     "rich>=15,<16",
     "ruff>=0.15,<0.16",
@@ -172,6 +174,8 @@ def test_missing_optional_runtimes_are_explicitly_unavailable_or_degraded() -> N
     assert statuses["code"].degradation_reasons == (
         "code_ruff_provider_unavailable",
         "code_mypy_provider_unavailable",
+        "code_grimp_provider_unavailable",
+        "code_complexipy_provider_unavailable",
         "code_pyright_node_unavailable",
         "code_pyright_provider_unavailable",
     )

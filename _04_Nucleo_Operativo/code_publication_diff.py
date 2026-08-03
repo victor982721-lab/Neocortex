@@ -9,6 +9,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from .code_architecture_analysis import (
+    ArchitectureModule,
+    CodeArchitectureAnalysis,
+    read_code_architecture_analysis,
+)
 from .code_external_evidence import (
     RUFF_CONFIGURATION_SIGNATURE,
     ExternalEvidenceStatus,
@@ -31,15 +36,17 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v3"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v4"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
+    "neocortex.code-publication-diff/v3",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
 CODE_PUBLICATION_DIFF_MAX_CALLS = 250_000
 CODE_PUBLICATION_DIFF_MAX_HOTSPOTS = 20_000
+CODE_PUBLICATION_DIFF_MAX_MODULES = 50_000
 
 DiffStatus = Literal["ready", "abstained"]
 
@@ -130,6 +137,44 @@ class CodeProviderEvidenceDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeModuleArchitectureDelta:
+    module_id: str
+    baseline_cognitive_complexity: float | None
+    current_cognitive_complexity: float | None
+    cognitive_complexity_delta: float | None
+    fan_in_delta: int
+    fan_out_delta: int
+    baseline_cycle_ids: tuple[str, ...]
+    current_cycle_ids: tuple[str, ...]
+    baseline_contract_ids: tuple[str, ...]
+    current_contract_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CodeComplexityDisplacement:
+    target_module: str
+    target_decrease: float
+    recipient_modules: tuple[str, ...]
+    recipient_increase: float
+    import_relationships: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CodeArchitectureDelta:
+    status: Literal["ready", "not_evaluated"]
+    reason: str | None
+    modules: tuple[CodeModuleArchitectureDelta, ...]
+    added_failed_contracts: tuple[str, ...]
+    resolved_failed_contracts: tuple[str, ...]
+    added_cycles: tuple[tuple[str, ...], ...]
+    resolved_cycles: tuple[tuple[str, ...], ...]
+    displaced_complexity: tuple[CodeComplexityDisplacement, ...]
+    architecture_contracts_not_degraded: Literal["passed", "failed", "not_evaluated"]
+    no_new_import_cycles: Literal["passed", "failed", "not_evaluated"]
+    module_complexity_not_displaced: Literal["passed", "failed", "not_evaluated"]
+
+
+@dataclass(frozen=True, slots=True)
 class CodePublicationDiffDigest:
     xxh3_128: str
     xxh3_64_guard: str
@@ -150,6 +195,7 @@ class CodePublicationDiffResult:
     external_evidence: CodeExternalEvidenceDelta | None
     analysis_profile: str | None
     providers: tuple[CodeProviderEvidenceDelta, ...]
+    architecture: CodeArchitectureDelta | None
     verdict: (
         Literal[
             "improved",
@@ -191,6 +237,7 @@ class _Publication:
     external_diagnostic_ids: frozenset[str]
     external_evidence_suite: ExternalEvidenceSuiteStatus
     provider_finding_ids: dict[str, frozenset[str]]
+    architecture: CodeArchitectureAnalysis
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -440,6 +487,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             connection,
             int(latest["analysis_run_id"]),
         )
+        architecture = read_code_architecture_analysis(
+            connection,
+            int(latest["analysis_run_id"]),
+            database=str(database),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -462,6 +514,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         external_ids,
         external_suite,
         provider_ids,
+        architecture,
     )
 
 
@@ -619,10 +672,12 @@ def _legacy_ruff_contract_compatible(
         and (
             (
                 left.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                and right.comparability_signature is not None
                 and right.comparability_signature.startswith("ruff-protected-basic-comparable-v1:")
             )
             or (
                 right.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                and left.comparability_signature is not None
                 and left.comparability_signature.startswith("ruff-protected-basic-comparable-v1:")
             )
         )
@@ -689,6 +744,7 @@ def _provider_deltas(
                 )
             )
             continue
+        assert left is not None and right is not None
         baseline_ids = baseline.provider_finding_ids.get(provider_id)
         if baseline_ids is None:
             baseline_ids = (
@@ -744,6 +800,196 @@ def _provider_verdict(
     return "equivalent_under_observed_metrics"
 
 
+def _architecture_not_evaluated(reason: str) -> CodeArchitectureDelta:
+    return CodeArchitectureDelta(
+        "not_evaluated",
+        reason,
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        "not_evaluated",
+        "not_evaluated",
+        "not_evaluated",
+    )
+
+
+def _architecture_comparability_reason(
+    baseline: CodeArchitectureAnalysis,
+    current: CodeArchitectureAnalysis,
+) -> str | None:
+    reasons: list[str] = []
+    if baseline.status != "ready":
+        reasons.append(f"baseline_{baseline.status}:{baseline.reason}")
+    if current.status != "ready":
+        reasons.append(f"current_{current.status}:{current.reason}")
+    before = {item.provider_id: item for item in baseline.providers}
+    after = {item.provider_id: item for item in current.providers}
+    for provider_id in sorted(set(before) | set(after)):
+        left = before.get(provider_id)
+        right = after.get(provider_id)
+        if left is None:
+            reasons.append(f"baseline_provider_missing:{provider_id}")
+            continue
+        if right is None:
+            reasons.append(f"current_provider_missing:{provider_id}")
+            continue
+        if left.status != "ready" or right.status != "ready":
+            reasons.append(f"provider_not_ready:{provider_id}")
+            continue
+        if left.provider_schema != right.provider_schema:
+            reasons.append(f"provider_schema_changed:{provider_id}")
+        if left.tool_version != right.tool_version:
+            reasons.append(f"tool_version_changed:{provider_id}")
+        if left.comparability_signature != right.comparability_signature:
+            reasons.append(f"comparability_signature_changed:{provider_id}")
+    return ";".join(dict.fromkeys(reasons)) or None
+
+
+def _module_map(
+    analysis: CodeArchitectureAnalysis,
+) -> dict[str, ArchitectureModule]:
+    if len(analysis.modules) > CODE_PUBLICATION_DIFF_MAX_MODULES:
+        raise ValueError(
+            f"architecture has {len(analysis.modules)} modules; maximum is "
+            f"{CODE_PUBLICATION_DIFF_MAX_MODULES}"
+        )
+    return {item.module_id: item for item in analysis.modules}
+
+
+def _complexity_displacement(
+    baseline: CodeArchitectureAnalysis,
+    current: CodeArchitectureAnalysis,
+    modules: tuple[CodeModuleArchitectureDelta, ...],
+) -> tuple[CodeComplexityDisplacement, ...]:
+    decreases = {
+        item.module_id: -(item.cognitive_complexity_delta or 0.0)
+        for item in modules
+        if item.cognitive_complexity_delta is not None and item.cognitive_complexity_delta < 0.0
+    }
+    increases = {
+        item.module_id: item.cognitive_complexity_delta or 0.0
+        for item in modules
+        if item.cognitive_complexity_delta is not None and item.cognitive_complexity_delta > 0.0
+    }
+    adjacent, relationships = _architecture_adjacency(baseline, current)
+    displaced: list[CodeComplexityDisplacement] = []
+    for target in sorted(decreases):
+        recipients = tuple(
+            module for module in sorted(adjacent.get(target, set())) if module in increases
+        )
+        if not recipients:
+            continue
+        evidence = tuple(
+            sorted(
+                item
+                for recipient in recipients
+                for item in relationships.get(_module_pair(target, recipient), set())
+            )
+        )
+        displaced.append(
+            CodeComplexityDisplacement(
+                target,
+                decreases[target],
+                recipients,
+                sum(increases[module] for module in recipients),
+                evidence,
+            )
+        )
+    return tuple(displaced)
+
+
+def _module_pair(left: str, right: str) -> tuple[str, str]:
+    return (left, right) if left <= right else (right, left)
+
+
+def _architecture_adjacency(
+    baseline: CodeArchitectureAnalysis,
+    current: CodeArchitectureAnalysis,
+) -> tuple[dict[str, set[str]], dict[tuple[str, str], set[str]]]:
+    adjacent: dict[str, set[str]] = {}
+    relationships: dict[tuple[str, str], set[str]] = {}
+    for publication, analysis in (("baseline", baseline), ("current", current)):
+        for edge in analysis.imports:
+            adjacent.setdefault(edge.source_module, set()).add(edge.target_module)
+            adjacent.setdefault(edge.target_module, set()).add(edge.source_module)
+            relationships.setdefault(
+                _module_pair(edge.source_module, edge.target_module), set()
+            ).add(f"{publication}:{edge.source_module}->{edge.target_module}:{edge.comparison}")
+    return adjacent, relationships
+
+
+def _architecture_module_deltas(
+    before: dict[str, ArchitectureModule],
+    after: dict[str, ArchitectureModule],
+) -> tuple[CodeModuleArchitectureDelta, ...]:
+    modules: list[CodeModuleArchitectureDelta] = []
+    for module_id in sorted(set(before) | set(after)):
+        left = before.get(module_id)
+        right = after.get(module_id)
+        baseline_complexity = None if left is None else left.cognitive_complexity_total
+        current_complexity = None if right is None else right.cognitive_complexity_total
+        complexity_delta = (
+            None
+            if baseline_complexity is None or current_complexity is None
+            else current_complexity - baseline_complexity
+        )
+        modules.append(
+            CodeModuleArchitectureDelta(
+                module_id,
+                baseline_complexity,
+                current_complexity,
+                complexity_delta,
+                (0 if right is None else right.fan_in) - (0 if left is None else left.fan_in),
+                (0 if right is None else right.fan_out) - (0 if left is None else left.fan_out),
+                () if left is None else left.cycle_ids,
+                () if right is None else right.cycle_ids,
+                () if left is None else left.contract_ids,
+                () if right is None else right.contract_ids,
+            )
+        )
+    return tuple(modules)
+
+
+def _architecture_delta(
+    baseline: CodeArchitectureAnalysis,
+    current: CodeArchitectureAnalysis,
+) -> CodeArchitectureDelta:
+    reason = _architecture_comparability_reason(baseline, current)
+    if reason is not None:
+        return _architecture_not_evaluated(reason)
+    try:
+        before = _module_map(baseline)
+        after = _module_map(current)
+    except ValueError as exc:
+        return _architecture_not_evaluated(str(exc))
+    frozen_modules = _architecture_module_deltas(before, after)
+    baseline_failed = {item.contract_id for item in baseline.contracts if item.status == "failed"}
+    current_failed = {item.contract_id for item in current.contracts if item.status == "failed"}
+    baseline_cycles = {item.modules for item in baseline.cycles}
+    current_cycles = {item.modules for item in current.cycles}
+    added_contracts = tuple(sorted(current_failed - baseline_failed))
+    resolved_contracts = tuple(sorted(baseline_failed - current_failed))
+    added_cycles = tuple(sorted(current_cycles - baseline_cycles))
+    resolved_cycles = tuple(sorted(baseline_cycles - current_cycles))
+    displaced = _complexity_displacement(baseline, current, frozen_modules)
+    return CodeArchitectureDelta(
+        "ready",
+        None,
+        frozen_modules,
+        added_contracts,
+        resolved_contracts,
+        added_cycles,
+        resolved_cycles,
+        displaced,
+        "passed" if not added_contracts else "failed",
+        "passed" if not added_cycles else "failed",
+        "passed" if not displaced else "failed",
+    )
+
+
 def _digest_payload(
     baseline: CodePublicationSnapshot,
     current: CodePublicationSnapshot,
@@ -752,6 +998,7 @@ def _digest_payload(
     probable_dead_delta: int,
     external_evidence: CodeExternalEvidenceDelta,
     providers: tuple[CodeProviderEvidenceDelta, ...],
+    architecture: CodeArchitectureDelta,
     verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
@@ -782,6 +1029,7 @@ def _digest_payload(
                 "gate": external_evidence.gate,
             },
             "providers": [asdict(item) for item in providers],
+            "architecture": asdict(architecture),
             "verdict": verdict,
             "limitations": list(limitations),
         }
@@ -812,6 +1060,7 @@ def _abstained(
         external_evidence=None,
         analysis_profile=None,
         providers=(),
+        architecture=None,
         verdict=None,
         limitations=(),
         digest=None,
@@ -847,6 +1096,7 @@ def compare_code_publications(
     probable_dead_delta = current.snapshot.probable_dead - baseline.snapshot.probable_dead
     external_evidence = _external_delta(baseline, current)
     providers = _provider_deltas(baseline, current)
+    architecture = _architecture_delta(baseline.architecture, current.architecture)
     verdict = _provider_verdict(providers)
     limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
@@ -856,6 +1106,8 @@ def compare_code_publications(
     ]
     if any(item.status != "ready" for item in providers):
         limitations.append("provider_verdict_uses_only_comparable_providers")
+    if architecture.status != "ready":
+        limitations.append("architecture_delta_not_comparable")
     if any(
         _legacy_ruff_contract_compatible(item.provider_id, item.baseline, item.current)
         for item in providers
@@ -870,6 +1122,7 @@ def compare_code_publications(
         probable_dead_delta,
         external_evidence,
         providers,
+        architecture,
         verdict,
         frozen_limitations,
     )
@@ -886,6 +1139,7 @@ def compare_code_publications(
         external_evidence=external_evidence,
         analysis_profile=current.external_evidence_suite.profile,
         providers=providers,
+        architecture=architecture,
         verdict=verdict,
         limitations=frozen_limitations,
         digest=digest,
@@ -895,10 +1149,13 @@ def compare_code_publications(
 __all__ = [
     "CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS",
     "CODE_PUBLICATION_DIFF_SCHEMA",
+    "CodeArchitectureDelta",
     "CodeCallResolutionChange",
     "CodeCallResolutionDelta",
+    "CodeComplexityDisplacement",
     "CodeExternalEvidenceDelta",
     "CodeHotspotDelta",
+    "CodeModuleArchitectureDelta",
     "CodeProviderEvidenceDelta",
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",

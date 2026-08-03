@@ -241,6 +241,8 @@ Núcleo de aplicación. Contiene:
 - extractores, clasificadores, cachés y repositorios por formato;
 - catálogo documental, organización, revisión y evidencia;
 - búsqueda PDF/DOCX/audio/código y servicio semántico;
+- plataforma de evidencia externa, métricas/relaciones portables, contratos de
+  arquitectura y proyecciones de status/review/diff para el autoanálisis;
 - contratos, snapshot lógico, planner, recuperación, fusión y contexto de la
   Knowledge Plane read-only;
 - watcher incremental foreground;
@@ -413,22 +415,73 @@ optimización durable, no un requisito de corrección ni una identidad ficticia
 del fallback.
 
 Code consume directamente el scan publicado con cero `route_candidates`. La
-finalización incorpora una plataforma de proveedores sobre las versiones Python
-vigentes con fingerprint exacto, incluidas las parciales. `protected` ejecuta
+finalización incorpora una plataforma genérica de proveedores sobre las
+versiones Python vigentes con fingerprint exacto, incluidas las parciales. `protected` ejecuta
 Ruff basic aislado; `trusted-static` añade Ruff con configuración versionada del
-proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright como productores
-independientes. `I,PT,SIM,UP` se excluyen para que estilo y modernización no
+proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
+Grimp y Complexipy como productores independientes. `I,PT,SIM,UP` se excluyen
+para que estilo y modernización no
 desplacen la señal de mantenimiento. Cada proveedor conserva
 descriptor, firma de entorno/configuración/comparabilidad, inputs, findings y
 counters normalizados. La suite y el fence de Code se confirman atómicamente;
 los proveedores no participan en el processing signature AST.
 
+Code schema v4 extiende la persistencia compatible v1-v3 con dos proyecciones
+portables. `external_metrics` vincula un nombre/valor/unidad con un sujeto
+tipado (`file`, `symbol`, `module`, `project`, `run`, `contract` o `scc`);
+`external_relations` vincula dos sujetos tipados con dirección, confianza y
+metadata determinista. Sus IDs y digests no dependen de IDs SQLite locales. El
+replay enlaza esas filas desde el run fuente; status, review, diff y work
+packages son sus consumidores, de modo que la plataforma no acumula métricas o
+relaciones sin una decisión pública.
+
+La capa arquitectónica divide fuente, política y consumo:
+
+1. `ruff-analyze-imports` normaliza la salida de Ruff Analyze y actúa como
+   oráculo diferencial, independiente del productor principal.
+2. `grimp-architecture` construye el grafo mediante Grimp `3.15`, publica
+   relaciones `module_import`, fan-in/fan-out y componentes fuertemente
+   conexos, y evalúa `neocortex.code-architecture-contracts/v1`.
+3. `complexipy-cognitive` usa la API `file_complexity` de Complexipy `6.2.0`
+   para publicar complejidad cognitiva por símbolo y agregados total/máximo por
+   módulo.
+
+El dominio versionado incluye exactamente los seis paquetes de producción;
+excluye `tests`, `tools`, `benchmarks` y el módulo de compatibilidad independiente
+`Orquestador.py`. Los contratos impiden dependencias transitivas Core→UI y
+Foundation→Core/UI, imports de producción hacia namespaces no productivos,
+restringen las fronteras Dedup→Core y `neocortex`→Core/UI mediante allowlists, y
+fijan los SCC conocidos como baseline de `no-new-production-import-cycles-v1`.
+Por tanto un ciclo conocido es una observación versionada, no un aprobado ni la
+afirmación de que el grafo sea acíclico.
+
+Import Linter `2.13` se midió viable sobre el mismo dominio, pero no quedó en la
+ruta productiva: envolverlo repetiría el grafo que ya entrega Grimp y su salida
+de contratos no ofrece un contrato JSON directo. Complexipy se consume por API
+porque el código de salida de su CLI también representa superar un umbral
+predeterminado; esa semántica no debe confundirse con un fallo de herramienta.
+
 El replay exacto valida de nuevo los inputs y enlaza la publicación completa
-mediante `external_run_replays`; no inicia procesos ni duplica findings. Mypy y
+mediante `external_run_replays`; no inicia procesos ni duplica findings,
+métricas o relaciones. Conserva como costo real el tiempo y bytes de
+verificación, aunque `process_invocations=0`. Mypy y
 Pyright se mantienen en espacios de evidencia separados y sólo producen un
 resumen de coincidencias/discrepancias cuando ambos tienen cobertura completa.
 La plataforma es advisory, no ejecuta contenido, no aplica fixes y no posee
 autoridad de mutación. `trusted-deep` está reservado, no implementado.
+
+La proyección pública `architecture_analysis` mantiene por separado
+`import_graph_consensus`, `architecture_contracts` y
+`module_complexity_displacement`. Review v6 y publication diff v4 sólo aprueban
+los gates comparables `architecture_contracts_not_degraded`,
+`no_new_import_cycles` y `module_complexity_not_displaced`; en un baseline,
+ante cobertura parcial o firma incompatible quedan `baseline` o
+`not_evaluated`. Los work packages añaden módulo primario, cadenas de imports
+acotadas, contratos afectados y esos gates, pero conservan autoridad advisory.
+El consumidor correlaciona estas señales con los callers/callees estáticos ya
+publicados por Code: fan-in/fan-out y dependencias aportan contexto modular,
+mientras el grafo de llamadas conserva alcance por símbolo. No duplica ese
+grafo en otra tabla ni combina ambas dimensiones dentro de un score mágico.
 
 La finalización adquiere una transacción propia y exige exactamente una ruta code
 completada, identidad vigente y ceros en candidatos, `file_actions`,
@@ -770,6 +823,10 @@ Herramientas externas posibles:
   runtime Python; Ruff usa política basic aislada o política trusted del proyecto;
 - Pyright `1.1.411` como paquete npm aislado junto al runtime, ejecutado mediante
   Node únicamente en `trusted-static`;
+- Ruff Analyze como oráculo diferencial de imports, ejecutado por el mismo Ruff
+  del runtime y sin configuración extensible;
+- Grimp `3.15` y Complexipy `6.2.0` como productores Python aislados de grafo,
+  contratos y complejidad cognitiva en `trusted-static`;
 - FastEmbed y Faster-Whisper para inferencia local.
 
 No se observó `shell=True` en el motor auditado. La presencia de límites no
@@ -779,7 +836,8 @@ equivale a sandbox completo; véase [SECURITY.md](SECURITY.md).
 
 El paquete se construye con setuptools y exige Python `>=3.13,<3.14`. Incluye
 los seis paquetes de producción, `neocortex`, el shim `Orquestador.py` y assets
-de la GUI. La base exacta es `mypy` + `rich` + `ruff` + `xxhash`; `documents`, `audio`,
+de la GUI. La base exacta es `complexipy` + `grimp` + `mypy` + `rich` + `ruff` +
+`xxhash`; `documents`, `audio`,
 `image`, `semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
 `neocortex.capabilities` inspecciona esa disponibilidad de forma estática; no
 certifica inferencia, caché de modelos ni compatibilidad resuelta.

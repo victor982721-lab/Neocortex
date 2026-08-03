@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from .code_architecture_analysis import CodeArchitectureAnalysis
 from .code_external_evidence import (
     ExternalEvidenceStatus,
     external_status_digest_payload,
@@ -38,6 +39,7 @@ def build_code_review_digest(
     work_packages: tuple[CodeReviewWorkPackage, ...],
     external_evidence: ExternalEvidenceStatus,
     external_evidence_suite: ExternalEvidenceSuiteStatus,
+    architecture: CodeArchitectureAnalysis,
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     """Hash every decision-bearing field while excluding local database paths."""
@@ -64,6 +66,7 @@ def build_code_review_digest(
             "work_packages": [asdict(package) for package in work_packages],
             "external_evidence": external_status_digest_payload(external_evidence),
             "external_evidence_suite": external_evidence_suite.as_payload(),
+            "architecture": architecture.digest_payload(),
             "limitations": list(limitations),
         }
     )

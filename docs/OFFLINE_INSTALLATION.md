@@ -53,7 +53,7 @@ La METADATA de `0.7.2` separa el cierre de runtime así:
 
 | Selección | Requisitos directos |
 |---|---|
-| base | `mypy`, `rich`, `ruff`, `xxhash` |
+| base | `complexipy`, `grimp`, `mypy`, `rich`, `ruff`, `xxhash` |
 | `documents` | `Pillow`, `PyMuPDF`, `pdfminer.six`, `pytesseract` |
 | `audio` | `faster-whisper` |
 | `image` | `Pillow`, `nudenet` |
@@ -79,6 +79,12 @@ instalación offline debe sustituir el comando npm por un cache/registry local
 autorizado y conservar el tarball, hash y avisos; no se permite red durante el
 autoanálisis.
 
+El mismo cierre Python debe resolver exactamente Grimp `3.15` y Complexipy
+`6.2.0` desde `constraints.txt`. No se instala Import Linter: la prueba focal de
+`2.13` confirmó que es viable, pero Grimp ya entrega directamente el grafo
+legible por máquina y evita duplicar el mismo análisis. Ruff Analyze pertenece
+al Ruff `0.15.17` ya fijado; no es otra distribución.
+
 También se debe preparar y validar por separado `ffprobe` en `PATH` para la
 capacidad `audio`. La ausencia
 de `tesseract` o `qpdf` deja degradadas las funciones OCR/recuperación PDF de
@@ -91,8 +97,9 @@ declaran presencia, no validan los rangos de versiones: el resolver hermético y
 `--no-deps` permite comprobar versión y ayuda porque esas rutas de arranque no
 importan engines. No demuestra que `KnowledgeSearchService`, inventario o una
 ruta operativa funcionen: para ello el venv aislado debe contener al menos el
-cierre base de `mypy`, `rich`, `ruff` y `xxhash`. Ruff y Mypy deben resolverse
-desde el mismo runtime Python. Pyright pertenece a la preparación separada de
+cierre base de `complexipy`, `grimp`, `mypy`, `rich`, `ruff` y `xxhash`. Ruff,
+Mypy, Grimp y Complexipy deben resolverse desde el mismo runtime Python.
+Pyright pertenece a la preparación separada de
 `trusted-static`; su ausencia no impide `protected`, pero deja su proveedor y el
 consenso de tipos degradados. Ningún probe de instalación debe cargar o
 descargar modelos; la disponibilidad de modelos
