@@ -96,6 +96,11 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
         "_pyright_locations",
         lambda: (Path("node"), Path("pyright.js"), "pyright-test"),
     )
+    monkeypatch.setattr(
+        providers_module,
+        "_installed_distribution_signature",
+        lambda **_kwargs: "installed-environment:fixture",
+    )
 
     providers = providers_for_profile(
         "trusted-deep",
@@ -109,6 +114,10 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
         "ruff-trusted-project",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "semgrep-neocortex-invariants",
+        "deptry-project-dependencies",
+        "pip-audit-known-vulnerabilities",
+        "installed-package-inventory",
         "vulture-unused-static",
         "ruff-analyze-imports",
         "grimp-architecture",

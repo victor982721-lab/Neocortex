@@ -178,7 +178,7 @@ def test_vulture_provider_uses_exact_project_wide_input_and_replays(
     assert replay.limitations == limitations
 
 
-def test_trusted_static_registry_exposes_all_eight_providers(
+def test_trusted_static_registry_exposes_all_twelve_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,6 +194,11 @@ def test_trusted_static_registry_exposes_all_eight_providers(
         "_pyright_locations",
         lambda: (Path("node"), Path("pyright.js"), "pyright-test"),
     )
+    monkeypatch.setattr(
+        providers_module,
+        "_installed_distribution_signature",
+        lambda **_kwargs: "installed-environment:fixture",
+    )
 
     providers = providers_for_profile("trusted-static", root)
 
@@ -202,6 +207,10 @@ def test_trusted_static_registry_exposes_all_eight_providers(
         "ruff-trusted-project",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "semgrep-neocortex-invariants",
+        "deptry-project-dependencies",
+        "pip-audit-known-vulnerabilities",
+        "installed-package-inventory",
         "vulture-unused-static",
         "ruff-analyze-imports",
         "grimp-architecture",
