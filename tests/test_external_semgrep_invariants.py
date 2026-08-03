@@ -208,9 +208,10 @@ def test_command_and_environment_disable_network_registry_and_autofix(
         assert folded["semgrep_send_metrics"] == "off"
         assert folded["semgrep_enable_version_check"] == "0"
         assert folded["otel_sdk_disabled"] == "true"
-        assert folded["temp"] == str(tmp_path.parent)
-        assert folded["tmp"] == str(tmp_path.parent)
-        assert folded["tmpdir"] == str(tmp_path.parent)
+        expected_temporary_parent = str(adapter._semgrep_temporary_parent(tmp_path))
+        assert folded["temp"] == expected_temporary_parent
+        assert folded["tmp"] == expected_temporary_parent
+        assert folded["tmpdir"] == expected_temporary_parent
         for key in (
             "semgrep_log_file",
             "semgrep_settings_file",

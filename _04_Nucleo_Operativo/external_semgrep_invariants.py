@@ -51,6 +51,7 @@ _MAX_RULESET_BYTES = 64 * 1024
 _MAX_BATCH_FILES = 50
 _MAX_BATCH_ARGV_CHARS = 24 * 1024
 _MAX_TREE_ENTRIES = 20_000
+_WINDOWS_TEMP_PARENT_MAX_CHARS = 80
 _RULE_SCHEMA = "neocortex.semgrep-project-invariant-rule/v1"
 _BASE_LIMITATIONS = (
     "semgrep_ce_single_file_analysis",
@@ -373,12 +374,7 @@ def _semgrep_environment(
     settings.write_bytes(b"{}\n")
     cache = stage_root / "semgrep-xdg-cache"
     config = stage_root / "semgrep-xdg-config"
-    temporary_parent = stage_root.parent
-    temporary_metadata = os.lstat(temporary_parent)
-    if _is_reparse(temporary_parent, temporary_metadata) or not stat.S_ISDIR(
-        temporary_metadata.st_mode
-    ):
-        raise ValueError("Semgrep scratch parent is not a regular directory")
+    temporary_parent = _semgrep_temporary_parent(stage_root)
     cache.mkdir(exist_ok=True)
     config.mkdir(exist_ok=True)
     controlled.update(
@@ -405,6 +401,25 @@ def _semgrep_environment(
         }
     )
     return controlled
+
+
+def _semgrep_temporary_parent(stage_root: Path) -> Path:
+    """Select a validated short ancestor for pysemgrep core handoff files."""
+
+    candidates = (stage_root.parent, *stage_root.parent.parents)
+    for candidate in candidates:
+        if os.name == "nt" and len(os.fspath(candidate)) > _WINDOWS_TEMP_PARENT_MAX_CHARS:
+            continue
+        try:
+            metadata = os.lstat(candidate)
+        except OSError:
+            continue
+        if _is_reparse(candidate, metadata) or not stat.S_ISDIR(metadata.st_mode):
+            continue
+        if candidate == Path(candidate.anchor):
+            continue
+        return candidate
+    raise ValueError("Semgrep short scratch parent is unavailable")
 
 
 def _batches(paths: Sequence[str]) -> tuple[tuple[str, ...], ...]:
