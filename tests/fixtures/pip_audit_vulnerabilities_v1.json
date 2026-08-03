@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Demo_Pkg",
+    "version": "1.0",
+    "vulns": [
+      {
+        "id": "PYSEC-2026-1",
+        "fix_versions": ["1.1"],
+        "aliases": ["CVE-2026-0001", "GHSA-aaaa-bbbb-cccc"],
+        "description": null
+      },
+      {
+        "id": "GHSA-dddd-eeee-ffff",
+        "fix_versions": [],
+        "aliases": [],
+        "description": null
+      }
+    ]
+  },
+  {
+    "name": "safe.pkg",
+    "version": "2.0",
+    "vulns": []
+  },
+  {
+    "name": "private-pkg",
+    "skip_reason": "Dependency is not available from the selected PyPI service"
+  }
+]

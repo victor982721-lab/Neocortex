@@ -1,0 +1,11 @@
+[project]
+name = "neocortex-framework"
+dynamic = ["version"]
+dependencies = [
+    "demo-dep>=1,<2",
+]
+
+[project.optional-dependencies]
+full = [
+    "optional-extra>=3",
+]
