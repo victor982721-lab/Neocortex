@@ -277,7 +277,7 @@ Neocortex --state-directory $State --code-review --code-review-limit 50 --code-j
 El contrato `neocortex.code-review/v6` conserva compatibilidad con v2-v5 y la proyección
 legacy `external_evidence`; añade `external_evidence_suite` con perfil, estado,
 proveedores, cobertura, counters, gates y consenso de tipos. Añade además
-`architecture_analysis`, que consume métricas/relaciones persistidas y resume
+`architecture`, que consume métricas/relaciones persistidas y resume
 módulos, símbolos, imports, SCC, ciclos, contratos y tres estados explícitos:
 `import_graph_consensus`, `architecture_contracts` y
 `module_complexity_displacement`. Cada estado puede quedar `not_evaluated`; la

@@ -260,8 +260,11 @@ def test_migrated_legacy_ruff_compares_with_current_protected_contract(
     assert {
         provider_id for provider_id, delta in providers.items() if delta.status == "not_evaluated"
     } == {
+        "complexipy-cognitive",
+        "grimp-architecture",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "ruff-analyze-imports",
         "ruff-trusted-project",
     }
     assert all(
