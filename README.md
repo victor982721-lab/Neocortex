@@ -260,9 +260,11 @@ su snapshot y el inventario instalado se recalcula en cada corrida. Todos
 publican versión, firmas, cobertura, contadores de proceso/bytes/tiempo/caché y
 evidencia únicamente advisory; ninguno aplica fixes ni posee autoridad de
 mutación. Un
-replay exacto vuelve a verificar los inputs y reutiliza la publicación sin abrir
-otro proceso. La suite aparece en status, review, publication diff y code
-doctor; una indisponibilidad o límite alcanzado obliga a abstener el gate
+replay exacto vuelve a verificar los inputs y reutiliza la publicación sin
+reejecutar el workload del analizador, tests o mutantes; puede usar probes
+acotados, explicados y costeados. La suite aparece en status, review,
+publication diff y code doctor; una indisponibilidad o límite alcanzado obliga
+a abstener el gate
 afectado, no borra la evidencia de los demás proveedores.
 
 `trusted-deep` es un perfil adicional, nunca predeterminado, que conserva los
