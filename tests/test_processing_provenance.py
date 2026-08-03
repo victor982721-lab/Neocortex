@@ -108,8 +108,7 @@ class RouteProcessingSignatureTests(unittest.TestCase):
         config = PdfRouteConfig(Path("pdf.sqlite3"))
         with (
             patch(
-                "_04_Nucleo_Operativo.processing_provenance."
-                "installed_distribution_version",
+                "_04_Nucleo_Operativo.processing_provenance.installed_distribution_version",
                 side_effect=installed_version,
             ),
             patch(
@@ -177,42 +176,47 @@ class RouteProcessingSignatureTests(unittest.TestCase):
         def version_13(distribution: str) -> str | None:
             return "13.0.0" if distribution == "Pillow" else "3.4.2"
 
-        with (
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance."
-                "installed_distribution_version",
-                side_effect=version_12,
-            ),
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
-                return_value="a" * 32,
-            ),
-        ):
-            initial = config.processing_signature
-        with (
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance."
-                "installed_distribution_version",
-                side_effect=version_12,
-            ),
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
-                return_value="b" * 32,
-            ),
-        ):
-            changed_model = config.processing_signature
-        with (
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance."
-                "installed_distribution_version",
-                side_effect=version_13,
-            ),
-            patch(
-                "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
-                return_value="b" * 32,
-            ),
-        ):
-            changed_pillow = config.processing_signature
+        with tempfile.TemporaryDirectory() as directory:
+            model_path = Path(directory) / "320n.onnx"
+            model_path.write_bytes(b"fixture-model")
+            distribution = SimpleNamespace(locate_file=lambda _relative: model_path)
+            with patch(
+                "_04_Nucleo_Operativo.processing_provenance.metadata.distribution",
+                return_value=distribution,
+            ):
+                with (
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.installed_distribution_version",
+                        side_effect=version_12,
+                    ),
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
+                        return_value="a" * 32,
+                    ),
+                ):
+                    initial = config.processing_signature
+                with (
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.installed_distribution_version",
+                        side_effect=version_12,
+                    ),
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
+                        return_value="b" * 32,
+                    ),
+                ):
+                    changed_model = config.processing_signature
+                with (
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.installed_distribution_version",
+                        side_effect=version_13,
+                    ),
+                    patch(
+                        "_04_Nucleo_Operativo.processing_provenance.fingerprint_file_xxh3_128",
+                        return_value="b" * 32,
+                    ),
+                ):
+                    changed_pillow = config.processing_signature
 
         self.assertNotEqual(initial, changed_model)
         self.assertNotEqual(changed_model, changed_pillow)
@@ -238,18 +242,13 @@ class RouteProcessingSignatureTests(unittest.TestCase):
         office = OfficeRouteConfig(Path("office.sqlite3"), max_text_chars=1_000)
         changed_office = replace(office, max_text_chars=2_000)
 
-        self.assertNotEqual(
-            docx.processing_signature, changed_docx.processing_signature
-        )
+        self.assertNotEqual(docx.processing_signature, changed_docx.processing_signature)
         self.assertNotEqual(
             office.processing_signature,
             changed_office.processing_signature,
         )
         self.assertEqual(
-            {
-                item["name"]
-                for item in docx.processing_provenance.manifest["components"]
-            },
+            {item["name"] for item in docx.processing_provenance.manifest["components"]},
             {"python-runtime", "xxhash"},
         )
 
@@ -279,9 +278,7 @@ class RouteProcessingSignatureTests(unittest.TestCase):
             )
 
         self.assertNotEqual(initial.signature, changed.signature)
-        self.assertIn(
-            "ffprobe", {item["name"] for item in initial.manifest["components"]}
-        )
+        self.assertIn("ffprobe", {item["name"] for item in initial.manifest["components"]})
 
     def test_every_route_summary_exposes_one_schema_contract(self) -> None:
         summaries = (
@@ -360,12 +357,10 @@ class TesseractRuntimeProvenanceTests(unittest.TestCase):
                 )
 
             initial_fingerprints = {
-                item["name"]: item["xxh3_128"]
-                for item in initial.component["traineddata"]
+                item["name"]: item["xxh3_128"] for item in initial.component["traineddata"]
             }
             changed_fingerprints = {
-                item["name"]: item["xxh3_128"]
-                for item in changed.component["traineddata"]
+                item["name"]: item["xxh3_128"] for item in changed.component["traineddata"]
             }
             self.assertNotEqual(
                 initial_fingerprints["spa.traineddata"],

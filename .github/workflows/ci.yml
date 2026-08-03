@@ -172,6 +172,10 @@ jobs:
           New-Item -ItemType Directory -Path $suiteRoot -Force | Out-Null
           Copy-Item -LiteralPath "$env:GITHUB_WORKSPACE\tests" `
             -Destination "$suiteRoot\tests" -Recurse
+          $pythonTemp = Join-Path $env:RUNNER_TEMP "python-temp-standard"
+          New-Item -ItemType Directory -Path $pythonTemp -Force | Out-Null
+          $env:TEMP = $pythonTemp
+          $env:TMP = $pythonTemp
           $env:PYTHONPATH = $suiteRoot
           Push-Location $suiteRoot
           try {
