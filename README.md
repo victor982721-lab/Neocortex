@@ -375,6 +375,33 @@ Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-j
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
 
+#### Consulta unificada de la publicación
+
+`--code-query` ofrece una sola superficie read-only sobre `status`, `review` y
+`diff`; consume únicamente publicaciones existentes y no vuelve a analizar la
+raíz, migra bases ni escribe estado:
+
+```powershell
+Neocortex --state-directory $State --code-query status
+Neocortex --state-directory $State --code-query review --code-query-provider $Provider --code-query-module $Module --code-json
+Neocortex --state-directory $State --code-query diff --code-query-baseline $BaselineState --code-query-delta added --code-json
+```
+
+Los filtros repetibles son `provider`, `category`, `module`, `status`, `delta`
+y `work-package`; se combinan con AND entre dimensiones y OR dentro de una
+misma dimensión. Un filtro de módulo incluye el módulo exacto y sus
+descendientes. `--code-query-limit` acepta 1–500 (50 por defecto) y
+`--code-query-baseline` sólo es válido con `diff`. La salida humana y JSON
+conservan dimensiones, evidencia y limitaciones por separado: no calculan un
+score agregado ni una probabilidad de defecto, y nunca autorizan una mutación.
+
+El único workflow `Neocortex CI` en `.github/workflows/ci.yml` valida Windows y
+Python 3.13. Los carriles `fast` y `standard` corren en pull requests y pushes;
+`deep` queda reservado al cron semanal o a `workflow_dispatch`. Standard
+construye e instala el wheel antes de probarlo; deep ejecuta sólo fixtures y
+contratos acotados, no suplanta la identidad física local exigida por una
+corrida real `trusted-deep`.
+
 La validación H6 sobre la raíz canónica produjo el work package
 `_04_Nucleo_Operativo.external_deep_coverage` /
 `external_deep_coverage._normalize`. Run 9 terminó en 343.168 s con 585
@@ -384,6 +411,15 @@ timeout; score 0.50) de 524 generados. Run 10 repitió los mismos bytes en 23.99
 s: 585/585 candidatos por caché, cero bytes/analyze/persist/graph y 14 replays;
 el inventario instalado se recalculó. Status, review y diff tardaron 38.982,
 47.675 y 57.856 s, respectivamente.
+
+La aceptación H7 desde wheel ejecutó run 11 en 356.807 s sobre 591 candidatos
+(64 procesados, 527 por caché), 15 proveedores y cero errores. Run 12 demostró
+replay exacto en 25.076 s con 591/591 hits, cero bytes y cero milisegundos de
+read/analyze/persist/graph. Status, review y diff públicos tardaron 33.029,
+41.311 y 66.279 s; las consultas instaladas combinaron proveedor, categoría,
+módulo, estado, delta y work package con resultados acotados y sin score mágico.
+El cierre factual completo está en
+[Programa de autoanálisis multianalizador](docs/SELF_ANALYSIS_PROGRAM_REPORT_2026-08-03.md).
 
 La corrida normal usa el mismo baseline portable cuando USN no existe o deja
 de estar disponible: publica el snapshot completo con cursor nulo y las rutas

@@ -205,6 +205,27 @@ observacional para exigir revisión; no autoriza editar ni borrar. Coverage pued
 explicar una ejecución observada, pero la falta de cobertura nunca fortalece la
 hipótesis de no uso.
 
+### Consulta unificada sin reanálisis
+
+Use `--code-query` para filtrar `status`, `review` o `diff` ya publicados sin
+abrir una nueva corrida ni escribir los owners:
+
+```powershell
+Neocortex --state-directory $State --code-query status --code-query-provider $Provider
+Neocortex --state-directory $State --code-query review --code-query-module $Module --code-query-work-package $WorkPackage --code-json
+Neocortex --state-directory $State --code-query diff --code-query-baseline $BaselineState --code-query-delta added --code-json
+```
+
+Puede repetir `--code-query-provider`, `--code-query-category`,
+`--code-query-module`, `--code-query-status`, `--code-query-delta` y
+`--code-query-work-package`. La consulta aplica OR dentro de cada dimensión y
+AND entre dimensiones; un módulo incluye coincidencia exacta y descendientes.
+El límite es 1–500, con 50 por defecto. El baseline se exige exclusivamente
+para `diff`. Una publicación ausente, incompatible o no comparable produce su
+abstención/limitación; no dispara autoanálisis, migraciones ni rutas alternas.
+La salida sigue siendo advisory y multidimensional, sin score agregado,
+probabilidad de defecto ni autoridad de mutación.
+
 ### Perfil `trusted-deep`
 
 Úselo sólo para ejecutar la suite declarada de Neocortex y correlacionar pruebas,
@@ -581,6 +602,32 @@ referencian desde la publicación original, sin duplicarse. El tiempo y bytes de
 la verificación siguen siendo costos reales del replay; cero procesos no
 significa costo cero. El replay verifica inputs; no significa
 que se haya omitido la comprobación de frescura.
+
+## Integración continua por carriles
+
+`.github/workflows/ci.yml` es el único workflow de producto y se presenta como
+`Neocortex CI`. Todos sus jobs usan Windows y Python 3.13:
+
+- `fast` corre en pull requests y pushes: Ruff check/format y el subconjunto
+  contractual rápido;
+- `standard` corre en pull requests y pushes: construye el wheel sin aislar la
+  resolución ya declarada, lo instala con constraints en un entorno temporal,
+  ejecuta `pip check`, verifica que imports y `Neocortex` provengan de
+  `site-packages`/`Scripts` y prueba la suite core desde una copia temporal;
+- `deep` sólo corre por el cron semanal o `workflow_dispatch`: prepara Pyright
+  `1.1.411` aislado y ejecuta las pruebas opt-in de los workers
+  trusted-deep/mutación sobre fixtures acotados.
+
+El checkout efímero del runner no posee la identidad física exacta de
+`C:\Users\Victor\Neocortex\Repository`; por eso `deep` verifica contratos y
+fixtures, pero no intenta una corrida real de `--analysis-profile trusted-deep`
+ni debilita ese lock. El workflow usa las majors oficiales vigentes
+`actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` y
+`actions/upload-artifact@v7`. Sus fuentes canónicas son los repositorios
+oficiales de [checkout](https://github.com/actions/checkout),
+[setup-python](https://github.com/actions/setup-python),
+[setup-node](https://github.com/actions/setup-node) y
+[upload-artifact](https://github.com/actions/upload-artifact).
 
 ## Cancelación de una corrida normal
 

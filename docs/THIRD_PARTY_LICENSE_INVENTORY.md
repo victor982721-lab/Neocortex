@@ -87,6 +87,22 @@ para verificar el wheel instalado efectivo; no se reutiliza por caché como si
 la resolución del entorno fuese inmutable. Cualquier redistribución debe volver
 a generar el inventario completo de esa resolución constrained.
 
+### Addendum del runtime candidato 0.7.2 — Hito 7
+
+Hito 7 no añadió una dependencia de producción. El wheel instalado tiene
+1 589 930 bytes, 298 miembros y SHA-256
+`3B5687DE15B51EA5A2A22190AF999D11CFC720CED8BA617AD068D08D0B4B9087`;
+aprobó integridad ZIP y `pip check`. Los cuatro módulos de la nueva consulta
+pública fueron byte-idénticos entre fuente, wheel e instalación.
+
+El inventario efectivo del venv candidato observó 124 distribuciones: 121 con
+alguna metadata de licencia, 46 declaraciones ambiguas y 3 ausentes. Las 14
+dependencias base aplicables estaban instaladas y compatibles. Se verificaron
+301 hashes y tamaños `RECORD`, 6 155 721 bytes, sin faltantes, rutas inseguras ni
+discrepancias. Pyright 1.1.411 y Node 24.18.1 permanecen aislados fuera del wheel.
+Las acciones oficiales `actions/*@v7` pertenecen a la orquestación CI y no se
+redistribuyen dentro del paquete Python.
+
 ### Revalidación PRE-REPORT de continuación
 
 La revalidación del **2026-07-25 16:55 -06:00** confirmó sin red ni cambios globales:

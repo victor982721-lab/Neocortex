@@ -134,9 +134,7 @@ EXPECTED_CODE_ACTIONS = (
         "code_cache_validation",
         default="metadata",
         choices=("metadata", "full"),
-        help_text=(
-            "metadata is incremental-fast; full rechecks exact bytes before reuse"
-        ),
+        help_text=("metadata is incremental-fast; full rechecks exact bytes before reuse"),
     ),
     _expected_boolean_optional(
         "--code-generated",
@@ -251,6 +249,43 @@ EXPECTED_CODE_ACTIONS = (
         "code_doctor",
         "verify code schema, FTS and analyzer availability without analysis",
     ),
+    _expected_store(
+        "--code-query",
+        "code_query",
+        choices=("status", "review", "diff"),
+        help_text="query published Code analysis through one bounded read-only surface",
+    ),
+    *(
+        _expected_store(
+            f"--code-query-{option}",
+            f"code_query_{option.replace('-', '_')}",
+            metavar="VALUE",
+            help_text="repeat to add an exact Code analysis query filter",
+            action_name="_AppendAction",
+        )
+        for option in (
+            "provider",
+            "category",
+            "module",
+            "status",
+            "delta",
+            "work-package",
+        )
+    ),
+    _expected_store(
+        "--code-query-limit",
+        "code_query_limit",
+        default=50,
+        type_name="int",
+        metavar="N",
+        help_text="return between 1 and 500 bounded query rows",
+    ),
+    _expected_store(
+        "--code-query-baseline",
+        "code_query_baseline",
+        metavar="BASELINE_STATE",
+        help_text="baseline state required only by --code-query diff",
+    ),
     _expected_flag("--code-json", "code_json"),
 )
 
@@ -299,6 +334,24 @@ EXPECTED_CODE_HELP = (
     "  --code-reconstruct-strategy {latest,coherent,branches}\n"
     "  --code-doctor         verify code schema, FTS and analyzer availability\n"
     "                        without analysis\n"
+    "  --code-query {status,review,diff}\n"
+    "                        query published Code analysis through one bounded\n"
+    "                        read-only surface\n"
+    "  --code-query-provider VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-category VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-module VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-status VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-delta VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-work-package VALUE\n"
+    "                        repeat to add an exact Code analysis query filter\n"
+    "  --code-query-limit N  return between 1 and 500 bounded query rows\n"
+    "  --code-query-baseline BASELINE_STATE\n"
+    "                        baseline state required only by --code-query diff\n"
     "  --code-json\n"
     "\n"
 )
@@ -324,9 +377,7 @@ def _normalized_action(action: argparse.Action) -> tuple[object, ...]:
 
 def test_code_actions_aliases_and_help_preserve_the_normalized_contract() -> None:
     parser = build_parser()
-    group = next(
-        item for item in parser._action_groups if item.title == CODE_GROUP_TITLE
-    )
+    group = next(item for item in parser._action_groups if item.title == CODE_GROUP_TITLE)
 
     assert group is parser._action_groups[-3]
     assert parser._action_groups[-2].title == SEMANTIC_GROUP_TITLE
@@ -335,9 +386,7 @@ def test_code_actions_aliases_and_help_preserve_the_normalized_contract() -> Non
         EXPECTED_CODE_ACTIONS
     )
     max_file_action = next(
-        action
-        for action in group._group_actions
-        if action.dest == "code_max_file_bytes"
+        action for action in group._group_actions if action.dest == "code_max_file_bytes"
     )
     assert max_file_action.type is decimal_megabytes
     help_text = parser.format_help()

@@ -57,11 +57,15 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   ingeniería mediante deltas y gates explicables. Status, work packages y code
   doctor consumen la misma evidencia sin cambiar ranking ni autorizar
   mutaciones.
+- `--code-query {status,review,diff}` unifica consultas acotadas sobre esas
+  publicaciones. Admite filtros repetibles por proveedor, categoría, módulo,
+  estado, delta y work package, salida humana/JSON y hasta 500 resultados;
+  nunca reanaliza ni escribe estado y no reduce dimensiones a un score mágico.
 - Historia Git local v1 publica commits, churn, recencia y relaciones de cambio
   sin consultar remotos. `neocortex.code-engineering-analytics/v1` correlaciona
   esa historia con arquitectura v2, Coverage y mutación focal mediante
-  dimensiones y gates explícitos, sin `aggregate_score` ni
-  `defect_probability`.
+  dimensiones y gates explícitos, con `aggregate_score=null` y
+  `defect_probability=null` en vez de una puntuación mágica.
 - Cosmic Ray `8.4.6` genera y ejecuta mutantes sólo sobre una copia staged
   verificada del objetivo y su selección de pruebas. Los argumentos nuevos
   `--deep-mutation-target`, `--deep-mutation-symbol`,
@@ -70,6 +74,10 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   timeout por mutante y presupuesto total. El proveedor declara posible red por
   el contenido ejecutado, pero no puede mutar repositorio, corpus ni estado
   durable.
+- Workflow único `Neocortex CI` para Windows/Python 3.13: carriles `fast` y
+  `standard` en pull requests/pushes, wheel instalado en el segundo y carril
+  `deep` sólo semanal o manual sobre fixtures/contratos. Usa las Actions
+  oficiales v7 y no relaja la identidad física local exigida por trusted-deep.
 - Inventario Dedup v9: la publicación generacional ya no depende de USN. Un
   checkpoint conserva cursor completo o tres nulos; la corrida normal usa full
   scan portable cuando USN falta y mantiene Code/rutas incrementales por caché.

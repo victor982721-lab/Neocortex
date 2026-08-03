@@ -144,6 +144,37 @@ def register_code_arguments(
         action="store_true",
         help="verify code schema, FTS and analyzer availability without analysis",
     )
+    code.add_argument(
+        "--code-query",
+        choices=("status", "review", "diff"),
+        help="query published Code analysis through one bounded read-only surface",
+    )
+    for option in (
+        "provider",
+        "category",
+        "module",
+        "status",
+        "delta",
+        "work-package",
+    ):
+        code.add_argument(
+            f"--code-query-{option}",
+            action="append",
+            metavar="VALUE",
+            help="repeat to add an exact Code analysis query filter",
+        )
+    code.add_argument(
+        "--code-query-limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="return between 1 and 500 bounded query rows",
+    )
+    code.add_argument(
+        "--code-query-baseline",
+        metavar="BASELINE_STATE",
+        help="baseline state required only by --code-query diff",
+    )
     code.add_argument("--code-json", action="store_true")
 
 
@@ -166,6 +197,33 @@ def _validate_code_review_selection(
         raise SystemExit("--code-review-limit requires --code-review")
     if args.code_review and args.code_review_limit > 10 and not args.code_json:
         raise SystemExit("--code-review-limit above 10 requires --code-json")
+
+
+def _validate_code_query_selection(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
+    query_options = {
+        "code_query_provider",
+        "code_query_category",
+        "code_query_module",
+        "code_query_status",
+        "code_query_delta",
+        "code_query_work_package",
+        "code_query_limit",
+        "code_query_baseline",
+    }
+    if query_options.intersection(explicit) and args.code_query is None:
+        raise SystemExit("code query filters, limit and baseline require --code-query")
+    if not 1 <= args.code_query_limit <= 500:
+        raise SystemExit("--code-query-limit must be between 1 and 500")
+    if args.code_query == "diff":
+        if args.code_query_baseline is None:
+            raise SystemExit("--code-query diff requires --code-query-baseline")
+        if not args.code_query_baseline.strip():
+            raise SystemExit("--code-query-baseline must be non-empty")
+    elif args.code_query_baseline is not None:
+        raise SystemExit("--code-query-baseline is only valid with --code-query diff")
 
 
 def validate_code_arguments(args: argparse.Namespace) -> None:
@@ -191,13 +249,12 @@ def validate_code_arguments(args: argparse.Namespace) -> None:
     _validate_code_review_limit(args)
     if args.code_min_complexity is not None and args.code_min_complexity < 0:
         raise SystemExit("--code-min-complexity cannot be negative")
-    if args.code_search_mode and len(set(args.code_search_mode)) != len(
-        args.code_search_mode
-    ):
+    if args.code_search_mode and len(set(args.code_search_mode)) != len(args.code_search_mode):
         raise SystemExit("--code-search-mode values cannot be duplicated")
 
     explicit = set(getattr(args, "_explicit_options", ()))
     _validate_code_review_selection(args, explicit)
+    _validate_code_query_selection(args, explicit)
     search_options = {
         "code_search_mode",
         "code_search_limit",
@@ -213,6 +270,10 @@ def validate_code_arguments(args: argparse.Namespace) -> None:
     if "code_reconstruct_strategy" in explicit and args.code_reconstruct is None:
         raise SystemExit("--code-reconstruct-strategy requires --code-reconstruct")
     code_direct = selected_direct_operations(args, family=DirectOperationFamily.CODE)
+    if args.code_query is not None and any(
+        operation.destination != "code_query" for operation in code_direct
+    ):
+        raise SystemExit("--code-query cannot be combined with another direct code operation")
     if "code_json" in explicit and not code_direct:
         raise SystemExit("--code-json requires a direct code operation")
     if code_direct and args.apply:

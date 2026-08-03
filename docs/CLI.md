@@ -292,6 +292,32 @@ dimensiones y sólo calcula delta de mutation score con alcance comparable.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
+#### Consulta multidimensional de publicaciones Code
+
+`--code-query {status,review,diff}` consulta las mismas publicaciones mediante
+una interfaz acotada, sin ejecutar otra vez el autoanálisis y sin crear, migrar,
+hacer checkpoint ni escribir sus bases:
+
+```powershell
+Neocortex --state-directory $State --code-query status
+Neocortex --state-directory $State --code-query review `
+  --code-query-provider $Provider --code-query-category $Category `
+  --code-query-module $Module --code-query-status $Status `
+  --code-query-work-package $WorkPackage --code-query-limit 100 --code-json
+Neocortex --state-directory $CurrentState --code-query diff `
+  --code-query-baseline $BaselineState --code-query-delta added --code-json
+```
+
+Cada filtro puede repetirse: valores de la misma dimensión se unen con OR y
+dimensiones diferentes con AND. `module` coincide con el módulo exacto y sus
+descendientes; los demás filtros son valores exactos publicados. El límite
+predeterminado es 50 y el rango válido es 1–500. Baseline es obligatorio para
+`diff` y se rechaza con `status` o `review`. Sin `--code-json`, la salida humana
+usa `CODE_QUERY`, `CODE_QUERY_FILTERS`, `CODE_QUERY_MATCH` y
+`CODE_QUERY_LIMITATION`; JSON conserva el envelope completo. Ambas vistas son
+advisory: fijan `aggregate_score` y `defect_probability` explícitamente en
+`null`, no estiman ninguno de los dos y no autorizan cambios.
+
 ### Ruta sobre un snapshot retenido
 
 `--route-only` omite inventario, planeación de duplicados, detección común y
