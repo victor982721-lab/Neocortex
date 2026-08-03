@@ -1,14 +1,14 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, work package `_normalize` aceptado en candidato.
+> Actualizado: 2026-08-03, work package `_normalize` publicado mediante PR #21.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-El candidato `codex/neocortex-normalize-work-package` cerró el work package
-publicado para `_04_Nucleo_Operativo.external_deep_coverage` /
+El PR #21, desde `codex/neocortex-normalize-work-package`, cerró el work package
+para `_04_Nucleo_Operativo.external_deep_coverage` /
 `external_deep_coverage._normalize`. El coordinador pasó de complejidad
 cognitiva 124 a 0; el módulo bajó 331→288. El diff elimina exactamente ese
 hotspot, reduce high-complexity 258→257 y long-function 28→27, no añade
