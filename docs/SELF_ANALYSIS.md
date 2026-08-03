@@ -47,8 +47,8 @@ estado AST ni los demás resultados válidos.
 | Perfil | Proveedores | Configuración y confianza |
 |---|---|---|
 | `protected` (predeterminado) | `ruff-protected-basic` | Ruff `E4,E7,E9,F` con `--isolated`, sin configuración del proyecto. Es la frontera `untrusted-safe`. |
-| `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture`, `complexipy-cognitive` | Añade política estática, tipos, grafo de imports, contratos arquitectónicos y complejidad cognitiva sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
-| `trusted-deep` | Los siete de `trusted-static` más `pytest-coverage-trusted-deep` | Ejecuta el código, pruebas y `conftest.py` declarados únicamente para la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`; mide branch coverage y contextos dinámicos por test. Es la frontera `trusted-execution`, nunca predeterminada. |
+| `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project`, `vulture-unused-static`, `ruff-analyze-imports`, `grimp-architecture`, `complexipy-cognitive` | Añade política estática, tipos, candidatos de no uso, grafo de imports, contratos arquitectónicos y complejidad cognitiva sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
+| `trusted-deep` | Los ocho de `trusted-static` más `pytest-coverage-trusted-deep` | Ejecuta el código, pruebas y `conftest.py` declarados únicamente para la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`; mide branch coverage y contextos dinámicos por test. Es la frontera `trusted-execution`, nunca predeterminada. |
 
 Ruff trusted selecciona `E4,E7,E9,F,B,C4,PIE,RUF`. Omite deliberadamente
 `I,PT,SIM,UP`: ordenar imports, convenciones pytest, simplificación y
@@ -68,6 +68,11 @@ no ofrece un contrato JSON y duplicaría la misma dimensión. Complexipy se usa
 mediante su API `file_complexity`; su CLI devuelve un código distinto de cero al
 superar su umbral predeterminado, semántica que no equivale por sí misma a un
 fallo de proveedor.
+
+Vulture `2.16` pertenece a la base Python y se invoca mediante su API
+`Vulture.scavenge/get_unused_code` sobre el input staged exacto. No carga
+configuración del proyecto ni ejecuta contenido. Sus findings `unused_code` y
+confidence son señales heurísticas que requieren correlación posterior.
 
 Los proveedores arquitectónicos conservan responsabilidades separadas:
 
@@ -89,9 +94,10 @@ baseline `no-new`; no afirman que la arquitectura actual sea acíclica.
 Cada adaptador usa salida estructurada, cwd/entorno controlados, caché efímera o
 deshabilitada, límites de proceso, tiempo, memoria, inputs, diagnósticos y
 salida. Todas las formas de fix permanecen deshabilitadas. Los descriptores
-estáticos declaran `imports_content=false`, `executes_content=false`; el
-proveedor profundo declara ambas como `true`. Todos declaran
-`uses_network=false`, `authority=advisory` y `mutation_authority=false`.
+estáticos declaran `imports_content=false`, `executes_content=false` y
+`uses_network=false`; el proveedor profundo declara las tres capacidades como
+`true` porque Pytest carga contenido confiable y no impone un sandbox de red.
+Todos declaran `authority=advisory` y `mutation_authority=false`.
 
 Mypy y Pyright publican findings `typing` separados. `type_consensus` compara
 únicamente proveedores completos y compatibles; cuenta `both_report`,
@@ -99,6 +105,31 @@ Mypy y Pyright publican findings `typing` separados. `type_consensus` compara
 interpreta silencio como aprobación. Si uno no está listo, el resumen queda
 `not_comparable`. El estado reserva la categoría `contradictory`, pero la
 versión vigente no infiere contradicciones semánticas entre mensajes.
+
+### Consenso advisory de código potencialmente no usado
+
+`neocortex.code-unused-analysis/v1` exige Vulture y Pyright completos y alinea
+sus candidatos con símbolos vigentes. Después correlaciona referencias/calls e
+imports del grafo, reexports, `__all__`, entry points, callbacks, registries,
+fixtures, Protocols, nombres especiales y Coverage observada. Su precedencia
+produce exactamente `explained_usage`, `dynamic_usage_possible`,
+`probable_unused_high_consensus` o `insufficient_evidence`; una observación de
+Coverage puede explicar uso, pero la ausencia de cobertura nunca prueba no uso.
+
+Un fixture etiquetado de calibración y un holdout separado publican precision,
+recall, abstención, denominadores y firmas. Los gates de precisión de ambos
+conjuntos deben pasar antes de crear un paquete de caracterización. Incluso
+entonces el candidato sigue siendo advisory, requiere confirmación humana y
+conserva cero autoridad de borrado o mutación. El análisis legacy
+`probable_dead_symbol` permanece como conteo histórico separado, no se usa como
+consenso.
+
+Los gates son `calibration_probable_unused_precision`,
+`calibration_probable_unused_recall_observed`,
+`holdout_probable_unused_precision` y
+`holdout_probable_unused_recall_observed`. El umbral de señal Vulture para
+consenso alto es 0.90, pero sólo se evalúa después de las evidencias de uso y
+contratos dinámicos; no equivale a una probabilidad calibrada de no uso.
 
 Cada ejecución registra contrato, inputs y findings normalizados. Code schema
 v4 conserva compatibilidad de lectura/migración con v1-v3 y añade
@@ -307,6 +338,11 @@ resultados de pruebas, totales de líneas y ramas, conteos de módulos/símbolos
 relaciones test→símbolo, gates y limitaciones. La salida de consola permanece
 acotada; JSON conserva ejemplos limitados y conteos totales.
 
+En ambos perfiles trusted, status añade `unused_analysis`: proveedores,
+firmas, cuatro estados, calibration/holdout, gates, conteos y ejemplos acotados.
+Si Vulture o Pyright no están listos, esta dimensión se abstiene sin invalidar
+los demás proveedores.
+
 El decoder conserva lectura estricta del manifest histórico v1. Un manifest v2
 con journal no disponible puede ser válido como evidencia de una corrida
 completada, pero necesariamente expone
@@ -333,7 +369,7 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v7` conserva compatibilidad con v2-v6 y la proyección
+El contrato `neocortex.code-review/v8` conserva compatibilidad con v2-v7 y la proyección
 legacy `external_evidence`; añade `external_evidence_suite` con perfil, estado,
 proveedores, cobertura, counters, gates y consenso de tipos. Añade además
 `architecture`, que consume métricas/relaciones persistidas y resume
@@ -377,7 +413,8 @@ autoriza modificar código. Cero hallazgos o cero `act_now` son respuestas
 válidas; en el segundo caso `recommendation_status=abstained` explica la brecha.
 
 `work_packages` añade una tercera capa mediante
-`python-maintenance-work-packages-v3`. El primer y único paquete toma la primera
+`python-maintenance-work-packages-v4`. Conserva como máximo un paquete de
+mantenimiento que toma la primera
 recomendación como `primary_change_target` y consulta siempre un pool fijo de 50
 hotspots, aunque la vista solicitada sea menor. Sólo incorpora
 `contract_guard`s alcanzados por una llamada confirmada directa o por dos saltos
@@ -401,6 +438,9 @@ requieren un publication diff comparable; no encontrar una relación produce
 `baseline`; si falta el proveedor o
 cambia su firma queda `not_evaluated` o `abstained` sin borrar los demás. Los
 guards no son objetivos automáticos y el paquete nunca autoriza modificar código.
+Además puede entregar hasta tres paquetes `unused_characterization` para
+consenso alto con gates de precisión aprobados. Sólo ordenan caracterización,
+pruebas y confirmación humana; declaran `mutation_authority=false`.
 
 `probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
 portable de 40 entre los 246 candidatos de rc11 encontró 36 usos demostrables,
@@ -492,10 +532,11 @@ iguales.
 ## Comparación read-only entre publicaciones
 
 `--code-publication-diff` convierte la comparación de dos publicaciones Code
-en una operación canónica, acotada y determinista. El envelope v5 conserva
-compatibilidad declarada con v1-v4 y añade deltas de Coverage a los deltas arquitectónicos y
-por proveedor y al veredicto agregado. El argumento identifica el
-estado baseline; `--state-directory` identifica la publicación actual:
+en una operación canónica, acotada y determinista. El envelope v6 conserva
+compatibilidad declarada con v1-v5 y añade deltas de consenso unused a los
+deltas de Coverage, arquitectónicos y por proveedor y al veredicto agregado. El
+argumento identifica el estado baseline; `--state-directory` identifica la
+publicación actual:
 
 ```powershell
 Neocortex --state-directory $CurrentState --code-publication-diff $BaselineState
@@ -537,6 +578,11 @@ medición. En ese caso el diff informa deltas de líneas y ramas y evalúa
 un selector distinto o el límite `max_tests` alcanzado deja esos gates
 `not_evaluated`; no se extrapola cobertura completa.
 
+La dimensión `unused_analysis` sólo es comparable cuando coinciden provider,
+policy y firmas de calibración/holdout. Informa candidatos añadidos/retirados,
+cambios entre los cuatro estados y consenso alto añadido/resuelto. Su gate es
+observacional y nunca autoriza borrar o modificar.
+
 ## Mini-root de laboratorio
 
 Use contenido sintético y dos hermanos disjuntos. No copie el corpus real para
@@ -555,7 +601,7 @@ Neocortex --state-directory $MiniState --code-review --code-json
 El ejemplo presupone que un fixture sintético de 20–50 archivos ya creó
 `$MiniRoot`; esa raíz acotada es el límite físico y permite una publicación
 completa del perfil `protected`. Para probar `trusted-static`, el fixture debe
-incluir su `pyproject.toml` versionado y el runtime debe contener los siete
+incluir su `pyproject.toml` versionado y el runtime debe contener los ocho
 proveedores. `trusted-deep` nunca acepta este mini-root: exige exclusivamente la
 raíz canónica y un estado separado bajo Laboratory. No autoriza
 crear, copiar o limpiar datos fuera del laboratorio. Use un estado nuevo por

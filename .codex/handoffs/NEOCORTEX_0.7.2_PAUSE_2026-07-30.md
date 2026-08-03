@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 3 aceptado y listo para publicación.
+> Actualizado: 2026-08-03, contrato Hito 4 integrado; aceptación instalada pendiente.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > Su contenido sustituye por completo el handoff de release del 30–31 de julio.
 > El historial anterior permanece recuperable en Git; no debe ejecutarse como
@@ -8,8 +8,38 @@
 
 ## Resultado actual
 
-El checkpoint vigente cierra el **Hito 3 de la plataforma multianalizador** en
-`codex/neocortex-trusted-deep-v1`. El perfil explícito `trusted-deep` sólo
+La rama vigente `codex/neocortex-unused-consensus-v1` ya integra el contrato del
+**Hito 4**, pero todavía no constituye una publicación aceptada. Añade
+`vulture-unused-static` 2.16 a `trusted-static` y `trusted-deep` como octavo
+proveedor estático; el perfil profundo queda con nueve proveedores. Vulture
+produce findings heurísticos `unused_code` sobre copias verificadas, sin cargar
+configuración del proyecto, ejecutar contenido, usar red, aplicar fixes ni tener
+autoridad de mutación.
+
+`neocortex.code-unused-analysis/v1` correlaciona Vulture y Pyright con el grafo
+Code, imports, reexports, `__all__`, callbacks, registries, fixtures, entry
+points, Protocols y Coverage disponible. Cada candidato se publica exactamente
+como `explained_usage`, `dynamic_usage_possible`, `insufficient_evidence` o
+`probable_unused_high_consensus`. Coverage observada puede explicar uso; su
+ausencia nunca fortalece una hipótesis de no uso. Todos los candidatos conservan
+`authority=advisory`, `mutation_authority=false` y cero autoridad de borrado.
+
+El contrato incluye fixture de calibración y holdout separados, con precision,
+recall, abstención, denominadores, firmas y gates. Review v8, publication diff
+v6 y el planificador de work packages v4 consumen la misma evidencia. Hasta tres
+paquetes `unused_characterization` sólo pueden aparecer si pasan los gates de
+precisión de calibración y holdout; exigen caracterización dinámica, pruebas,
+confirmación humana y replay comparable, nunca una eliminación automática.
+
+Las métricas reales del repositorio, tiempos, bytes, procesos, findings por
+estado, calibration/holdout, replay, diff y wheel permanecen **pendientes** hasta
+ejecutar las barreras focales, construir e instalar el candidato y completar el
+autoanálisis real. No atribuir al Hito 4 cifras de fixtures unitarios ni tratar
+este checkpoint de código como publicado.
+
+El último checkpoint publicado cierra el **Hito 3 de la plataforma
+multianalizador** en `codex/neocortex-trusted-deep-v1`. El perfil explícito
+`trusted-deep` sólo
 acepta la identidad física exacta de
 `C:\Users\Victor\Neocortex\Repository`; nunca es predeterminado ni se admite
 sobre mini-roots o raíces arbitrarias. Añade Pytest 9.1.0 y Coverage 7.14.1 a
@@ -1155,15 +1185,17 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Abrir el Hito 4 desde el `main` publicado.** Seleccionar Vulture o una
-   alternativa mediante fixture etiquetado y holdout; correlacionar uso
-   estático, grafo, Pyright, reexports, callbacks, registries, fixtures, entry
-   points, Protocols y cobertura dinámica sin autoridad de borrado.
-2. **Publicar consenso de código potencialmente no usado.** Exponer
-   `explained_usage`, `dynamic_usage_possible`, `insufficient_evidence` y
-   `probable_unused_high_consensus`, con precision, recall, abstención, review,
-   diff y work packages como consumidores reales.
-3. **Continuar Hitos 5–7 en el orden autorizado.** Semgrep/supply chain,
+1. **Cerrar las barreras focales del Hito 4.** Validar proveedor, registry,
+   correlación, calibration/holdout, status, review v8, diff v6 y work packages;
+   corregir únicamente la barrera afectada.
+2. **Construir e instalar el wheel candidato.** Ejecutar un único autoanálisis
+   real con `trusted-static` o `trusted-deep` según la cobertura necesaria,
+   seguido por replay exacto, status, review y publication diff. Registrar aquí
+   las métricas reales pendientes.
+3. **Publicar y fusionar el Hito 4.** Commit/push/PR/merge sólo después de que
+   las barreras pasen; verificar `main == origin/main` y abrir Hito 5 desde ese
+   estado.
+4. **Continuar Hitos 5–7 en el orden autorizado.** Semgrep/supply chain,
    mutación/historia Git/analítica del grafo y la integración final se abren sólo
    después de publicar y fusionar su hito anterior.
 

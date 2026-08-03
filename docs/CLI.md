@@ -135,16 +135,18 @@ argv canónicos `analyze`/`status` como arrays, no como texto de shell.
 Python vigentes publicados por Code con fingerprint exacto y usa la política
 aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade Ruff con
 la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp y Complexipy como ejecuciones separadas. Ruff Analyze funciona como
+Grimp, Complexipy y Vulture como ejecuciones separadas. Ruff Analyze funciona como
 oráculo diferencial del grafo; Grimp produce imports, fan-in/fan-out, SCC,
 ciclos y contratos; Complexipy produce complejidad cognitiva por símbolo y
 módulo. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
 modernización en el resultado prioritario. Sólo debe usarse con una raíz
 confiable porque lee `pyproject.toml`;
 aun así no importa ni ejecuta sus módulos, no usa red, no aplica fixes y toda la
-evidencia es advisory.
+evidencia es advisory. `vulture-unused-static` usa Vulture 2.16 sin configuración
+del proyecto y publica sólo candidatos heurísticos `unused_code`; no ejecuta
+contenido ni posee autoridad de fix, borrado o mutación.
 
-`trusted-deep` añade Pytest + Coverage a los siete proveedores estáticos. Nunca
+`trusted-deep` añade Pytest + Coverage a los ocho proveedores estáticos. Nunca
 es el perfil predeterminado y sólo acepta la identidad física exacta de
 `C:\Users\Victor\Neocortex\Repository`; cualquier otra raíz se rechaza antes de
 crear un run. Este perfil sí ejecuta código declarado del proyecto, pruebas y
@@ -192,8 +194,18 @@ resultados de pruebas, totales de líneas/ramas, relaciones test→símbolo, eje
 faltantes, versiones, firmas y limitaciones. Coverage usa contextos dinámicos
 por node id y fase Pytest; mide sólo el proceso principal, no subprocesses.
 
+En `trusted-static` y `trusted-deep`, `unused_analysis` correlaciona Vulture con
+Pyright, grafo, imports, reexports, `__all__`, callbacks, registries, fixtures,
+entry points, Protocols y Coverage disponible. Cada candidato queda exactamente
+en `explained_usage`, `dynamic_usage_possible`, `insufficient_evidence` o
+`probable_unused_high_consensus`. La salida `CODE_UNUSED` y su JSON incluyen
+conteos, ejemplos acotados, firmas, precision/recall/abstención de calibración y
+holdout, gates y limitaciones. Ausencia de cualquiera de los dos proveedores
+estáticos causa abstención del consenso; Coverage puede explicar uso observado,
+pero su ausencia nunca prueba que un símbolo no se use.
+
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v7` conserva compatibilidad con v2-v6 y
+envelope `neocortex.code-review/v8` conserva compatibilidad con v2-v7 y
 la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
 recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
 ranking, además de un `work_package`
@@ -203,8 +215,13 @@ afectados, cadenas de imports acotadas, pruebas protectoras observadas, líneas 
 ramas faltantes, pasos y gates. Los gates profundos son `tests_passed`,
 `coverage_available`, `work_package_target_protected`,
 `line_coverage_not_degraded` y `branch_coverage_not_degraded`; ausencia o falta
-de comparabilidad nunca aprueba uno. El
-pool del planificador siempre es el top 50, independientemente de la vista; no
+de comparabilidad nunca aprueba uno. El planificador v4 conserva como máximo un
+paquete de mantenimiento y puede entregar, de forma independiente, hasta tres
+paquetes `unused_characterization`. Sólo los crea para
+`probable_unused_high_consensus` cuando pasan los gates de precisión de
+calibración y holdout; exigen revisión dinámica, pruebas y confirmación humana,
+y declaran `mutation_authority=false`. El pool del
+planificador siempre es el top 50, independientemente de la vista; no
 agrupa por nombre o directorio y los guards exigen caracterización antes de
 cualquier cambio. `--code-review-limit N --code-json` permite inspeccionar entre
 1 y 50 hotspots; valores mayores a 10 exigen JSON. No admite `--apply`, `--route`
@@ -216,7 +233,7 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v5`, compatible con v1-v4, informa
+envelope `neocortex.code-publication-diff/v6`, compatible con v1-v5, informa
 calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
@@ -225,7 +242,10 @@ limitación. Cuando la arquitectura es comparable añade deltas por módulo,
 imports, SCC/ciclos, contratos y complejidad desplazada. También compara líneas
 y ramas de Coverage cuando suite, alcance de medición, configuración y versiones
 son equivalentes; en cualquier otro caso publica `not_evaluated`. Nunca aplica
-cambios.
+cambios. `unused_analysis` compara candidatos añadidos/retirados, cambios entre
+los cuatro estados y consenso alto añadido/resuelto sólo cuando coinciden
+proveedores, policy, calibración y holdout. Su gate falla ante consenso alto
+nuevo, pero sigue siendo observacional y jamás autoriza borrar o modificar.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -314,8 +334,9 @@ audio, código y estado semántico.
 `--code-doctor --code-json` proyecta además
 `external_evidence_providers` para `ruff-protected-basic`,
 `ruff-trusted-project`, `mypy-trusted-project` y
-`pyright-trusted-project`, `ruff-analyze-imports`, `grimp-architecture` y
-`complexipy-cognitive`, además de `pytest-coverage-trusted-deep`, con
+`pyright-trusted-project`, `vulture-unused-static`, `ruff-analyze-imports`,
+`grimp-architecture` y `complexipy-cognitive`, además de
+`pytest-coverage-trusted-deep`, con
 disponibilidad, versión y autoridad advisory.
 La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
 por sí sola al proveedor protected.

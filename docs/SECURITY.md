@@ -70,7 +70,8 @@ una raíz y un estado explícitos cuyos árboles sean disjuntos, captura y vuelv
 a verificar sus identidades, fuerza `analyze_only` y sólo admite la ruta
 `code` desde el inventario. Rechaza `--apply`, route-only/resume, rutas MIME,
 catálogo, organización y generated/vendored. El contenido se analiza como
-evidencia no confiable y no se ejecuta. El perfil predeterminado `protected`
+evidencia no confiable y no se ejecuta en `protected` ni `trusted-static`. El
+perfil predeterminado `protected`
 integra sólo Ruff basic: recibe el manifest de archivos Python ya publicados,
 abre copias temporales verificadas, ignora la configuración del proyecto y usa
 entorno/cwd controlados, `--no-cache` y ninguna capacidad de fix.
@@ -80,15 +81,24 @@ confiable. Conserva Ruff basic y permite leer el `pyproject.toml` versionado par
 Ruff proyecto, Mypy y Pyright. El adaptador limita Ruff trusted a
 `E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`; además rechaza mecanismos que
 amplían la confianza: Ruff `extend`, plugins o `mypy_path`, y rutas externas de
-Pyright. Los cuatro
-proveedores declaran `uses_network=false`, `imports_content=false`,
+Pyright. Los ocho proveedores estáticos declaran `uses_network=false`,
+`imports_content=false`,
 `executes_content=false`, `authority=advisory` y
 `mutation_authority=false`. Sus resultados nunca autorizan mutaciones.
-`trusted-deep`, asociado conceptualmente a ejecución confiable, está reservado
-y no tiene superficie CLI ni implementación.
+Esto incluye `vulture-unused-static`: su confidence no prueba ausencia de uso y
+ni siquiera el consenso alto tiene autoridad de borrado.
+
+`trusted-deep` es la única frontera que ejecuta contenido. La CLI exige la
+identidad física exacta de `C:\Users\Victor\Neocortex\Repository`, estado
+disjunto y límites efectivos acotados; cualquier otra raíz se rechaza antes de
+crear el run. Pytest carga plugins/código confiable y puede ejecutar comportamiento de
+red porque el proveedor no impone un sandbox de red; el descriptor lo declara
+en vez de prometer aislamiento inexistente. Coverage observa sólo el proceso
+principal. Ningún resultado adquiere autoridad de mutación y el perfil nunca es
+predeterminado.
 
 La finalización no confía únicamente en la CLI: Framework v20 impide enlazar
-acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y Code v3
+acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y Code v4
 conserva el run analítico. Los owners de mutación reciben
 `CorpusMutationGuard` y el commit exige ceros durables en candidatos, acciones
 y organización. Una identidad cambiada, un árbol intersectante o una frontera
