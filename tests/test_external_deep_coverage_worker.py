@@ -376,6 +376,17 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
         "    assert choose(False) == 2\n",
         encoding="utf-8",
     )
+    (tests / "conftest.py").write_text(
+        "import os\n"
+        "from pathlib import Path\n\n"
+        "def pytest_configure(config):\n"
+        "    del config\n"
+        "    root = Path(os.environ['NEOCORTEX_AUDIT_LAB_ROOT']).resolve()\n"
+        "    for name in ('TEMP', 'TMP', 'TMPDIR', 'PYTHONPYCACHEPREFIX'):\n"
+        "        assert Path(os.environ[name]).resolve().is_relative_to(root)\n"
+        "    assert Path.home().is_dir()\n",
+        encoding="utf-8",
+    )
     (project / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\ntestpaths = ['tests']\n",
         encoding="utf-8",
@@ -393,6 +404,7 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
         (
             "_04_Nucleo_Operativo/__init__.py",
             "_04_Nucleo_Operativo/logic.py",
+            "tests/conftest.py",
             "tests/test_logic.py",
         ),
         start=1,

@@ -50,6 +50,7 @@ from .external_deep_coverage import (
     DeepCoveragePreparedInput,
     execute_pytest_coverage,
     prepare_deep_coverage_input,
+    trusted_deep_home_directory,
 )
 from .external_evidence_models import (
     AnalysisProfile,
@@ -207,19 +208,20 @@ def _environment_signature(
     tool_name: str,
     tool_version: str,
     node_path: str | None = None,
+    home_directory: str | None = None,
 ) -> str:
-    return external_signature(
-        "external-environment-v1",
-        {
-            "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
-            "python_version": platform.python_version(),
-            "implementation": platform.python_implementation(),
-            "platform": platform.platform(),
-            "tool_name": tool_name,
-            "tool_version": tool_version,
-            "node_path": node_path,
-        },
-    )
+    payload: dict[str, object] = {
+        "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
+        "python_version": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "platform": platform.platform(),
+        "tool_name": tool_name,
+        "tool_version": tool_version,
+        "node_path": node_path,
+    }
+    if home_directory is not None:
+        payload["home_directory"] = os.path.normcase(os.path.abspath(home_directory))
+    return external_signature("external-environment-v1", payload)
 
 
 def _limits(*, memory: int) -> ProviderLimits:
@@ -1760,6 +1762,7 @@ class PytestCoverageTrustedDeepProvider:
             environment_signature=_environment_signature(
                 tool_name="pytest+coverage",
                 tool_version=version,
+                home_directory=trusted_deep_home_directory(),
             ),
             root_identity=self._root_identity,
             execution_strategy="canonical-root-bounded-sharded-pytest-coverage-v1",

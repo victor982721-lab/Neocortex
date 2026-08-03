@@ -329,6 +329,24 @@ def _validate_trusted_root(root: Path) -> Path:
     return observed
 
 
+def trusted_deep_home_directory() -> str:
+    """Return the canonical home required by trusted project imports.
+
+    The generic provider environment intentionally strips user-specific
+    variables.  Trusted-deep executes the real test suite, whose imports may
+    legitimately resolve ``Path.home()``.  Preserve only that canonical
+    directory instead of forwarding the caller's complete environment.
+    """
+
+    try:
+        home = Path.home().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("trusted-deep home directory is unavailable") from exc
+    if not home.is_dir():
+        raise ValueError("trusted-deep home directory is not a directory")
+    return os.fspath(home)
+
+
 def _trusted_support_signature(
     root: Path,
     files: Sequence[ExternalEvidenceFile],
@@ -1398,6 +1416,11 @@ def execute_pytest_coverage(
     controlled_environment = dict(environment)
     runtime_root = durable_scratch / "runtime"
     runtime_root.mkdir(parents=True, exist_ok=True)
+    home_directory = trusted_deep_home_directory()
+    controlled_environment["HOME"] = home_directory
+    if os.name == "nt":
+        controlled_environment["USERPROFILE"] = home_directory
+    controlled_environment["NEOCORTEX_AUDIT_LAB_ROOT"] = str(durable_scratch)
     for name in ("TEMP", "TMP", "TMPDIR", "PYTHONPYCACHEPREFIX"):
         controlled_environment[name] = str(runtime_root)
     controlled_environment["PYTEST_ADDOPTS"] = ""
