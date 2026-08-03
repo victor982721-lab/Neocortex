@@ -6,6 +6,12 @@ import json
 import sqlite3
 from pathlib import Path
 
+from _04_Nucleo_Operativo.code_architecture_analysis import (
+    ArchitectureContract,
+    ArchitectureImportEdge,
+    ArchitectureModule,
+    CodeArchitectureAnalysis,
+)
 from _04_Nucleo_Operativo.code_review_models import (
     CodeReviewFinding,
     CodeReviewImpact,
@@ -18,10 +24,7 @@ from _04_Nucleo_Operativo.code_review_work_packages import (
 
 
 HISTORY_FIXTURE = (
-    Path(__file__).parent
-    / "fixtures"
-    / "code_review"
-    / "rc14_rc19_work_package_outcomes_v1.json"
+    Path(__file__).parent / "fixtures" / "code_review" / "rc14_rc19_work_package_outcomes_v1.json"
 )
 
 
@@ -237,16 +240,12 @@ def test_planner_uses_only_confirmed_direct_and_two_hop_relationships() -> None:
         "contract_guard",
     ]
     assert all(
-        step.target == package.primary_symbol
-        for step in package.steps
-        if step.phase == "change"
+        step.target == package.primary_symbol for step in package.steps if step.phase == "change"
     )
     assert "document_taxonomy_overlay.load_overlay" not in {
         member.symbol for member in package.members
     }
-    assert "knowledge_exact.lookup_exact" not in {
-        member.symbol for member in package.members
-    }
+    assert "knowledge_exact.lookup_exact" not in {member.symbol for member in package.members}
 
 
 def test_link_reader_collapses_repeated_calls_before_the_pair_bound() -> None:
@@ -314,6 +313,102 @@ def test_planner_abstains_without_an_act_now_recommendation() -> None:
     assert build_code_review_work_packages(findings, (), ()) == ()
 
 
+def test_work_package_adds_bounded_architecture_context_without_changing_identity() -> None:
+    findings = _planning_findings()
+    recommendations = build_code_review_recommendations(findings, limit=3)
+    architecture = CodeArchitectureAnalysis(
+        database="fixture",
+        analysis_run_id=1,
+        status="ready",
+        reason=None,
+        gate="observed",
+        gates=(),
+        providers=(),
+        summary=None,
+        modules=(
+            ArchitectureModule(
+                "consumer",
+                0,
+                1,
+                3.0,
+                3.0,
+                1,
+                (),
+                ("layers",),
+                None,
+                None,
+                None,
+                None,
+            ),
+            ArchitectureModule(
+                "document_taxonomy",
+                1,
+                0,
+                20.0,
+                12.0,
+                2,
+                (),
+                ("layers",),
+                None,
+                None,
+                None,
+                None,
+            ),
+        ),
+        symbols=(),
+        imports=(
+            ArchitectureImportEdge(
+                "consumer",
+                "document_taxonomy",
+                "both",
+                True,
+                True,
+                True,
+                1.0,
+            ),
+        ),
+        cycles=(),
+        contracts=(
+            ArchitectureContract(
+                "layers",
+                "failed",
+                True,
+                1,
+                ("consumer",),
+                ("document_taxonomy",),
+                (("consumer", "document_taxonomy"),),
+                "neocortex.architecture-contract/v1",
+            ),
+        ),
+        limitations=(),
+    )
+    with _create_graph() as connection:
+        links = read_code_review_planning_links(
+            connection,
+            {1: findings[0].finding_id, 3: findings[1].finding_id},
+        )
+
+    legacy = build_code_review_work_packages(findings, recommendations, links)[0]
+    enriched = build_code_review_work_packages(
+        findings,
+        recommendations,
+        links,
+        architecture=architecture,
+        architecture_root=r"C:\repo",
+    )[0]
+
+    assert enriched.package_id == legacy.package_id
+    assert enriched.primary_module == "document_taxonomy"
+    assert enriched.import_chains == (("consumer", "document_taxonomy"),)
+    assert enriched.affected_architecture_contracts == ("layers",)
+    assert {
+        "architecture_contracts_not_degraded",
+        "no_new_import_cycles",
+        "module_complexity_not_displaced",
+    }.issubset(enriched.acceptance_gates)
+    assert "architecture:ready" in enriched.evidence
+
+
 def _passes_history_policy(
     outcome: dict[str, object],
     policy: dict[str, object],
@@ -325,8 +420,7 @@ def _passes_history_policy(
         <= int(policy["maximum_changed_hotspot_evidence"])
         and int(outcome["corrected_call_resolutions"])
         <= int(policy["maximum_corrected_call_resolutions"])
-        and int(outcome["lost_call_resolutions"])
-        <= int(policy["maximum_lost_call_resolutions"])
+        and int(outcome["lost_call_resolutions"]) <= int(policy["maximum_lost_call_resolutions"])
         and (
             not policy["require_full_cache_hit_replay"]
             or outcome["replay_candidates"] == outcome["replay_cache_hits"]
@@ -341,6 +435,6 @@ def test_rc14_rc19_history_calibrates_replacement_and_replay_gates() -> None:
 
     assert payload["schema"] == "neocortex-code-review-work-package-outcomes/v1"
     assert len(outcomes) == 7
-    assert [
-        outcome["id"] for outcome in outcomes if _passes_history_policy(outcome, policy)
-    ] == [outcome["id"] for outcome in outcomes if outcome["accepted"]]
+    assert [outcome["id"] for outcome in outcomes if _passes_history_policy(outcome, policy)] == [
+        outcome["id"] for outcome in outcomes if outcome["accepted"]
+    ]

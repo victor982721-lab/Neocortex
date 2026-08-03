@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from .code_architecture_analysis import CodeArchitectureAnalysis
 from .code_external_evidence import ExternalEvidenceStatus
 from .code_review_actionability import (
     Actionability,
@@ -14,11 +15,12 @@ from .code_review_actionability import (
 )
 from .external_evidence_models import ExternalEvidenceSuiteStatus
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v5"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v6"
 CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v2",
     "neocortex.code-review/v3",
     "neocortex.code-review/v4",
+    "neocortex.code-review/v5",
 )
 
 ReviewStatus = Literal["ready", "abstained"]
@@ -186,10 +188,13 @@ class CodeReviewWorkPackage:
     primary_finding_id: str
     primary_hotspot_id: str
     primary_symbol: str
+    primary_module: str | None
     change_risk: ChangeRisk
     members: tuple[CodeReviewWorkPackageMember, ...]
     members_truncated: bool
     consumer_module_examples: tuple[str, ...]
+    import_chains: tuple[tuple[str, ...], ...]
+    affected_architecture_contracts: tuple[str, ...]
     contracts_to_preserve: tuple[str, ...]
     steps: tuple[CodeReviewWorkPackageStep, ...]
     recommended_validation: tuple[str, ...]
@@ -257,6 +262,7 @@ class CodeReviewResult:
     work_packages: tuple[CodeReviewWorkPackage, ...]
     external_evidence: ExternalEvidenceStatus | None
     external_evidence_suite: ExternalEvidenceSuiteStatus | None
+    architecture: CodeArchitectureAnalysis | None
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
 
