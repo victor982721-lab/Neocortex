@@ -356,11 +356,16 @@ def test_migrated_legacy_ruff_compares_with_current_protected_contract(
         provider_id for provider_id, delta in providers.items() if delta.status == "not_evaluated"
     } == {
         "complexipy-cognitive",
+        "deptry-project-dependencies",
         "grimp-architecture",
+        "installed-package-inventory",
         "mypy-trusted-project",
+        "pip-audit-known-vulnerabilities",
         "pyright-trusted-project",
         "ruff-analyze-imports",
         "ruff-trusted-project",
+        "semgrep-neocortex-invariants",
+        "vulture-unused-static",
     }
     assert all(
         delta.gate == "not_evaluated"
@@ -462,8 +467,12 @@ def test_publication_diff_of_the_same_state_is_stable_and_empty(
     assert result.test_coverage is not None
     assert result.test_coverage.status == "not_comparable"
     assert all(gate.status == "not_evaluated" for gate in result.test_coverage.gates)
+    assert result.supply_chain is not None
+    assert result.supply_chain.status == "not_evaluated"
+    assert len(result.supply_chain.gates) == 6
+    assert result.supply_chain.mutation_authority is False
     payload = result.as_payload()
-    assert payload["schema"] == "neocortex.code-publication-diff/v6"
+    assert payload["schema"] == "neocortex.code-publication-diff/v7"
     assert "neocortex.code-publication-diff/v5" in payload["compatible_schemas"]
     coverage_payload = payload["test_coverage"]
     assert isinstance(coverage_payload, dict)

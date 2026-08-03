@@ -416,11 +416,12 @@ del fallback.
 
 Code consume directamente el scan publicado con cero `route_candidates`. La
 finalización incorpora una plataforma genérica de proveedores sobre las
-versiones Python vigentes con fingerprint exacto, incluidas las parciales. `protected` ejecuta
-Ruff basic aislado; `trusted-static` añade Ruff con configuración versionada del
-proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp y Complexipy como productores independientes. `I,PT,SIM,UP` se excluyen
-para que estilo y modernización no
+versiones Python vigentes con fingerprint exacto, incluidas las parciales.
+`protected` ejecuta Ruff basic aislado; `trusted-static` añade Ruff con
+configuración versionada del proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`,
+Mypy, Pyright, Ruff Analyze, Grimp, Complexipy, Vulture, Semgrep, Deptry,
+pip-audit e inventario del entorno instalado como productores independientes.
+`I,PT,SIM,UP` se excluyen para que estilo y modernización no
 desplacen la señal de mantenimiento. Cada proveedor conserva
 descriptor, firma de entorno/configuración/comparabilidad, inputs, findings y
 counters normalizados. La suite y el fence de Code se confirman atómicamente;
@@ -462,13 +463,17 @@ porque el código de salida de su CLI también representa superar un umbral
 predeterminado; esa semántica no debe confundirse con un fallo de herramienta.
 
 El replay exacto valida de nuevo los inputs y enlaza la publicación completa
-mediante `external_run_replays`; no inicia procesos ni duplica findings,
-métricas o relaciones. Conserva como costo real el tiempo y bytes de
-verificación, aunque `process_invocations=0`. Mypy y
+mediante `external_run_replays`; no duplica findings, métricas o relaciones.
+Conserva como costo real el tiempo y bytes de verificación. Los proveedores de
+código no abren procesos; pip-audit reutiliza el snapshot vigente sin red y el
+inventario instalado vuelve a verificar los hashes y tamaños `RECORD`, por lo
+que ese replay conserva trabajo local real. Mypy y
 Pyright se mantienen en espacios de evidencia separados y sólo producen un
 resumen de coincidencias/discrepancias cuando ambos tienen cobertura completa.
-Los ocho proveedores `trusted-static` son advisory, no ejecutan contenido, no
-aplican fixes y no poseen autoridad de mutación. `trusted-deep` añade
+Los doce proveedores `trusted-static` son advisory, no ejecutan contenido del
+proyecto, no aplican fixes y no poseen autoridad de mutación. Sólo pip-audit
+declara red para capturar el snapshot de PyPI; los otros once son locales.
+`trusted-deep` añade
 `pytest-coverage-trusted-deep` únicamente para la identidad física exacta de la
 raíz canónica: carga plugins y contenido, ejecuta la suite declarada bajo
 límites y reconoce que no impone sandbox de red. Sigue siendo advisory, nunca
@@ -481,9 +486,21 @@ holdout alimentan status, review, diff y work packages sin score mágico. Inclus
 `probable_unused_high_consensus` sólo crea trabajo de caracterización con
 confirmación humana; nunca autorización de borrado.
 
+La proyección `neocortex.code-supply-chain-analysis/v1` consume cuatro
+proveedores sin crear otro datastore: Semgrep publica invariantes específicas
+de NeoCortex; Deptry, higiene entre imports y declaraciones; pip-audit, un
+snapshot fechado de vulnerabilidades conocidas; e `importlib.metadata` más
+`RECORD`, constraints, integridad y metadata de licencia del wheel instalado.
+Las observaciones conservan las categorías `dependency_hygiene`,
+`known_vulnerability`, `package_integrity` y `license_inventory`. Seis gates
+se evalúan por dimensión y nunca se combinan en un score ni en una probabilidad
+de defecto. Status, review, diff y work packages son consumidores reales de
+findings, métricas y relaciones; ninguna evidencia concede autoridad de
+mutación.
+
 La proyección pública `architecture_analysis` mantiene por separado
 `import_graph_consensus`, `architecture_contracts` y
-`module_complexity_displacement`. Review v8 y publication diff v6 sólo aprueban
+`module_complexity_displacement`. Review v9 y publication diff v7 sólo aprueban
 los gates comparables `architecture_contracts_not_degraded`,
 `no_new_import_cycles` y `module_complexity_not_displaced`; en un baseline,
 ante cobertura parcial o firma incompatible quedan `baseline` o
@@ -838,6 +855,10 @@ Herramientas externas posibles:
   del runtime y sin configuración extensible;
 - Grimp `3.15` y Complexipy `6.2.0` como productores Python aislados de grafo,
   contratos y complejidad cognitiva en `trusted-static`;
+- Vulture `2.16` para candidatos heurísticos de código potencialmente no usado;
+- Semgrep `1.172.0` con tres reglas locales y autofix deshabilitado, Deptry
+  `0.25.1`, pip-audit `2.10.1` y Packaging `26.2` para la evidencia separada de
+  supply chain;
 - FastEmbed y Faster-Whisper para inferencia local.
 
 No se observó `shell=True` en el motor auditado. La presencia de límites no
@@ -846,9 +867,10 @@ equivale a sandbox completo; véase [SECURITY.md](SECURITY.md).
 ## Empaquetado y dependencias opcionales
 
 El paquete se construye con setuptools y exige Python `>=3.13,<3.14`. Incluye
-los seis paquetes de producción, `neocortex`, el shim `Orquestador.py` y assets
-de la GUI. La base exacta es `complexipy` + `grimp` + `mypy` + `rich` + `ruff` +
-`xxhash`; `documents`, `audio`,
+los seis paquetes de producción, `neocortex`, el shim `Orquestador.py`, las
+reglas Semgrep y assets de la GUI. La base exacta incluye Complexipy, Coverage,
+Deptry, Grimp, Mypy, Packaging, pip-audit, Pytest, Rich, Ruff, Semgrep, Vulture
+y xxHash; `documents`, `audio`,
 `image`, `semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
 `neocortex.capabilities` inspecciona esa disponibilidad de forma estática; no
 certifica inferencia, caché de modelos ni compatibilidad resuelta.

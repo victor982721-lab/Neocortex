@@ -67,7 +67,6 @@ from .external_evidence_models import (
 )
 from .external_evidence_providers import (
     RUFF_PROTECTED_PROVIDER_ID,
-    PytestCoverageTrustedDeepProvider,
     RuffProtectedBasicProvider,
     providers_for_profile,
 )
@@ -434,9 +433,14 @@ class CodeRoute:
                     exact = None
                     comparable = None
                     provider_input_signature: str | None = external_input_signature(files)
-                    if isinstance(provider, PytestCoverageTrustedDeepProvider):
+                    baseline_input_signature = getattr(
+                        provider,
+                        "baseline_input_signature",
+                        None,
+                    )
+                    if callable(baseline_input_signature):
                         try:
-                            provider_input_signature = provider.baseline_input_signature(files)
+                            provider_input_signature = baseline_input_signature(files)
                         except (
                             OSError,
                             RuntimeError,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.metadata
 import json
 import os
@@ -14,8 +15,10 @@ import tempfile
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path, PurePosixPath
+
+from packaging.utils import canonicalize_name
 
 from .bounded_subprocess import SubprocessOutputLimitError, run_bounded_capture
 from .code_architecture_contracts import (
@@ -52,6 +55,14 @@ from .external_deep_coverage import (
     prepare_deep_coverage_input,
     trusted_deep_home_directory,
 )
+from .external_dependency_hygiene import (
+    DEPTRY_LIMITATIONS,
+    DEPTRY_PACKAGE_MODULE_NAME_MAP,
+    DEPTRY_PROVIDER_ID,
+    DEPTRY_PROVIDER_SCHEMA,
+    DependencyHygieneExecution,
+    execute_deptry_dependency_hygiene,
+)
 from .external_evidence_models import (
     AnalysisProfile,
     ExternalEvidenceProvider,
@@ -81,6 +92,26 @@ from .external_unused_vulture import (
     VultureUnusedExecution,
     execute_vulture_unused,
 )
+from .external_semgrep_invariants import (
+    SEMGREP_INVARIANTS_PROVIDER_ID,
+    SEMGREP_INVARIANTS_PROVIDER_SCHEMA,
+    SEMGREP_INVARIANT_RULE_IDS,
+    SEMGREP_RULESET_SHA256,
+    SEMGREP_RULESET_VERSION,
+    SemgrepInvariantExecution,
+    execute_semgrep_invariants,
+)
+from .external_supply_chain_audit import (
+    INSTALLED_PACKAGE_PROVIDER_ID,
+    INSTALLED_PACKAGE_PROVIDER_SCHEMA,
+    PIP_AUDIT_PROVIDER_ID,
+    PIP_AUDIT_PROVIDER_SCHEMA,
+    PIP_AUDIT_SERVICE,
+    InstalledPackageInventoryExecution,
+    PipAuditExecution,
+    execute_installed_package_inventory,
+    execute_pip_audit_known_vulnerabilities,
+)
 from .semantic_models import fingerprint_bytes
 
 RUFF_PROTECTED_PROVIDER_ID = "ruff-protected-basic"
@@ -101,6 +132,10 @@ _RUFF_MEMORY_BYTES = 512 * 1024 * 1024
 _GRIMP_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _COMPLEXIPY_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _VULTURE_MEMORY_BYTES = 512 * 1024 * 1024
+_SEMGREP_MEMORY_BYTES = 1024 * 1024 * 1024
+_DEPTRY_MEMORY_BYTES = 1024 * 1024 * 1024
+_PIP_AUDIT_MEMORY_BYTES = 512 * 1024 * 1024
+_PACKAGE_INVENTORY_MEMORY_BYTES = 512 * 1024 * 1024
 _DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
 _DEEP_COVERAGE_FINDING_BOUND = 2_000
@@ -241,6 +276,85 @@ def _environment_signature(
     if pathext_value is not None:
         payload["pathext"] = pathext_value
     return external_signature("external-environment-v1", payload)
+
+
+def _python_provider_files(
+    files: Sequence[ExternalEvidenceFile],
+    *,
+    suffixes: frozenset[str],
+) -> tuple[ExternalEvidenceFile, ...]:
+    """Return one deterministic exact subset for a provider's real language domain."""
+
+    return tuple(
+        sorted(
+            (
+                item
+                for item in files
+                if PurePosixPath(item.relative_path).suffix.casefold() in suffixes
+            ),
+            key=lambda item: item.relative_path.casefold(),
+        )
+    )
+
+
+def _installed_distribution_signature(*, utc_date: str | None = None) -> str:
+    """Fingerprint installed names/versions without importing package content."""
+
+    rows: list[tuple[str, str]] = []
+    names: set[str] = set()
+    for distribution in importlib.metadata.distributions():
+        if len(rows) >= 2_000:
+            raise ValueError("installed distribution count exceeds its bound")
+        name = distribution.metadata.get("Name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("installed distribution name is unavailable")
+        version = distribution.version
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("installed distribution version is unavailable")
+        normalized_name = canonicalize_name(name.strip())
+        if normalized_name in names:
+            raise ValueError("installed distribution identity is duplicated")
+        names.add(normalized_name)
+        rows.append((normalized_name, version.strip()))
+    rows.sort()
+    payload: dict[str, object] = {"distributions": rows}
+    if utc_date is not None:
+        payload["utc_date"] = utc_date
+    return external_signature("installed-python-environment-v1", payload)
+
+
+def _supply_environment_signature(
+    *,
+    tool_name: str,
+    tool_version: str,
+    installed_signature: str | None = None,
+    utc_date: str | None = None,
+) -> str:
+    return external_signature(
+        "external-supply-environment-v1",
+        {
+            "runtime": _environment_signature(
+                tool_name=tool_name,
+                tool_version=tool_version,
+            ),
+            "installed_signature": installed_signature,
+            "utc_date": utc_date,
+        },
+    )
+
+
+def _attach_supply_execution(
+    publication: ExternalProviderPublication,
+    *,
+    counters: Mapping[str, int],
+    details: Mapping[str, object],
+) -> ExternalProviderPublication:
+    merged_counters = dict(publication.counters)
+    merged_counters.update({name: int(value) for name, value in counters.items()})
+    provenance = dict(publication.publication.provenance)
+    provenance["supply_chain_execution"] = dict(details)
+    inner = replace(publication.publication, provenance=provenance)
+    return replace(publication, publication=inner, counters=merged_counters)
 
 
 def _limits(*, memory: int) -> ProviderLimits:
@@ -1377,6 +1491,10 @@ def provider_tool_versions() -> dict[str, str | None]:
         GRIMP_ARCHITECTURE_PROVIDER_ID: _package_version("grimp"),
         COMPLEXIPY_COGNITIVE_PROVIDER_ID: _package_version("complexipy"),
         VULTURE_UNUSED_PROVIDER_ID: _package_version("vulture"),
+        SEMGREP_INVARIANTS_PROVIDER_ID: _package_version("semgrep"),
+        DEPTRY_PROVIDER_ID: _package_version("deptry"),
+        PIP_AUDIT_PROVIDER_ID: _package_version("pip-audit"),
+        INSTALLED_PACKAGE_PROVIDER_ID: _package_version("neocortex-framework"),
         PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
     }
 
@@ -1681,6 +1799,803 @@ class VultureUnusedStaticProvider:
             bytes_staged=sum(item.size for item in files),
             limitations=result.limitations,
         )
+
+
+_SEMGREP_REPLAY_LIMITATIONS = (
+    "semgrep_ce_single_file_analysis",
+    "local_neocortex_rules_only",
+    "advisory_only_no_mutation_authority",
+    "autofix_disabled",
+) + (("windows_pysemgrep_x509_compatibility",) if os.name == "nt" else ())
+_SEMGREP_RULE_FIXTURE_PREFIX = ("tests", "fixtures", "semgrep_invariants")
+
+
+class SemgrepNeocortexInvariantsProvider:
+    """Run the small versioned Neocortex invariant ruleset without autofix."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        executor: Callable[
+            [Path, Mapping[str, ExternalEvidenceFile], Mapping[str, str]],
+            SemgrepInvariantExecution,
+        ] = execute_semgrep_invariants,
+    ) -> None:
+        self.root = root
+        self.executor = executor
+        self._version = _package_version("semgrep")
+        version = self._version or "unavailable"
+        self.descriptor = _provider_descriptor(
+            provider_id=SEMGREP_INVARIANTS_PROVIDER_ID,
+            provider_schema=SEMGREP_INVARIANTS_PROVIDER_SCHEMA,
+            tool_name="semgrep",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:semgrep-neocortex-invariants",
+            configuration_payload={
+                "adapter": SEMGREP_INVARIANTS_PROVIDER_SCHEMA,
+                "ruleset_version": SEMGREP_RULESET_VERSION,
+                "ruleset_sha256": SEMGREP_RULESET_SHA256,
+                "rule_ids": list(SEMGREP_INVARIANT_RULE_IDS),
+                "configuration": "packaged-local-ruleset",
+                "input": "exact-current-inventory-python-and-stubs-excluding-own-rule-fixtures",
+                "excluded_paths": ["tests/fixtures/semgrep_invariants/**"],
+                "metrics": False,
+                "version_check": False,
+                "autofix": False,
+                "network": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=_supply_environment_signature(
+                tool_name="semgrep",
+                tool_version=version,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy="local-rules-staged-batches-v2",
+            invalidation_strategy="project_wide",
+            memory=_SEMGREP_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="current-inventory-python-and-stubs-excluding-own-rule-fixtures",
+        )
+
+    @staticmethod
+    def _files(files: Sequence[ExternalEvidenceFile]) -> tuple[ExternalEvidenceFile, ...]:
+        return tuple(
+            item
+            for item in _python_provider_files(files, suffixes=frozenset({".py", ".pyi"}))
+            if PurePosixPath(item.relative_path).parts[:3] != _SEMGREP_RULE_FIXTURE_PREFIX
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        return external_input_signature(self._files(files))
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        selected = self._files(files)
+        signature = external_input_signature(selected)
+        if baseline is not None and baseline.input_signature == signature:
+            return _exact_replay(
+                self.descriptor,
+                root,
+                selected,
+                baseline,
+                limitations=_SEMGREP_REPLAY_LIMITATIONS,
+            )
+        started_ns = time.time_ns()
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version="unavailable",
+                status="unavailable",
+                reason="semgrep_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-semgrep-invariants-",
+                dir=staging_parent,
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(selected, stage_root / "source")
+                execution = self.executor(stage_root, staged, _controlled_environment())
+                if (
+                    execution.scanned_files != len(selected)
+                    or execution.scanned_bytes != sum(item.size for item in selected)
+                    or execution.rule_count != len(SEMGREP_INVARIANT_RULE_IDS)
+                    or execution.ruleset_sha256 != SEMGREP_RULESET_SHA256
+                    or execution.limitations != _SEMGREP_REPLAY_LIMITATIONS
+                ):
+                    raise ValueError("Semgrep execution disagrees with provider contract")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            selected,
+            execution.findings,
+            baseline,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=execution.scanned_bytes,
+            limitations=execution.limitations,
+        )
+        return _attach_supply_execution(
+            publication,
+            counters={
+                "semgrep_scanned_files": execution.scanned_files,
+                "semgrep_scanned_bytes": execution.scanned_bytes,
+                "semgrep_rule_count": execution.rule_count,
+            },
+            details={
+                "ruleset_version": SEMGREP_RULESET_VERSION,
+                "ruleset_sha256": execution.ruleset_sha256,
+                "input_manifest_sha256": execution.input_manifest_sha256,
+                "cli_variant": execution.cli_variant,
+                "autofix": False,
+            },
+        )
+
+
+class DeptryProjectDependenciesProvider:
+    """Correlate exact Python imports with trusted project dependency declarations."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        executor: Callable[
+            [Path, Mapping[str, ExternalEvidenceFile], Path, Mapping[str, str]],
+            DependencyHygieneExecution,
+        ] = execute_deptry_dependency_hygiene,
+    ) -> None:
+        self.root = root
+        self.executor = executor
+        self._config_error: str | None = None
+        try:
+            self._config_raw, self._config, config_digest = _project_configuration(root)
+        except (OSError, ValueError) as exc:
+            self._config_raw = b""
+            self._config = {}
+            config_digest = None
+            self._config_error = f"{type(exc).__name__}:{exc}"
+        self._version = _package_version("deptry")
+        version = self._version or "unavailable"
+        self.descriptor = _provider_descriptor(
+            provider_id=DEPTRY_PROVIDER_ID,
+            provider_schema=DEPTRY_PROVIDER_SCHEMA,
+            tool_name="deptry",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:deptry-project-dependencies",
+            configuration_payload={
+                "adapter": DEPTRY_PROVIDER_SCHEMA,
+                "configuration": "project-pyproject",
+                "input": "exact-current-inventory-python",
+                "codes": ["DEP001", "DEP002", "DEP003", "DEP004", "DEP005"],
+                "dev_optional_groups": ["dev"],
+                "package_module_name_map": {
+                    package: list(modules) for package, modules in DEPTRY_PACKAGE_MODULE_NAME_MAP
+                },
+                "notebooks": False,
+                "autofix": False,
+                "network": False,
+            },
+            project_configuration_digest=config_digest,
+            environment_signature=_supply_environment_signature(
+                tool_name="deptry",
+                tool_version=version,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy="trusted-config-staged-project-deptry-v1",
+            invalidation_strategy="project_wide",
+            memory=_DEPTRY_MEMORY_BYTES,
+            loads_project_configuration=True,
+        )
+
+    @staticmethod
+    def _files(files: Sequence[ExternalEvidenceFile]) -> tuple[ExternalEvidenceFile, ...]:
+        return _python_provider_files(files, suffixes=frozenset({".py"}))
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        return external_input_signature(self._files(files))
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        selected = self._files(files)
+        signature = external_input_signature(selected)
+        if baseline is not None and baseline.input_signature == signature:
+            return _exact_replay(
+                self.descriptor,
+                root,
+                selected,
+                baseline,
+                limitations=DEPTRY_LIMITATIONS,
+            )
+        started_ns = time.time_ns()
+        if self._config_error is not None:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason=f"project_configuration_invalid:{self._config_error}"[:4096],
+                started_ns=started_ns,
+            )
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version="unavailable",
+                status="unavailable",
+                reason="deptry_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-deptry-project-",
+                dir=staging_parent,
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(selected, stage_root / "source")
+                config_path = stage_root / "pyproject.toml"
+                config_path.write_bytes(self._config_raw)
+                execution = self.executor(
+                    stage_root,
+                    staged,
+                    config_path,
+                    _controlled_environment(),
+                )
+                if execution.limitations != DEPTRY_LIMITATIONS:
+                    raise ValueError("Deptry execution disagrees with provider contract")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                selected,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            selected,
+            execution.findings,
+            baseline,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=sum(item.size for item in selected) + len(self._config_raw),
+            limitations=execution.limitations,
+        )
+        return _attach_supply_execution(
+            publication,
+            counters=execution.counters,
+            details={
+                "configuration": "project-pyproject",
+                "project_configuration_digest": self.descriptor.project_configuration_digest,
+                "autofix": False,
+            },
+        )
+
+
+class PipAuditKnownVulnerabilitiesProvider:
+    """Record one fresh, bounded advisory snapshot for the installed environment."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        executor: Callable[..., PipAuditExecution] = execute_pip_audit_known_vulnerabilities,
+    ) -> None:
+        self.root = root
+        self.executor = executor
+        self._version = _package_version("pip-audit")
+        self._environment_error: str | None = None
+        self._utc_date = dt.datetime.now(tz=dt.UTC).date().isoformat()
+        self._installed_signature: str | None
+        environment_started = time.perf_counter_ns()
+        if self._version is None:
+            self._installed_signature = None
+        else:
+            try:
+                self._installed_signature = _installed_distribution_signature(
+                    utc_date=self._utc_date
+                )
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._installed_signature = None
+                self._environment_error = f"{type(exc).__name__}:{exc}"
+        self._environment_preparation_milliseconds = max(
+            0,
+            (time.perf_counter_ns() - environment_started) // 1_000_000,
+        )
+        version = self._version or "unavailable"
+        self.descriptor = _provider_descriptor(
+            provider_id=PIP_AUDIT_PROVIDER_ID,
+            provider_schema=PIP_AUDIT_PROVIDER_SCHEMA,
+            tool_name="pip-audit",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:pip-audit-known-vulnerabilities",
+            configuration_payload={
+                "adapter": PIP_AUDIT_PROVIDER_SCHEMA,
+                "service": PIP_AUDIT_SERVICE,
+                "input": "installed-python-environment",
+                "snapshot_freshness_seconds": 24 * 60 * 60,
+                "descriptions": False,
+                "aliases": True,
+                "fix": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=_supply_environment_signature(
+                tool_name="pip-audit",
+                tool_version=version,
+                installed_signature=self._installed_signature,
+                utc_date=self._utc_date,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy="installed-environment-pypi-snapshot-v1",
+            invalidation_strategy="project_wide",
+            memory=_PIP_AUDIT_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="installed-python-environment",
+            uses_network=True,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def baseline_input_signature(self, _files: Sequence[ExternalEvidenceFile]) -> str:
+        if self._installed_signature is None:
+            raise ValueError("installed environment signature is unavailable")
+        return external_signature(
+            "pip-audit-provider-input-v1",
+            {
+                "installed_signature": self._installed_signature,
+                "utc_date": self._utc_date,
+                "service": PIP_AUDIT_SERVICE,
+            },
+        )
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        del files
+        started_ns = time.time_ns()
+        if self._environment_error is not None:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason=f"installed_environment_invalid:{self._environment_error}"[:4096],
+                started_ns=started_ns,
+            )
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version="unavailable",
+                status="unavailable",
+                reason="pip_audit_unavailable",
+                started_ns=started_ns,
+            )
+        signature = self.baseline_input_signature(())
+        limitations = (
+            "known_vulnerability_feed_is_a_point_in_time_snapshot",
+            "absence_of_a_report_is_not_proof_of_security",
+            "package_reachability_and_runtime_exposure_are_not_assessed",
+            "advisory_only_no_fix_or_mutation_authority",
+        )
+        if baseline is not None and baseline.input_signature == signature:
+            replay = _exact_replay(
+                self.descriptor,
+                root,
+                (),
+                baseline,
+                limitations=limitations,
+                input_signature_override=signature,
+            )
+            return _attach_supply_execution(
+                replay,
+                counters={
+                    "environment_preparation_milliseconds": (
+                        self._environment_preparation_milliseconds
+                    ),
+                    "wall_milliseconds": max(
+                        int(replay.counters.get("wall_milliseconds", 0)),
+                        self._environment_preparation_milliseconds,
+                    ),
+                },
+                details={
+                    "utc_date": self._utc_date,
+                    "whole_publication_replay": True,
+                    "uses_network": False,
+                    "fix": False,
+                },
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-pip-audit-", dir=staging_parent
+            ) as temporary:
+                environment = _controlled_environment()
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = temporary
+                execution = self.executor(environment)
+            if execution.tool_version != self._version:
+                raise ValueError("pip-audit execution version disagrees with provider")
+            if execution.observed_date_utc != self._utc_date:
+                raise ValueError("pip-audit snapshot crossed its UTC date boundary")
+            if not execution.uses_network or execution.limitations != limitations:
+                raise ValueError("pip-audit execution disagrees with provider contract")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            (),
+            (),
+            baseline,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=0,
+            limitations=execution.limitations,
+            input_signature_override=signature,
+        )
+        return _attach_supply_execution(
+            publication,
+            counters={
+                **{name: int(value) for name, value in asdict(execution.counters).items()},
+                "environment_preparation_milliseconds": (
+                    self._environment_preparation_milliseconds
+                ),
+                "wall_milliseconds": max(
+                    int(publication.counters.get("wall_milliseconds", 0)),
+                    self._environment_preparation_milliseconds,
+                ),
+            },
+            details={
+                "source": execution.source,
+                "service": PIP_AUDIT_SERVICE,
+                "observed_at_utc": execution.observed_at_utc,
+                "observed_date_utc": execution.observed_date_utc,
+                "fresh_until_utc": execution.fresh_until_utc,
+                "freshness_status": execution.freshness_status,
+                "snapshot_id": execution.snapshot_id,
+                "uses_network": execution.uses_network,
+                "fix": False,
+            },
+        )
+
+
+class InstalledPackageInventoryProvider:
+    """Verify the installed NeoCortex wheel and inventory package/license metadata."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        executor: Callable[..., InstalledPackageInventoryExecution] = (
+            execute_installed_package_inventory
+        ),
+    ) -> None:
+        self.root = root
+        self.executor = executor
+        self._config_error: str | None = None
+        self._project_digest: str | None
+        try:
+            _raw, _config, self._project_digest = _project_configuration(root)
+        except (OSError, ValueError) as exc:
+            self._project_digest = None
+            self._config_error = f"{type(exc).__name__}:{exc}"
+        self._version = _package_version("neocortex-framework")
+        self._environment_error: str | None = None
+        self._installed_signature: str | None
+        if self._version is None:
+            self._installed_signature = None
+        else:
+            try:
+                self._installed_signature = _installed_distribution_signature()
+            except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                self._installed_signature = None
+                self._environment_error = f"{type(exc).__name__}:{exc}"
+        version = self._version or "unavailable"
+        self.descriptor = _provider_descriptor(
+            provider_id=INSTALLED_PACKAGE_PROVIDER_ID,
+            provider_schema=INSTALLED_PACKAGE_PROVIDER_SCHEMA,
+            tool_name="importlib.metadata+RECORD",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:installed-package-inventory",
+            configuration_payload={
+                "adapter": INSTALLED_PACKAGE_PROVIDER_SCHEMA,
+                "input": "installed-python-environment-and-project-pyproject",
+                "record_verification": "hash-and-size",
+                "base_dependency_constraints": "marker-and-specifier-evaluated",
+                "optional_extra_constraints": "recorded-not-gated",
+                "license_metadata": "inventory-only-no-legal-conclusion",
+                "network": False,
+                "mutation": False,
+            },
+            project_configuration_digest=self._project_digest,
+            environment_signature=_supply_environment_signature(
+                tool_name="importlib.metadata+RECORD",
+                tool_version=version,
+                installed_signature=self._installed_signature,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy="installed-wheel-record-and-metadata-v1",
+            invalidation_strategy="project_wide",
+            memory=_PACKAGE_INVENTORY_MEMORY_BYTES,
+            loads_project_configuration=True,
+            scope="installed-python-environment",
+        )
+        self._prepared: InstalledPackageInventoryExecution | None = None
+        self._prepared_signature: str | None = None
+        self._prepared_milliseconds = 0
+        self._preparation_error: Exception | None = None
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def _prepare(self) -> tuple[InstalledPackageInventoryExecution, str, bool]:
+        if self._prepared is not None and self._prepared_signature is not None:
+            return self._prepared, self._prepared_signature, True
+        if self._preparation_error is not None:
+            raise self._preparation_error
+        started = time.perf_counter_ns()
+        try:
+            execution = self.executor(self.root / "pyproject.toml")
+            signature = external_signature(
+                "installed-package-inventory-input-v1",
+                {
+                    "snapshot_id": execution.snapshot_id,
+                    "pyproject_sha256": execution.pyproject_sha256,
+                    "installed_project_version": execution.installed_project_version,
+                },
+            )
+        except Exception as exc:
+            self._preparation_error = exc
+            raise
+        self._prepared_milliseconds = max(0, (time.perf_counter_ns() - started) // 1_000_000)
+        self._prepared = execution
+        self._prepared_signature = signature
+        return execution, signature, False
+
+    def baseline_input_signature(self, _files: Sequence[ExternalEvidenceFile]) -> str:
+        _execution, signature, _cached = self._prepare()
+        return signature
+
+    @staticmethod
+    def _execution_counters(
+        execution: InstalledPackageInventoryExecution,
+    ) -> dict[str, int]:
+        counters = {name: int(value) for name, value in asdict(execution.counters).items()}
+        counters.update(
+            {
+                "inventory_files_hashed": execution.files_hashed,
+                "inventory_bytes_hashed": execution.bytes_hashed,
+            }
+        )
+        return counters
+
+    def _attach_inventory(
+        self,
+        publication: ExternalProviderPublication,
+        execution: InstalledPackageInventoryExecution,
+    ) -> ExternalProviderPublication:
+        counters = self._execution_counters(execution)
+        counters["bytes_read"] = max(
+            int(publication.counters.get("bytes_read", 0)),
+            execution.bytes_hashed,
+        )
+        counters["wall_milliseconds"] = max(
+            int(publication.counters.get("wall_milliseconds", 0)),
+            self._prepared_milliseconds,
+        )
+        return _attach_supply_execution(
+            publication,
+            counters=counters,
+            details={
+                "source": execution.source,
+                "observed_at_utc": execution.observed_at_utc,
+                "observed_date_utc": execution.observed_date_utc,
+                "freshness_status": execution.freshness_status,
+                "snapshot_id": execution.snapshot_id,
+                "pyproject_sha256": execution.pyproject_sha256,
+                "installed_project_version": execution.installed_project_version,
+                "uses_network": execution.uses_network,
+            },
+        )
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        del files, scratch_root
+        started_ns = time.time_ns()
+        if self._config_error is not None:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason=f"project_configuration_invalid:{self._config_error}"[:4096],
+                started_ns=started_ns,
+            )
+        if self._environment_error is not None:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason=f"installed_environment_invalid:{self._environment_error}"[:4096],
+                started_ns=started_ns,
+            )
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version="unavailable",
+                status="unavailable",
+                reason="installed_neocortex_distribution_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            execution, signature, cached = self._prepare()
+            if cached:
+                started_ns -= self._prepared_milliseconds * 1_000_000
+            if execution.installed_project_version != self._version:
+                raise ValueError("installed inventory version disagrees with provider")
+            if execution.uses_network:
+                raise ValueError("installed inventory unexpectedly used network")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                (),
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        if baseline is not None and baseline.input_signature == signature:
+            replay = _exact_replay(
+                self.descriptor,
+                root,
+                (),
+                baseline,
+                limitations=execution.limitations,
+                input_signature_override=signature,
+            )
+            return self._attach_inventory(replay, execution)
+        publication = _success(
+            self.descriptor,
+            root,
+            (),
+            (),
+            baseline,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=0,
+            stderr_bytes=0,
+            process_invocations=execution.process_invocations,
+            bytes_staged=0,
+            limitations=execution.limitations,
+            input_signature_override=signature,
+        )
+        return self._attach_inventory(publication, execution)
 
 
 def _architecture_files(
@@ -2232,6 +3147,10 @@ def providers_for_profile(
             RuffTrustedProjectProvider(root),
             MypyTrustedProjectProvider(root),
             PyrightTrustedProjectProvider(root),
+            SemgrepNeocortexInvariantsProvider(root),
+            DeptryProjectDependenciesProvider(root),
+            PipAuditKnownVulnerabilitiesProvider(root),
+            InstalledPackageInventoryProvider(root),
             VultureUnusedStaticProvider(root),
             RuffAnalyzeImportsProvider(root),
             GrimpArchitectureProvider(root),
@@ -2252,22 +3171,30 @@ def providers_for_profile(
 
 __all__ = [
     "COMPLEXIPY_COGNITIVE_PROVIDER_ID",
+    "DEPTRY_PROVIDER_ID",
     "GRIMP_ARCHITECTURE_PROVIDER_ID",
+    "INSTALLED_PACKAGE_PROVIDER_ID",
     "MYPY_PROVIDER_ID",
+    "PIP_AUDIT_PROVIDER_ID",
     "PYRIGHT_PROVIDER_ID",
     "PYTEST_COVERAGE_PROVIDER_ID",
     "RUFF_ANALYZE_PROVIDER_ID",
     "RUFF_PROTECTED_PROVIDER_ID",
     "RUFF_TRUSTED_PROVIDER_ID",
+    "SEMGREP_INVARIANTS_PROVIDER_ID",
     "VULTURE_UNUSED_PROVIDER_ID",
     "ComplexipyCognitiveProvider",
+    "DeptryProjectDependenciesProvider",
     "GrimpArchitectureProvider",
+    "InstalledPackageInventoryProvider",
     "MypyTrustedProjectProvider",
+    "PipAuditKnownVulnerabilitiesProvider",
     "PyrightTrustedProjectProvider",
     "PytestCoverageTrustedDeepProvider",
     "RuffAnalyzeImportsProvider",
     "RuffProtectedBasicProvider",
     "RuffTrustedProjectProvider",
+    "SemgrepNeocortexInvariantsProvider",
     "VultureUnusedStaticProvider",
     "provider_tool_versions",
     "providers_for_profile",

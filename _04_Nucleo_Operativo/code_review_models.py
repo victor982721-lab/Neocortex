@@ -13,6 +13,11 @@ from .code_coverage_analysis import (
     WorkPackageCoverageProjection,
 )
 from .code_external_evidence import ExternalEvidenceStatus
+from .code_supply_chain_analysis import (
+    CodeSupplyChainAnalysis,
+    SupplyChainGateEvaluation,
+    SupplyChainObservation,
+)
 from .code_unused_analysis import CodeUnusedAnalysis, UnusedConsensusCandidate
 from .code_review_actionability import (
     Actionability,
@@ -22,7 +27,7 @@ from .code_review_actionability import (
 )
 from .external_evidence_models import ExternalEvidenceSuiteStatus
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v8"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v9"
 CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v2",
     "neocortex.code-review/v3",
@@ -30,6 +35,7 @@ CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v5",
     "neocortex.code-review/v6",
     "neocortex.code-review/v7",
+    "neocortex.code-review/v8",
 )
 CODE_REVIEW_COVERAGE_EXAMPLE_LIMIT = 20
 CODE_REVIEW_UNUSED_EXAMPLE_LIMIT = 20
@@ -219,6 +225,9 @@ class CodeReviewWorkPackage:
     confidence: WorkPackageConfidence
     package_kind: WorkPackageKind = "hotspot_maintenance"
     unused_candidates: tuple[UnusedConsensusCandidate, ...] = ()
+    supply_chain_observations: tuple[SupplyChainObservation, ...] = ()
+    supply_chain_relations: tuple[SupplyChainObservation, ...] = ()
+    supply_chain_gates: tuple[SupplyChainGateEvaluation, ...] = ()
     requires_human_confirmation: bool = False
     mutation_authority: Literal[False] = False
 
@@ -286,6 +295,7 @@ class CodeReviewResult:
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
     unused_analysis: CodeUnusedAnalysis | None = None
+    supply_chain: CodeSupplyChainAnalysis | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload = asdict(
@@ -294,6 +304,7 @@ class CodeReviewResult:
                 work_packages=(),
                 test_coverage=None,
                 unused_analysis=None,
+                supply_chain=None,
             )
         )
         payload["work_packages"] = [
@@ -307,6 +318,8 @@ class CodeReviewResult:
             payload["test_coverage"] = bounded_code_coverage_payload(self.test_coverage)
         if self.unused_analysis is not None:
             payload["unused_analysis"] = bounded_code_unused_payload(self.unused_analysis)
+        if self.supply_chain is not None:
+            payload["supply_chain"] = self.supply_chain.as_payload()
         return {
             "kind": "code-review",
             "schema": CODE_REVIEW_SCHEMA,

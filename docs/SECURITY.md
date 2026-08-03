@@ -78,15 +78,20 @@ entorno/cwd controlados, `--no-cache` y ninguna capacidad de fix.
 
 `trusted-static` es una frontera explícita para una raíz que Victor declara
 confiable. Conserva Ruff basic y permite leer el `pyproject.toml` versionado para
-Ruff proyecto, Mypy y Pyright. El adaptador limita Ruff trusted a
+Ruff proyecto, Mypy, Pyright, Deptry y el inventario de dependencias. El
+adaptador limita Ruff trusted a
 `E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`; además rechaza mecanismos que
 amplían la confianza: Ruff `extend`, plugins o `mypy_path`, y rutas externas de
-Pyright. Los ocho proveedores estáticos declaran `uses_network=false`,
-`imports_content=false`,
-`executes_content=false`, `authority=advisory` y
-`mutation_authority=false`. Sus resultados nunca autorizan mutaciones.
-Esto incluye `vulture-unused-static`: su confidence no prueba ausencia de uso y
-ni siquiera el consenso alto tiene autoridad de borrado.
+Pyright. Once de los doce proveedores estáticos declaran `uses_network=false`;
+pip-audit declara red porque consulta PyPI para crear un snapshot fechado y su
+replay exacto vigente reutiliza ese snapshot sin otra consulta. Todos declaran
+`imports_content=false`, `executes_content=false`, `authority=advisory` y
+`mutation_authority=false`. Semgrep usa sólo tres reglas empaquetadas, desactiva
+autofix y excluye sus fixtures propios del gate del proyecto. Deptry no instala
+ni retira dependencias; el inventario sólo verifica metadata y `RECORD`. Esto
+incluye `vulture-unused-static`: su confidence no prueba ausencia de uso y ni
+siquiera el consenso alto tiene autoridad de borrado. Ningún gate de supply
+chain autoriza actualizar, desinstalar o modificar paquetes.
 
 `trusted-deep` es la única frontera que ejecuta contenido. La CLI exige la
 identidad física exacta de `C:\Users\Victor\Neocortex\Repository`, estado
@@ -258,10 +263,11 @@ un fixture no confidencial y aislado.
 
 La ruta `code` analiza texto/AST/estructura y no ejecuta el código observado. El
 analizador Rust vigente es léxico; Cargo y Clippy no se ejecutan como parte del
-contrato actual. Ruff, Mypy y Pyright sólo participan en `--self-analysis`: no
-descubren archivos, no importan módulos y no aplican fixes. El perfil protected
-no carga configuración del corpus; trusted-static carga únicamente la política
-estática acotada descrita arriba. El flujo crea copias temporales verificadas
+contrato actual. Los doce proveedores `trusted-static` sólo participan en
+`--self-analysis`: no descubren archivos fuera del inventario, no importan
+módulos del proyecto y no aplican fixes. El perfil protected no carga
+configuración del corpus; trusted-static carga sólo las políticas y metadata
+declaradas arriba. El flujo crea copias temporales verificadas
 bajo el estado explícito y disjunto, nunca bajo la raíz observada aunque
 `TEMP/TMP` apunten allí. NeoCortex cierra los handles y vuelve a comprobar los
 inputs originales después de cada proceso.
@@ -288,6 +294,10 @@ NeoCortex puede localizar o usar Tesseract, FFprobe/FFmpeg y qpdf.
 - La instalación canónica de Pyright requiere Node y conserva el paquete npm
   aislado junto al runtime; cualquier resolución alternativa queda incorporada
   a la firma de entorno y no concede autoridad adicional.
+- Semgrep, Deptry y pip-audit se resuelven desde el mismo runtime Python. Las
+  reglas Semgrep están empaquetadas y autofix permanece deshabilitado; Deptry es
+  read-only; pip-audit crea un snapshot sin `--fix` y declara su red de forma
+  explícita.
 - No interpole rutas o consultas de usuario dentro de comandos de shell propios.
 
 Los temporales de recuperación deben permanecer en el directorio temporal del
@@ -308,6 +318,12 @@ callsite que no use esos supervisores.
 `--semantic-prepare-models` es la frontera explícita de adquisición de modelos
 semánticos. En audio, la primera carga de Whisper puede descargar pesos salvo
 `--audio-local-models-only`.
+
+El perfil `trusted-static` también puede acceder a la red únicamente mediante
+pip-audit para capturar el snapshot de vulnerabilidades. Esa consulta no
+descarga ni instala paquetes; el replay de un snapshot vigente no usa red. La
+fecha de captura y la frescura deben permanecer visibles y un snapshot vencido
+obliga a abstener su gate.
 
 Antes de permitir red:
 

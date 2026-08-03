@@ -148,10 +148,25 @@ def test_protected_provider_is_normalized_and_replays_exactly(tmp_path: Path) ->
     assert gates["no_added_pyright_errors"] == "not_evaluated"
 
 
-def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None:
+def test_trusted_static_runs_independent_provider_matrix(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = tmp_path / "root"
     state = tmp_path / "state"
     paths = _tree(root)
+    package_version = providers_module._package_version
+    unavailable = {
+        "deptry",
+        "neocortex-framework",
+        "pip-audit",
+        "semgrep",
+    }
+    monkeypatch.setattr(
+        providers_module,
+        "_package_version",
+        lambda name: None if name in unavailable else package_version(name),
+    )
 
     summary = _run(root, state, paths, 1, "trusted-static")
     replay_summary = _run(root, state, paths, 2, "trusted-static")
@@ -169,16 +184,20 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
             )
         }
     providers = {item.provider_id: item for item in suite.providers}
-    assert summary.external_tool_runs == 8
-    assert replay_summary.external_tool_runs == 8
+    assert summary.external_tool_runs == 12
+    assert replay_summary.external_tool_runs == 12
     assert tuple(row[0] for row in provider_rows) == (
         "complexipy-cognitive",
+        "deptry-project-dependencies",
         "grimp-architecture",
+        "installed-package-inventory",
         "mypy-trusted-project",
+        "pip-audit-known-vulnerabilities",
         "pyright-trusted-project",
         "ruff-analyze-imports",
         "ruff-protected-basic",
         "ruff-trusted-project",
+        "semgrep-neocortex-invariants",
         "vulture-unused-static",
     )
     assert providers["ruff-protected-basic"].status == "ready"
@@ -186,6 +205,14 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
     assert providers["mypy-trusted-project"].status == "ready"
     assert providers["pyright-trusted-project"].status in {"ready", "abstained"}
     assert providers["vulture-unused-static"].status == "ready"
+    for provider_id in (
+        "deptry-project-dependencies",
+        "installed-package-inventory",
+        "pip-audit-known-vulnerabilities",
+        "semgrep-neocortex-invariants",
+    ):
+        assert providers[provider_id].status == "abstained"
+        assert providers[provider_id].reason == "provider_unavailable"
     for provider_id in (
         "complexipy-cognitive",
         "grimp-architecture",
@@ -628,7 +655,7 @@ def test_status_review_and_diff_consume_the_normalized_provider_contract(
     second_diff = compare_code_publications(baseline_state, current_state)
     assert first_diff == second_diff
     assert first_diff.status == "ready"
-    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v5"
+    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v7"
     assert first_diff.analysis_profile == "protected"
     assert len(first_diff.providers) == 1
     assert first_diff.providers[0].provider_id == "ruff-protected-basic"

@@ -123,9 +123,10 @@ el piloto del perfil estático es:
 Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
 ```
 
-`trusted-static` ejecuta ocho proveedores independientes: Ruff basic, Ruff
+`trusted-static` ejecuta doce proveedores independientes: Ruff basic, Ruff
 con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp, Complexipy y Vulture. Las familias
+Grimp, Complexipy, Vulture, Semgrep, Deptry, pip-audit e inventario del entorno
+instalado. Las familias
 Ruff `I,PT,SIM,UP` quedan fuera para priorizar defectos y mantenibilidad sobre
 estilo/modernización. No escale si status muestra un
 proveedor `abstained`/`not_recorded`, cobertura incompleta o una limitación que
@@ -139,6 +140,37 @@ cognitiva. El status arquitectónico debe mostrar
 `module_complexity_displacement`. En la primera publicación, las dimensiones
 que necesitan comparación permanecen `baseline` o `not_evaluated`; sólo un diff
 comparable permite aprobar que no hubo degradación o desplazamiento.
+
+### Supply chain y dependencias
+
+Los cuatro proveedores de Hito 5 son observacionales y están integrados en el
+mismo status, review, publication diff y work package:
+
+- `semgrep-neocortex-invariants` ejecuta tres reglas locales versionadas, sin
+  métricas remotas ni autofix, y excluye únicamente sus fixtures propios del
+  gate del proyecto;
+- `deptry-project-dependencies` correlaciona imports con dependencias runtime,
+  desarrollo y opcionales de `pyproject.toml`;
+- `pip-audit-known-vulnerabilities` consulta PyPI para crear un snapshot
+  fechado, sin descripciones ni fixes; un replay exacto vigente reutiliza ese
+  snapshot sin red;
+- `installed-package-inventory` verifica constraints, metadata de licencia y
+  hashes/tamaños `RECORD` del entorno donde corre `Neocortex`.
+
+Después de publicar, consulte `supply_chain` en `--code-status --code-json` y
+`--code-review --code-json`. Debe distinguir cuatro categorías —higiene de
+dependencias, vulnerabilidades conocidas, integridad e inventario de
+licencias— y seis gates explícitos. Un snapshot vencido, un `RECORD` alterado o
+un proveedor ausente obliga a abstener la dimensión; un finding no autoriza
+actualizar, desinstalar, editar ni aplicar fixes. Para comparar:
+
+```powershell
+Neocortex --state-directory $State --code-publication-diff $BaselineState --code-json
+```
+
+La comparación sólo declara deltas cuando proveedor, versión, configuración y
+frescura permiten hacerlo. Un baseline anterior a Hito 5 queda honestamente
+incomparable en supply chain.
 
 ### Consenso de código potencialmente no usado
 
@@ -451,7 +483,7 @@ Neocortex --code-doctor
   intérprete, con caché efímera propiedad de la corrida.
 - Pyright `1.1.411` se instala como paquete npm aislado junto al runtime y se
   invoca mediante Node. `--code-doctor --code-json` informa por separado los
-  ocho proveedores estáticos y el proveedor profundo; la corrida incorpora la
+  doce proveedores estáticos y el proveedor profundo; la corrida incorpora la
   resolución exacta a su firma de entorno y comparabilidad.
 - Vulture `2.16` pertenece al runtime base y se invoca mediante su API
   programática aislada. Su finding es advisory y sólo el consumidor de consenso
@@ -461,6 +493,11 @@ Neocortex --code-doctor
   midió viable pero no se integra porque duplicaría esa dimensión sin salida de
   contratos JSON. Complexipy se invoca por API para separar findings reales de
   la semántica de umbral de su CLI.
+- Semgrep `1.172.0`, Deptry `0.25.1`, pip-audit `2.10.1` y Packaging `26.2`
+  pertenecen al runtime Python base. Semgrep usa sólo el ruleset empaquetado y
+  autofix deshabilitado; Deptry no instala ni retira dependencias; pip-audit
+  declara acceso de red al crear su snapshot y nunca ejecuta `--fix`; el
+  inventario instalado es local y no emite conclusiones jurídicas.
 - La primera transcripción puede descargar el modelo Whisper. Use
   `--audio-local-models-only` para prohibir descargas.
 - Los modelos semánticos sólo se adquieren mediante
@@ -499,8 +536,9 @@ incremental. Tests de staging no sustituyen esa prueba end-to-end.
 No ejecute manualmente herramientas externas ni descargue modelos para validar
 una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
 validación del wheel debe confirmar Ruff, Mypy, Grimp, Complexipy, Vulture,
-Pytest y Coverage en la base, y la preparación de los perfiles trusted debe
-confirmar Node y el paquete Pyright aislado.
+Pytest, Coverage, Semgrep, Deptry, pip-audit y Packaging en la base, y la
+preparación de los perfiles trusted debe confirmar Node y el paquete Pyright
+aislado.
 
 Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
 estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo

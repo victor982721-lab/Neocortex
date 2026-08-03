@@ -133,20 +133,23 @@ exactos de cero. Su manifest guarda policy/firma, identidades, frescura y los
 argv canónicos `analyze`/`status` como arrays, no como texto de shell.
 `--analysis-profile protected` es el valor predeterminado: Ruff observa los
 Python vigentes publicados por Code con fingerprint exacto y usa la política
-aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade Ruff con
-la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
-Grimp, Complexipy y Vulture como ejecuciones separadas. Ruff Analyze funciona como
-oráculo diferencial del grafo; Grimp produce imports, fan-in/fan-out, SCC,
+aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade once
+proveedores: Ruff proyecto, Mypy, Pyright, Ruff Analyze, Grimp, Complexipy,
+Vulture, Semgrep, Deptry, pip-audit e inventario del entorno instalado. Ruff
+trusted usa `E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`. Ruff Analyze actúa
+como oráculo diferencial del grafo; Grimp produce imports, fan-in/fan-out, SCC,
 ciclos y contratos; Complexipy produce complejidad cognitiva por símbolo y
-módulo. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
-modernización en el resultado prioritario. Sólo debe usarse con una raíz
-confiable porque lee `pyproject.toml`;
-aun así no importa ni ejecuta sus módulos, no usa red, no aplica fixes y toda la
-evidencia es advisory. `vulture-unused-static` usa Vulture 2.16 sin configuración
-del proyecto y publica sólo candidatos heurísticos `unused_code`; no ejecuta
-contenido ni posee autoridad de fix, borrado o mutación.
+módulo. Semgrep ejecuta tres invariantes locales versionadas con autofix
+deshabilitado; Deptry contrasta imports con `pyproject.toml`; pip-audit captura
+un snapshot fechado de vulnerabilidades de PyPI; el inventario verifica
+versiones, constraints, metadata de licencia y `RECORD` del wheel instalado.
+La suite completa suma doce proveedores. No importa módulos del proyecto ni
+aplica fixes, y toda su evidencia es advisory. La única excepción offline es
+pip-audit, que declara el acceso de red de su snapshot; su replay exacto no
+consulta la red. `vulture-unused-static` publica sólo candidatos heurísticos
+`unused_code` y tampoco posee autoridad de fix, borrado o mutación.
 
-`trusted-deep` añade Pytest + Coverage a los ocho proveedores estáticos. Nunca
+`trusted-deep` añade Pytest + Coverage a los doce proveedores estáticos. Nunca
 es el perfil predeterminado y sólo acepta la identidad física exacta de
 `C:\Users\Victor\Neocortex\Repository`; cualquier otra raíz se rechaza antes de
 crear un run. Este perfil sí ejecuta código declarado del proyecto, pruebas y
@@ -204,15 +207,25 @@ holdout, gates y limitaciones. Ausencia de cualquiera de los dos proveedores
 estáticos causa abstención del consenso; Coverage puede explicar uso observado,
 pero su ausencia nunca prueba que un símbolo no se use.
 
+La proyección `supply_chain` separa `dependency_hygiene`,
+`known_vulnerability`, `package_integrity` y `license_inventory`; no las reduce
+a un score. Publica seis gates: invariantes Semgrep, declaración de
+dependencias, frescura del snapshot, ausencia de vulnerabilidades conocidas,
+integridad del paquete e inventario de licencias. Un gate fallido conserva sus
+findings y relaciones explicables, pero nunca autoriza una modificación. Status,
+review y work packages consumen la misma evidencia; la ausencia o caducidad de
+un proveedor obliga a abstener sólo la dimensión afectada.
+
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v8` conserva compatibilidad con v2-v7 y
+envelope `neocortex.code-review/v9` conserva compatibilidad con v2-v8 y
 la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
 recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
 ranking, además de un `work_package`
 determinista con una sola recomendación raíz, guards alcanzados por llamadas
 confirmadas a uno o dos saltos, riesgo agregado, módulo primario, contratos
 afectados, cadenas de imports acotadas, pruebas protectoras observadas, líneas y
-ramas faltantes, pasos y gates. Los gates profundos son `tests_passed`,
+ramas faltantes, evidencia y gates de supply chain, pasos y gates. Los gates
+profundos son `tests_passed`,
 `coverage_available`, `work_package_target_protected`,
 `line_coverage_not_degraded` y `branch_coverage_not_degraded`; ausencia o falta
 de comparabilidad nunca aprueba uno. El planificador v4 conserva como máximo un
@@ -233,7 +246,7 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v6`, compatible con v1-v5, informa
+envelope `neocortex.code-publication-diff/v7`, compatible con v1-v6, informa
 calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
@@ -246,6 +259,10 @@ cambios. `unused_analysis` compara candidatos añadidos/retirados, cambios entre
 los cuatro estados y consenso alto añadido/resuelto sólo cuando coinciden
 proveedores, policy, calibración y holdout. Su gate falla ante consenso alto
 nuevo, pero sigue siendo observacional y jamás autoriza borrar o modificar.
+`supply_chain` compara por proveedor, categoría, gate, observación y relación;
+si el baseline no contiene los cuatro proveedores nuevos o difieren versiones,
+frescura o firmas, publica la dimensión como `not_evaluated` o baseline/current
+sin inventar mejora o regresión.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -335,8 +352,9 @@ audio, código y estado semántico.
 `external_evidence_providers` para `ruff-protected-basic`,
 `ruff-trusted-project`, `mypy-trusted-project` y
 `pyright-trusted-project`, `vulture-unused-static`, `ruff-analyze-imports`,
-`grimp-architecture` y `complexipy-cognitive`, además de
-`pytest-coverage-trusted-deep`, con
+`grimp-architecture`, `complexipy-cognitive`, `semgrep-neocortex-invariants`,
+`deptry-project-dependencies`, `pip-audit-known-vulnerabilities` e
+`installed-package-inventory`, además de `pytest-coverage-trusted-deep`, con
 disponibilidad, versión y autoridad advisory.
 La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
 por sí sola al proveedor protected.
