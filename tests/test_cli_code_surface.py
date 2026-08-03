@@ -134,9 +134,7 @@ EXPECTED_CODE_ACTIONS = (
         "code_cache_validation",
         default="metadata",
         choices=("metadata", "full"),
-        help_text=(
-            "metadata is incremental-fast; full rechecks exact bytes before reuse"
-        ),
+        help_text=("metadata is incremental-fast; full rechecks exact bytes before reuse"),
     ),
     _expected_boolean_optional(
         "--code-generated",
@@ -379,9 +377,7 @@ def _normalized_action(action: argparse.Action) -> tuple[object, ...]:
 
 def test_code_actions_aliases_and_help_preserve_the_normalized_contract() -> None:
     parser = build_parser()
-    group = next(
-        item for item in parser._action_groups if item.title == CODE_GROUP_TITLE
-    )
+    group = next(item for item in parser._action_groups if item.title == CODE_GROUP_TITLE)
 
     assert group is parser._action_groups[-3]
     assert parser._action_groups[-2].title == SEMANTIC_GROUP_TITLE
@@ -390,9 +386,7 @@ def test_code_actions_aliases_and_help_preserve_the_normalized_contract() -> Non
         EXPECTED_CODE_ACTIONS
     )
     max_file_action = next(
-        action
-        for action in group._group_actions
-        if action.dest == "code_max_file_bytes"
+        action for action in group._group_actions if action.dest == "code_max_file_bytes"
     )
     assert max_file_action.type is decimal_megabytes
     help_text = parser.format_help()

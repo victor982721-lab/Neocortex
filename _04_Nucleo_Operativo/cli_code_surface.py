@@ -249,9 +249,7 @@ def validate_code_arguments(args: argparse.Namespace) -> None:
     _validate_code_review_limit(args)
     if args.code_min_complexity is not None and args.code_min_complexity < 0:
         raise SystemExit("--code-min-complexity cannot be negative")
-    if args.code_search_mode and len(set(args.code_search_mode)) != len(
-        args.code_search_mode
-    ):
+    if args.code_search_mode and len(set(args.code_search_mode)) != len(args.code_search_mode):
         raise SystemExit("--code-search-mode values cannot be duplicated")
 
     explicit = set(getattr(args, "_explicit_options", ()))

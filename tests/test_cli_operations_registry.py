@@ -194,22 +194,15 @@ def test_importing_dispatch_keeps_direct_handler_module_lazy() -> None:
 
 
 def test_registry_covers_every_stable_direct_destination_once() -> None:
-    expected = tuple(
-        (destination, handler) for destination, handler, _ in DIRECT_ARGUMENT_CASES
-    )
+    expected = tuple((destination, handler) for destination, handler, _ in DIRECT_ARGUMENT_CASES)
     registered = tuple(
-        (operation.destination, operation.handler_name)
-        for operation in DIRECT_OPERATIONS
+        (operation.destination, operation.handler_name) for operation in DIRECT_OPERATIONS
     )
 
     assert registered == expected
-    assert len({operation.destination for operation in DIRECT_OPERATIONS}) == len(
-        DIRECT_OPERATIONS
-    )
+    assert len({operation.destination for operation in DIRECT_OPERATIONS}) == len(DIRECT_OPERATIONS)
     parser_destinations = vars(build_parser().parse_args([]))
-    assert {
-        operation.destination for operation in DIRECT_OPERATIONS
-    } <= parser_destinations.keys()
+    assert {operation.destination for operation in DIRECT_OPERATIONS} <= parser_destinations.keys()
 
 
 @pytest.mark.parametrize(
@@ -244,17 +237,13 @@ def test_each_direct_flag_selects_and_lazily_dispatches_its_registered_handler(
 
 def test_no_direct_selection_imports_no_handler_module() -> None:
     args = build_parser().parse_args([])
-    with patch(
-        "_04_Nucleo_Operativo.cli_operations.importlib.import_module"
-    ) as import_module:
+    with patch("_04_Nucleo_Operativo.cli_operations.importlib.import_module") as import_module:
         assert dispatch_direct(args) is None
     import_module.assert_not_called()
 
 
 def test_direct_operations_remain_mutually_exclusive_across_domains() -> None:
-    args = build_parser().parse_args(
-        ("--pdf-search", "transformer", "--docx-search", "breaker")
-    )
+    args = build_parser().parse_args(("--pdf-search", "transformer", "--docx-search", "breaker"))
 
     with pytest.raises(SystemExit) as raised:
         validate_arguments(args)
@@ -271,9 +260,7 @@ def test_all_remains_incompatible_with_any_registered_direct_operation() -> None
     with pytest.raises(SystemExit) as raised:
         validate_arguments(args)
 
-    assert (
-        str(raised.value) == "--all cannot be combined with direct query/doctor options"
-    )
+    assert str(raised.value) == "--all cannot be combined with direct query/doctor options"
 
 
 # endregion [02]

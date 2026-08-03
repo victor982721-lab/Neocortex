@@ -198,13 +198,9 @@ DIRECT_OPERATIONS: tuple[DirectOperation, ...] = (
         module_name=".cli_semantic",
     ),
     DirectOperation("catalog_documents", "run_document_catalog", _ORGANIZATION),
-    DirectOperation(
-        "catalog_preview", "run_document_catalog_preview", _ORGANIZATION, _VALUE
-    ),
+    DirectOperation("catalog_preview", "run_document_catalog_preview", _ORGANIZATION, _VALUE),
     DirectOperation("organization_plan", "run_organization_plan", _ORGANIZATION),
-    DirectOperation(
-        "organization_preview", "run_organization_preview", _ORGANIZATION, _VALUE
-    ),
+    DirectOperation("organization_preview", "run_organization_preview", _ORGANIZATION, _VALUE),
     DirectOperation("organization_apply", "run_organization_apply", _ORGANIZATION),
     DirectOperation("pdf_search", "run_pdf_search", _PDF, _VALUE),
     DirectOperation("pdf_layout_groups", "run_pdf_layout_groups", _PDF, _VALUE),
@@ -221,9 +217,7 @@ DIRECT_OPERATIONS: tuple[DirectOperation, ...] = (
         _VALUE,
         module_name=".cli_audio",
     ),
-    DirectOperation(
-        "audio_doctor", "run_audio_doctor", _AUDIO, module_name=".cli_audio"
-    ),
+    DirectOperation("audio_doctor", "run_audio_doctor", _AUDIO, module_name=".cli_audio"),
     DirectOperation("code_status", "run_code_status", _CODE, module_name=".cli_code"),
     DirectOperation("code_review", "run_code_review", _CODE, module_name=".cli_code"),
     DirectOperation(
@@ -233,12 +227,8 @@ DIRECT_OPERATIONS: tuple[DirectOperation, ...] = (
         _VALUE,
         module_name=".cli_code",
     ),
-    DirectOperation(
-        "code_search", "run_code_search", _CODE, _VALUE, module_name=".cli_code"
-    ),
-    DirectOperation(
-        "code_projects", "run_code_projects", _CODE, module_name=".cli_code"
-    ),
+    DirectOperation("code_search", "run_code_search", _CODE, _VALUE, module_name=".cli_code"),
+    DirectOperation("code_projects", "run_code_projects", _CODE, module_name=".cli_code"),
     DirectOperation(
         "code_reconstruct",
         "run_code_reconstruct",
@@ -287,8 +277,7 @@ def selected_direct_operations(
     return tuple(
         operation
         for operation in DIRECT_OPERATIONS
-        if (family is None or operation.family is family)
-        and operation.is_selected(args)
+        if (family is None or operation.family is family) and operation.is_selected(args)
     )
 
 
