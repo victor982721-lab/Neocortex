@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-02.
+> Actualizado: 2026-08-02, Hito 2 listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > Su contenido sustituye por completo el handoff de release del 30–31 de julio.
 > El historial anterior permanece recuperable en Git; no debe ejecutarse como
@@ -8,32 +8,73 @@
 
 ## Resultado actual
 
-El checkpoint vigente es el **Hito 1 de la plataforma multianalizador** en
-`codex/neocortex-self-analysis-platform-v2`. Code schema v3 conserva las
-migraciones v1→v2→v3 y añade contratos, inputs, findings, replay y costos por
-proveedor. `protected` ejecuta `ruff-protected-basic`; `trusted-static` añade
-`ruff-trusted-project`, `mypy-trusted-project` y `pyright-trusted-project` sin
-ejecutar contenido ni autorizar fixes o mutaciones. Status, review v5,
-publication diff v3 y work packages consumen la suite genérica; Mypy y Pyright
-permanecen separados y exponen consenso/discrepancias.
+El checkpoint vigente es el **Hito 2 de la plataforma multianalizador** en
+`codex/neocortex-architecture-analysis-v1`. Code schema v4 conserva las
+migraciones v1→v2→v3→v4 y añade métricas y relaciones genéricas con productor y
+consumidores reales. `trusted-static` ejecuta siete proveedores separados:
+Ruff protected/trusted, Mypy, Pyright, Ruff Analyze, Grimp y Complexipy. Status,
+review v6, publication diff v4 y work packages consumen la evidencia
+arquitectónica por módulo sin ejecutar contenido ni otorgar autoridad de
+mutación.
 
-El wheel candidato `0.7.2` autoanalizó el repositorio real sobre estado aislado:
-538 archivos inventariados, 528 candidatos Code, 477 Python cubiertos por cada
-proveedor, 15 571 símbolos, 84 458 referencias, 212 diagnósticos internos y cero
-errores. Publicó 0 findings Ruff protected, 157 Ruff trusted, 356 Mypy y 781
-Pyright. El consenso tipado registró 231 coincidencias, 90 sólo Mypy, 418 sólo
-Pyright, cero contradicciones y cero incomparables. La corrida completa tardó
-84.399 s; el replay exacto tardó 4.879 s, reutilizó 528/528 entradas Code y los
-cuatro proveedores, lanzó cero procesos externos y no cambió ningún hash del
-checkout.
+La selección focal retuvo Grimp `3.15` directamente y Complexipy `6.2.0`.
+Import Linter `2.13` fue viable, pero se rechazó porque duplicaba el grafo de
+Grimp sin ofrecer un contrato JSON equivalente. Ruff Analyze queda como oráculo
+diferencial: en la publicación final coincidió con Grimp en 1 040/1 040 imports,
+cero discrepancias y cuatro SCC conocidos. El dominio contiene 269 módulos; los
+seis contratos v1 fueron evaluados sin violaciones. Complexipy publicó 4 839
+métricas: 4 301 símbolos y agregados total/máximo para los 269 módulos.
 
-El diff rc22→Hito 1 migra únicamente una copia aislada del baseline a schema v3.
-Ruff protected es comparable mediante la proyección compatible del contrato
-legacy: gate `passed`, cero findings añadidos/resueltos y veredicto
-`equivalent_under_observed_metrics`. Los tres proveedores inexistentes en rc22
-quedan `not_evaluated`, nunca aprobados por ausencia. Review sigue `ready`, con
-10 findings, tres recomendaciones y un paquete cuyo objetivo primario es
-`bounded_subprocess.run_bounded_capture`.
+El propio autoanálisis detectó antes de publicar que la primera proyección
+contaba identidades de símbolos como módulos: mostraba 632 frente a los 269 de
+Grimp y fallaba `import_graph_consensus`. La corrección conserva la metadata
+`module` emitida por el proveedor y el gate final queda `passed`, con 269 = 269.
+La regresión focal y los cuatro consumidores públicos quedaron verdes antes de
+repetir únicamente la evidencia afectada.
+
+La aceptación final usó el wheel `0.7.2` instalado en un runtime aislado bajo
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito2-architecture-20260803-rc2`.
+El checkout final produjo 534 archivos inventariados y 528 candidatos Code; la
+corrida incremental procesó los dos archivos corregidos, reutilizó 526 y volvió
+a ejecutar los siete proveedores sin errores. El replay final tardó 6.220 s,
+reutilizó 528/528 entradas Code y 7/7 proveedores, abrió cero procesos externos
+y revalidó honestamente 49 635 663 bytes de inputs externos; Code no releyó
+bytes ni repitió análisis, persistencia o grafo.
+
+La publicación final conserva 0 findings Ruff protected, 157 Ruff trusted, 367
+Mypy y 761 Pyright. El consenso tipado registra 236 coincidencias, 94 sólo Mypy,
+391 sólo Pyright, cero contradicciones y cero incomparables. La ejecución full
+de proveedores del commit final empleó 25 procesos y 103.764 s agregados: diez
+lotes por cada Ruff de archivos, y una invocación para Mypy, Pyright, Ruff
+Analyze, Grimp y Complexipy. El replay conserva sus costos reales de
+verificación y registra `process_invocations=0` en los siete proveedores.
+
+El diff contra el commit publicado rc22/Hito 1 usa el mismo wheel, schema v4 y
+la misma ruta física. Su veredicto es `equivalent_under_observed_metrics`.
+Arquitectura queda comparable y aprueba `no_new_import_cycles`,
+`architecture_contracts_not_degraded` y `module_complexity_not_displaced`: cero
+ciclos o contratos fallidos añadidos y cero complejidad desplazada. Ruff
+protected y los tres proveedores arquitectónicos también son comparables. Ruff
+trusted, Mypy y Pyright quedan honestamente `not_evaluated` en el diff porque el
+`pyproject.toml` cambió al declarar las dependencias del Hito 2; sus resultados
+actuales sí están completos y el consenso actual permanece disponible en
+status/review.
+
+Review sigue `ready` sobre 487/487 Python completos, con 205 hotspots y un único
+work package vigente para `bounded_subprocess.run_bounded_capture`. El paquete
+incluye 20 cadenas de imports, ningún contrato arquitectónico afectado y gates
+explícitos de tipos, proveedores, ciclos, contratos y complejidad desplazada.
+El wheel final contiene 282 miembros, `ZipFile.testzip()` no encontró corrupción,
+`pip check` está limpio, el módulo instalado es byte-idéntico a la fuente y
+`doctor capabilities` informa las ocho capacidades disponibles. `code-doctor`
+abre el estado aislado con schema `ok`, cero violaciones de foreign keys y los
+siete proveedores disponibles; Pyright `1.1.411` se resuelve desde el runtime
+propiedad de NeoCortex.
+
+El **Hito 1** quedó publicado mediante el PR #14 y fusionado en `main` como
+`7f79696daa17903b7e488f5204616faff540cb31`. Su plataforma genérica, schema v3,
+perfiles protected/trusted-static, cuatro proveedores iniciales y replay exacto
+son la base compatible del Hito 2.
 
 El candidato instalado `rc5` cierra los cinco pasos recomendados sobre estados
 aislados: abstención Semantic/Knowledge por contrato exacto; clon Semantic
@@ -164,22 +205,25 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada al iniciar el Hito 1: `main` en
-  `231e5e4400f3a315db8e10eed8fc99c86786d2ef`, idéntico a `origin/main`.
-- El checkout fuente es `0.7.2`. El Hito 1 se desarrolla en
-  `codex/neocortex-self-analysis-platform-v2`; el identificador final del PR queda en
-  la historia de Git/GitHub después de publicarlo. La
+- Base publicada al iniciar el Hito 2: `main` en
+  `7f79696daa17903b7e488f5204616faff540cb31`, idéntico a `origin/main`.
+- El checkout fuente es `0.7.2`. El Hito 2 se desarrolla en
+  `codex/neocortex-architecture-analysis-v1`; el identificador final del PR queda
+  en la historia de Git/GitHub después de publicarlo. La
   igualdad final entre `main` y `origin/main` se verifica después del merge
   porque el commit no puede autorreferenciar su propio hash desde este handoff.
 - Launcher estable exacto:
   `C:\Users\Victor\AppData\Local\Programs\Neocortex\bin\Neocortex.exe`.
 - El estable sigue en `Neocortex 0.7.1`, SHA-256
   `1D4FC0C654ACF0B34D300ABEC99839C5D263B44F05AA499947F44B12215716B1`.
-- En la sesión con perfil, `Neocortex` está sombreado por una función que ejecuta
-  `py -3 -m neocortex`; fuera del checkout puede resolver otra instalación.
-- `pwsh -NoProfile` no encuentra `Neocortex`: el `bin` canónico no está en PATH.
-- No promover ni cambiar perfil/PATH sin autorización explícita de Victor. La
-  pregunta ya se formuló y no hubo respuesta afirmativa.
+- El comando de producto sigue siendo `Neocortex`. La aceptación del Hito 2 usa
+  deliberadamente el launcher del runtime candidato aislado para no promover el
+  estable; el launcher añade al proceso únicamente el shim Pyright propiedad de
+  ese runtime.
+- Node `24.18.1` está disponible en PATH y Pyright `1.1.411` permanece instalado
+  bajo `sys.prefix\tools\pyright`, no como dependencia global del proyecto.
+- `.codex/config.toml` conserva cambios locales de Victor y no forma parte del
+  Hito 2.
 - La normalización ACL/NTFS que permanece sólo en el checkout local
   (`tools/release_windows_ntfs_native.py` y su regresión) no forma parte de este
   corte Semantic/Knowledge. No publicarla, aplicarla ni integrarla sin cerrar su
@@ -1015,29 +1059,34 @@ ausentes y su candidate limit, no evidencia inventada.
 - Wheel rc12 de 269 miembros, `ZipFile.testzip()`, `pip check`, procedencia del
   import y launcher instalados verificados. El estable no se modificó.
 - `git diff --check` limpio; sólo avisos de futura conversión LF→CRLF.
+- Plataforma Hito 2: 111 casos focales de proveedores/plataforma contabilizados,
+  31 consumidores de arquitectura/diff/review/work packages y 20 casos del
+  launcher/capabilities aprobados. La regresión específica del conteo de módulos
+  aprobó 2/2 antes de la barrera final de 31. Ruff quedó limpio y Mypy 2.1 no
+  reportó errores en los módulos corregidos.
+- Wheel final Hito 2 de 282 miembros: integridad ZIP, `pip check`, procedencia
+  neutral, igualdad SHA-256 fuente/instalado, ocho capacidades, siete proveedores,
+  foreign keys, aceptación instalada, replay y diff rc22 verificados. El estable
+  no se promovió y ningún estado durable o corpus personal fue modificado.
 
 ## Próximos pasos, en orden
 
-1. **Publicar el Hito 1.** Commit cohesivo, push, PR listo, checks propios,
+1. **Publicar el Hito 2.** Commit del handoff, push, PR listo, checks propios,
    merge a `main` y verificación `main == origin/main`. Este checkpoint no cierra
    el objetivo terminal.
-2. **Abrir el Hito 2 desde ese `main`.** Entregar un corte vertical público de
-   arquitectura/imports por módulo. Investigar justo entonces Ruff Analyze y
-   un motor de contratos de imports; elegir por una prueba focal, no por un
-   bake-off global.
-3. **Versionar contratos derivados de la arquitectura real.** Publicar métricas
-   de complejidad cognitiva, fan-in/fan-out, ciclos y dependencias con productor
-   y consumidor reales en status, review, diff y work packages. Detectar
-   complejidad desplazada sin convertir ninguna métrica en probabilidad de
-   defecto.
-4. **Usar el estado publicado como línea base.** El paquete vigente de review es
-   `bounded_subprocess.run_bounded_capture`; el Hito 2 debe conservar sus
-   contratos y enriquecer el paquete con cadenas de imports, módulos y gates de
-   arquitectura. Ejecutar una sola aceptación, replay y diff final del hito.
-5. **Continuar después con Hitos 3–7 en el orden autorizado.** `trusted-deep`,
-   código potencialmente no usado, Semgrep/supply chain, mutación/historia Git y
-   la integración final se abren únicamente cuando su hito anterior esté
-   validado, publicado y fusionado.
+2. **Abrir el Hito 3 desde ese `main`.** Añadir el perfil explícito
+   `trusted-deep` sólo para la raíz confiable exacta de NeoCortex; nunca hacerlo
+   predeterminado ni aceptarlo sobre raíces arbitrarias.
+3. **Cerrar Coverage y test-to-symbol como corte vertical.** Ejecutar Pytest con
+   branch coverage y contextos dinámicos, declarar selección parcial/completa y
+   mapear test → líneas → símbolos → módulos → work packages mediante el comando
+   público.
+4. **Probar operación profunda acotada.** Añadir límites, reanudación, replay,
+   gates comparables y una instalación desde wheel; usar el estado publicado del
+   Hito 2 como baseline y repetir sólo la barrera afectada tras correcciones.
+5. **Continuar después con Hitos 4–7 en el orden autorizado.** Código no usado,
+   Semgrep/supply chain, mutación/historia Git y la integración final se abren
+   cuando su hito anterior quede validado, publicado y fusionado.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
 autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni
