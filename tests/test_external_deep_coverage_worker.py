@@ -384,13 +384,15 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
     )
     (tests / "conftest.py").write_text(
         "import os\n"
+        "import shutil\n"
         "from pathlib import Path\n\n"
         "def pytest_configure(config):\n"
         "    del config\n"
         "    root = Path(os.environ['NEOCORTEX_AUDIT_LAB_ROOT']).resolve()\n"
         "    for name in ('TEMP', 'TMP', 'TMPDIR', 'PYTHONPYCACHEPREFIX'):\n"
         "        assert Path(os.environ[name]).resolve().is_relative_to(root)\n"
-        "    assert Path.home().is_dir()\n",
+        "    assert Path.home().is_dir()\n"
+        "    assert shutil.which('git') is not None\n",
         encoding="utf-8",
     )
     (project / "pyproject.toml").write_text(

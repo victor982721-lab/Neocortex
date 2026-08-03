@@ -1431,6 +1431,10 @@ def execute_pytest_coverage(
     controlled_environment["HOME"] = home_directory
     if os.name == "nt":
         controlled_environment["USERPROFILE"] = home_directory
+    for name in ("PATH", "PATHEXT"):
+        value = os.environ.get(name)
+        if value:
+            controlled_environment[name] = value
     controlled_environment["NEOCORTEX_AUDIT_LAB_ROOT"] = str(durable_scratch)
     for name in ("TEMP", "TMP", "TMPDIR", "PYTHONPYCACHEPREFIX"):
         controlled_environment[name] = str(runtime_root)

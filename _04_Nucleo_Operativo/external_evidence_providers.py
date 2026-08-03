@@ -209,6 +209,8 @@ def _environment_signature(
     tool_version: str,
     node_path: str | None = None,
     home_directory: str | None = None,
+    path_value: str | None = None,
+    pathext_value: str | None = None,
 ) -> str:
     payload: dict[str, object] = {
         "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
@@ -221,6 +223,10 @@ def _environment_signature(
     }
     if home_directory is not None:
         payload["home_directory"] = os.path.normcase(os.path.abspath(home_directory))
+    if path_value is not None:
+        payload["path"] = path_value
+    if pathext_value is not None:
+        payload["pathext"] = pathext_value
     return external_signature("external-environment-v1", payload)
 
 
@@ -1763,6 +1769,8 @@ class PytestCoverageTrustedDeepProvider:
                 tool_name="pytest+coverage",
                 tool_version=version,
                 home_directory=trusted_deep_home_directory(),
+                path_value=os.environ.get("PATH"),
+                pathext_value=os.environ.get("PATHEXT"),
             ),
             root_identity=self._root_identity,
             execution_strategy="canonical-root-bounded-sharded-pytest-coverage-v1",
