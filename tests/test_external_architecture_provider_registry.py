@@ -178,7 +178,7 @@ def test_vulture_provider_uses_exact_project_wide_input_and_replays(
     assert replay.limitations == limitations
 
 
-def test_trusted_static_registry_exposes_all_twelve_providers(
+def test_trusted_static_registry_exposes_all_thirteen_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -215,4 +215,5 @@ def test_trusted_static_registry_exposes_all_twelve_providers(
         "ruff-analyze-imports",
         "grimp-architecture",
         "complexipy-cognitive",
+        "git-history-local",
     )

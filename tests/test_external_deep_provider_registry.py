@@ -122,6 +122,7 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
         "ruff-analyze-imports",
         "grimp-architecture",
         "complexipy-cognitive",
+        "git-history-local",
         PYTEST_COVERAGE_PROVIDER_ID,
     )
     descriptor = providers[-1].descriptor

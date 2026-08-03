@@ -311,7 +311,7 @@ def test_trusted_static_registry_exposes_supply_chain_providers(
     providers = providers_for_profile("trusted-static", root)
     by_id = {item.descriptor.provider_id: item.descriptor for item in providers}
 
-    assert len(providers) == 12
+    assert len(providers) == 13
     assert {
         "semgrep-neocortex-invariants",
         "deptry-project-dependencies",

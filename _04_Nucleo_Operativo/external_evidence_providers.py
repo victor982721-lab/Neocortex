@@ -80,6 +80,16 @@ from .external_evidence_models import (
     external_root_identity,
     external_signature,
 )
+from .external_git_history import (
+    GIT_HISTORY_PROVIDER_ID,
+    GIT_HISTORY_PROVIDER_SCHEMA,
+    GitHistoryConfig,
+    GitHistoryExecution,
+    GitRepositorySnapshot,
+    execute_git_history,
+    git_history_input_signature,
+    inspect_git_repository,
+)
 from .external_architecture_providers import (
     ArchitectureProviderExecution,
     execute_complexipy_cognitive,
@@ -136,6 +146,7 @@ _SEMGREP_MEMORY_BYTES = 1024 * 1024 * 1024
 _DEPTRY_MEMORY_BYTES = 1024 * 1024 * 1024
 _PIP_AUDIT_MEMORY_BYTES = 512 * 1024 * 1024
 _PACKAGE_INVENTORY_MEMORY_BYTES = 512 * 1024 * 1024
+_GIT_HISTORY_MEMORY_BYTES = 512 * 1024 * 1024
 _DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
 _DEEP_COVERAGE_FINDING_BOUND = 2_000
@@ -174,6 +185,38 @@ def _deep_tool_version() -> str | None:
         return None
     value = f"pytest={pytest_version};coverage={coverage_version}"
     return value if len(value.encode("utf-8")) <= 256 else None
+
+
+def _git_tool_probe() -> tuple[Path | None, str | None]:
+    """Resolve and identify Git without reading repository state."""
+
+    executable = shutil.which("git")
+    if executable is None:
+        return None, None
+    try:
+        completed = run_bounded_capture(
+            (executable, "--version"),
+            timeout_seconds=10.0,
+            stdout_limit_bytes=4_096,
+            stderr_limit_bytes=4_096,
+            environment=_controlled_environment(),
+            memory_limit_bytes=_GIT_HISTORY_MEMORY_BYTES if os.name == "nt" else None,
+        )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, SubprocessOutputLimitError):
+        return Path(executable), None
+    if completed.returncode != 0 or completed.stderr:
+        return Path(executable), None
+    try:
+        output = completed.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return Path(executable), None
+    prefix = "git version "
+    version = output.removeprefix(prefix) if output.startswith(prefix) else ""
+    if not version or any(character.isspace() for character in version):
+        return Path(executable), None
+    if len(version.encode("utf-8")) > 256:
+        return Path(executable), None
+    return Path(executable), version
 
 
 def _validated_deep_configuration(
@@ -1482,6 +1525,7 @@ def provider_tool_versions() -> dict[str, str | None]:
 
     _node, _index, pyright_version = _pyright_locations()
     ruff_version = _package_version("ruff")
+    _git_executable, git_version = _git_tool_probe()
     return {
         RUFF_PROTECTED_PROVIDER_ID: ruff_version,
         RUFF_TRUSTED_PROVIDER_ID: ruff_version,
@@ -1495,6 +1539,7 @@ def provider_tool_versions() -> dict[str, str | None]:
         DEPTRY_PROVIDER_ID: _package_version("deptry"),
         PIP_AUDIT_PROVIDER_ID: _package_version("pip-audit"),
         INSTALLED_PACKAGE_PROVIDER_ID: _package_version("neocortex-framework"),
+        GIT_HISTORY_PROVIDER_ID: git_version,
         PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
     }
 
@@ -2612,6 +2657,261 @@ def _architecture_files(
     return tuple(sorted(selected, key=lambda item: item.relative_path.casefold()))
 
 
+class GitHistoryLocalProvider:
+    """Publish bounded observations from the exact local Git object database."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        config: GitHistoryConfig | None = None,
+        inspector: Callable[..., GitRepositorySnapshot] = inspect_git_repository,
+        executor: Callable[..., GitHistoryExecution] = execute_git_history,
+    ) -> None:
+        self.root = root
+        self.config = GitHistoryConfig() if config is None else config
+        self.inspector = inspector
+        self.executor = executor
+        self._root_identity = external_root_identity(root)
+        self._git_executable, self._version = _git_tool_probe()
+        self._prepared: tuple[str, GitRepositorySnapshot, int] | None = None
+        version = self._version or "unavailable"
+        executable_value = (
+            None
+            if self._git_executable is None
+            else os.path.normcase(os.path.abspath(self._git_executable))
+        )
+        limits = ProviderLimits(
+            self.config.timeout_seconds,
+            _GIT_HISTORY_MEMORY_BYTES,
+            RUFF_MAX_TOTAL_BYTES,
+            self.config.stdout_limit_bytes + self.config.stderr_limit_bytes,
+            self.config.max_relations,
+        )
+        self.descriptor = _provider_descriptor(
+            provider_id=GIT_HISTORY_PROVIDER_ID,
+            provider_schema=GIT_HISTORY_PROVIDER_SCHEMA,
+            tool_name="git",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:git-history-local",
+            configuration_payload={
+                "adapter": GIT_HISTORY_PROVIDER_SCHEMA,
+                "history": self.config.as_payload(),
+                "repository_source": "local-object-database",
+                "staging": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=_environment_signature(
+                tool_name="git",
+                tool_version=version,
+                path_value=executable_value,
+            ),
+            root_identity=self._root_identity,
+            execution_strategy="bounded-local-git-history-v1",
+            invalidation_strategy="project_wide",
+            memory=_GIT_HISTORY_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="current-code-inventory-and-local-history-v1",
+            limits=limits,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def _inspect(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> tuple[str, GitRepositorySnapshot, int]:
+        started_ns = time.time_ns()
+        if self._git_executable is None:
+            raise ValueError("git executable is unavailable")
+        snapshot = self.inspector(
+            self.root,
+            _controlled_environment(),
+            config=self.config,
+            git_executable=str(self._git_executable),
+        )
+        signature = git_history_input_signature(files, snapshot, config=self.config)
+        return signature, snapshot, started_ns
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        prepared = self._inspect(files)
+        self._prepared = prepared
+        return prepared[0]
+
+    def _prepared_snapshot(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> tuple[str, GitRepositorySnapshot, int]:
+        prepared, self._prepared = self._prepared, None
+        if prepared is not None:
+            signature, snapshot, started_ns = prepared
+            if signature == git_history_input_signature(files, snapshot, config=self.config):
+                return signature, snapshot, started_ns
+        return self._inspect(files)
+
+    @staticmethod
+    def _attach_observation(
+        publication: ExternalProviderPublication,
+        *,
+        snapshot: GitRepositorySnapshot,
+        started_ns: int,
+        execution: GitHistoryExecution | None,
+    ) -> ExternalProviderPublication:
+        counters = dict(publication.counters)
+        if execution is None:
+            counters.update(
+                {
+                    "process_invocations": snapshot.process_invocations,
+                    "stdout_bytes": snapshot.stdout_bytes,
+                    "stderr_bytes": snapshot.stderr_bytes,
+                }
+            )
+            details: Mapping[str, object] = {
+                "provider_schema": GIT_HISTORY_PROVIDER_SCHEMA,
+                "source": "local_git_object_database",
+                "requested_ref": snapshot.requested_ref,
+                "head_commit": snapshot.head_commit,
+                "repository_shallow": snapshot.repository_shallow,
+                "execution": "head_verified_exact_replay",
+                "uses_network": False,
+                "executes_content": False,
+            }
+        else:
+            counters.update({name: int(value) for name, value in execution.counters.items()})
+            details = execution.provenance
+        completed_ns = time.time_ns()
+        counters["wall_milliseconds"] = max(0, (completed_ns - started_ns) // 1_000_000)
+        provenance = dict(publication.publication.provenance)
+        provenance["git_history_execution"] = dict(details)
+        inner = replace(
+            publication.publication,
+            started_ns=started_ns,
+            completed_ns=completed_ns,
+            provenance=provenance,
+        )
+        return replace(
+            publication,
+            publication=inner,
+            counters=counters,
+            coverage_complete=not snapshot.repository_shallow,
+        )
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        del scratch_root
+        started_ns = time.time_ns()
+        if external_root_identity(root) != self._root_identity:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason="git_history_root_changed_after_provider_construction",
+                started_ns=started_ns,
+            )
+        if self._version is None or self._git_executable is None:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version="unavailable",
+                status="unavailable",
+                reason="git_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            signature, snapshot, started_ns = self._prepared_snapshot(files)
+            replay_limitations = [
+                "merge_commits_excluded_from_churn_window",
+                "exact_replay_reuses_published_history_result",
+            ]
+            if snapshot.repository_shallow:
+                replay_limitations.append("shallow_repository_history_incomplete")
+            if baseline is not None and baseline.input_signature == signature:
+                replay = _exact_replay(
+                    self.descriptor,
+                    root,
+                    files,
+                    baseline,
+                    limitations=replay_limitations,
+                    input_signature_override=signature,
+                )
+                return self._attach_observation(
+                    replay,
+                    snapshot=snapshot,
+                    started_ns=started_ns,
+                    execution=None,
+                )
+            execution = self.executor(
+                root,
+                files,
+                _controlled_environment(),
+                config=self.config,
+                snapshot=snapshot,
+                git_executable=str(self._git_executable),
+            )
+            if execution.history_input_signature != signature:
+                raise ValueError("Git history execution input signature disagrees")
+            if execution.configuration_signature != self.config.signature:
+                raise ValueError("Git history execution configuration signature disagrees")
+            if execution.head_commit != snapshot.head_commit:
+                raise ValueError("Git history execution HEAD disagrees with inspection")
+            if execution.process_invocations != snapshot.process_invocations + 2:
+                raise ValueError("Git history execution process accounting disagrees")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            files,
+            execution.findings,
+            baseline,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=0,
+            limitations=execution.limitations,
+            input_signature_override=signature,
+        )
+        return self._attach_observation(
+            publication,
+            snapshot=snapshot,
+            started_ns=started_ns,
+            execution=execution,
+        )
+
+
 class _TrustedArchitectureProvider:
     provider_id: str
     provider_schema: str
@@ -3155,6 +3455,7 @@ def providers_for_profile(
             RuffAnalyzeImportsProvider(root),
             GrimpArchitectureProvider(root),
             ComplexipyCognitiveProvider(root),
+            GitHistoryLocalProvider(root),
         )
     if profile == "trusted-deep":
         static = providers_for_profile("trusted-static", root)
@@ -3172,6 +3473,7 @@ def providers_for_profile(
 __all__ = [
     "COMPLEXIPY_COGNITIVE_PROVIDER_ID",
     "DEPTRY_PROVIDER_ID",
+    "GIT_HISTORY_PROVIDER_ID",
     "GRIMP_ARCHITECTURE_PROVIDER_ID",
     "INSTALLED_PACKAGE_PROVIDER_ID",
     "MYPY_PROVIDER_ID",
@@ -3185,6 +3487,7 @@ __all__ = [
     "VULTURE_UNUSED_PROVIDER_ID",
     "ComplexipyCognitiveProvider",
     "DeptryProjectDependenciesProvider",
+    "GitHistoryLocalProvider",
     "GrimpArchitectureProvider",
     "InstalledPackageInventoryProvider",
     "MypyTrustedProjectProvider",

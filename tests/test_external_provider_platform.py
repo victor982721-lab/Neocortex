@@ -184,11 +184,12 @@ def test_trusted_static_runs_independent_provider_matrix(
             )
         }
     providers = {item.provider_id: item for item in suite.providers}
-    assert summary.external_tool_runs == 12
-    assert replay_summary.external_tool_runs == 12
+    assert summary.external_tool_runs == 13
+    assert replay_summary.external_tool_runs == 13
     assert tuple(row[0] for row in provider_rows) == (
         "complexipy-cognitive",
         "deptry-project-dependencies",
+        "git-history-local",
         "grimp-architecture",
         "installed-package-inventory",
         "mypy-trusted-project",
