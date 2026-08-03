@@ -420,7 +420,8 @@ versiones Python vigentes con fingerprint exacto, incluidas las parciales.
 `protected` ejecuta Ruff basic aislado; `trusted-static` añade Ruff con
 configuración versionada del proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`,
 Mypy, Pyright, Ruff Analyze, Grimp, Complexipy, Vulture, Semgrep, Deptry,
-pip-audit e inventario del entorno instalado como productores independientes.
+pip-audit, inventario del entorno instalado e historia Git local como
+productores independientes.
 `I,PT,SIM,UP` se excluyen para que estilo y modernización no
 desplacen la señal de mantenimiento. Cada proveedor conserva
 descriptor, firma de entorno/configuración/comparabilidad, inputs, findings y
@@ -456,6 +457,14 @@ fijan los SCC conocidos como baseline de `no-new-production-import-cycles-v1`.
 Por tanto un ciclo conocido es una observación versionada, no un aprobado ni la
 afirmación de que el grafo sea acíclico.
 
+La proyección `neocortex.code-architecture-analysis/v2` conserva por módulo un
+`owner_id` —el primer componente del módulo, no ownership del repositorio—,
+los SCC y sus ciclos explícitos. Sobre el mismo grafo publica
+`dependency_reach` y `blast_radius`, con banderas `*_truncated` cuando el límite
+convierte el valor en una cota inferior, `directed_degree_centrality` y cruces
+de owner entrantes y salientes. El corte real aceptado resolvió `283` módulos,
+`1115` imports y `4` SCC cíclicos; sus `6` contratos no registraron fallos.
+
 Import Linter `2.13` se midió viable sobre el mismo dominio, pero no quedó en la
 ruta productiva: envolverlo repetiría el grafo que ya entrega Grimp y su salida
 de contratos no ofrece un contrato JSON directo. Complexipy se consume por API
@@ -470,14 +479,29 @@ inventario instalado vuelve a verificar los hashes y tamaños `RECORD`, por lo
 que ese replay conserva trabajo local real. Mypy y
 Pyright se mantienen en espacios de evidencia separados y sólo producen un
 resumen de coincidencias/discrepancias cuando ambos tienen cobertura completa.
-Los doce proveedores `trusted-static` son advisory, no ejecutan contenido del
+Los trece proveedores `trusted-static` son advisory, no ejecutan contenido del
 proyecto, no aplican fixes y no poseen autoridad de mutación. Sólo pip-audit
-declara red para capturar el snapshot de PyPI; los otros once son locales.
+declara red para capturar el snapshot de PyPI; los otros doce son locales.
 `trusted-deep` añade
 `pytest-coverage-trusted-deep` únicamente para la identidad física exacta de la
 raíz canónica: carga plugins y contenido, ejecuta la suite declarada bajo
 límites y reconoce que no impone sandbox de red. Sigue siendo advisory, nunca
-predeterminado y carece de autoridad de mutación.
+predeterminado y carece de autoridad de mutación. En esa misma frontera,
+`cosmic-ray-focal-mutation` (`neocortex.cosmic-ray-focal-mutation/v1`) exige un
+target y tests declarados, crea una copia staged exacta, muta sólo esa copia y
+verifica hashes antes y después bajo límites de tiempo, salida y mutantes. El
+corte final fijó un máximo medido de `20` y completó los `20` mutantes: `5`
+killed, `5` survived, `10` incompetent y `0` timeout; el score focal fue
+`0.5`, excluyendo incompetentes, y el replay exacto abrió `0` procesos Cosmic
+Ray. El contrato
+sigue siendo advisory, declara `mutation_authority=false` y `uses_network=true`
+porque los tests declarados podrían usar red.
+
+`git-history-local` (`neocortex.git-history-local/v1`) lee sólo el repositorio
+Git local verificado bajo ventanas y límites explícitos. Publica por identidad
+churn, frecuencia de cambio y edad/recencia, además de relaciones de cochange;
+la corrida final produjo `10460` métricas y `859` relaciones. Son observaciones
+históricas, no una probabilidad de defecto.
 
 `vulture-unused-static` aporta candidatos heurísticos que
 `neocortex.code-unused-analysis/v1` correlaciona con Pyright, grafo, exports,
@@ -500,7 +524,7 @@ mutación.
 
 La proyección pública `architecture_analysis` mantiene por separado
 `import_graph_consensus`, `architecture_contracts` y
-`module_complexity_displacement`. Review v9 y publication diff v7 sólo aprueban
+`module_complexity_displacement`. Review v10 y publication diff v8 sólo aprueban
 los gates comparables `architecture_contracts_not_degraded`,
 `no_new_import_cycles` y `module_complexity_not_displaced`; en un baseline,
 ante cobertura parcial o firma incompatible quedan `baseline` o
@@ -510,6 +534,12 @@ El consumidor correlaciona estas señales con los callers/callees estáticos ya
 publicados por Code: fan-in/fan-out y dependencias aportan contexto modular,
 mientras el grafo de llamadas conserva alcance por símbolo. No duplica ese
 grafo en otra tabla ni combina ambas dimensiones dentro de un score mágico.
+
+`neocortex.code-engineering-analytics/v1` correlaciona por identidad publicada
+las dimensiones separadas de complejidad, cobertura, mutación, historia y
+grafo. Conserva procedencia, limitaciones y abstenciones por dimensión; nunca
+produce un score agregado ni una probabilidad de defecto, y permanece advisory
+sin autoridad de mutación.
 
 La finalización adquiere una transacción propia y exige exactamente una ruta code
 completada, identidad vigente y ceros en candidatos, `file_actions`,

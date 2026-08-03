@@ -82,7 +82,7 @@ Ruff proyecto, Mypy, Pyright, Deptry y el inventario de dependencias. El
 adaptador limita Ruff trusted a
 `E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`; además rechaza mecanismos que
 amplían la confianza: Ruff `extend`, plugins o `mypy_path`, y rutas externas de
-Pyright. Once de los doce proveedores estáticos declaran `uses_network=false`;
+Pyright. Doce de los trece proveedores estáticos declaran `uses_network=false`;
 pip-audit declara red porque consulta PyPI para crear un snapshot fechado y su
 replay exacto vigente reutiliza ese snapshot sin otra consulta. Todos declaran
 `imports_content=false`, `executes_content=false`, `authority=advisory` y
@@ -92,6 +92,9 @@ ni retira dependencias; el inventario sólo verifica metadata y `RECORD`. Esto
 incluye `vulture-unused-static`: su confidence no prueba ausencia de uso y ni
 siquiera el consenso alto tiene autoridad de borrado. Ningún gate de supply
 chain autoriza actualizar, desinstalar o modificar paquetes.
+`git-history-local` sólo lee objetos del repositorio local verificado bajo
+límites de commits, archivos, relaciones, tiempo y salida; no usa red, hooks,
+`textconv` ni drivers de diff externos, y sus señales son advisory.
 
 `trusted-deep` es la única frontera que ejecuta contenido. La CLI exige la
 identidad física exacta de `C:\Users\Victor\Neocortex\Repository`, estado
@@ -100,7 +103,13 @@ crear el run. Pytest carga plugins/código confiable y puede ejecutar comportami
 red porque el proveedor no impone un sandbox de red; el descriptor lo declara
 en vez de prometer aislamiento inexistente. Coverage observa sólo el proceso
 principal. Ningún resultado adquiere autoridad de mutación y el perfil nunca es
-predeterminado.
+predeterminado. `cosmic-ray-focal-mutation/v1` se habilita sólo en esta frontera
+con target y tests declarados: copia exactamente el snapshot a staging, muta
+únicamente esa copia, verifica hashes de fuentes antes y después y aplica
+límites por mutante y por corrida. El corte aceptado se limitó a `20` mutantes.
+El proveedor es `authority=advisory`, conserva `mutation_authority=false` y
+declara `uses_network=true` porque los tests podrían usar red; no es una
+autorización para modificar la raíz canónica.
 
 La finalización no confía únicamente en la CLI: Framework v20 impide enlazar
 acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y Code v4
