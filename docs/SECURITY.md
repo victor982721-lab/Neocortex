@@ -272,7 +272,7 @@ un fixture no confidencial y aislado.
 
 La ruta `code` analiza texto/AST/estructura y no ejecuta el código observado. El
 analizador Rust vigente es léxico; Cargo y Clippy no se ejecutan como parte del
-contrato actual. Los doce proveedores `trusted-static` sólo participan en
+contrato actual. Los trece proveedores `trusted-static` sólo participan en
 `--self-analysis`: no descubren archivos fuera del inventario, no importan
 módulos del proyecto y no aplican fixes. El perfil protected no carga
 configuración del corpus; trusted-static carga sólo las políticas y metadata
