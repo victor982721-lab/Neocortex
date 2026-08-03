@@ -3320,7 +3320,7 @@ class CosmicRayFocalMutationProvider:
                 "deep_configuration_signature": deep_configuration_signature,
                 "staging": "exact-owned-scratch-copy",
                 "autofix": False,
-                "network": False,
+                "network": True,
             },
             project_configuration_digest=None,
             environment_signature=environment_signature,
@@ -3339,7 +3339,7 @@ class CosmicRayFocalMutationProvider:
             ),
             imports_content=True,
             executes_content=True,
-            uses_network=False,
+            uses_network=True,
         )
 
     def tool_version(self) -> str | None:
@@ -3396,7 +3396,7 @@ class CosmicRayFocalMutationProvider:
             "whole_publication_replay": publication.execution == "cache_replay",
             "abstained": publication.execution == "skipped",
             "mutation_authority": False,
-            "uses_network": False,
+            "uses_network": True,
         }
         if execution is not None:
             generic_wall = counters.get("wall_milliseconds", 0)

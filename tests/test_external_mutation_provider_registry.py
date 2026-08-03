@@ -189,6 +189,7 @@ def test_full_stages_exact_copy_and_replay_preserves_adapter_costs(
     assert first.counters["stderr_bytes"] == 7
     assert first.counters["bytes_staged"] == sum(item.size for item in files)
     assert first.counters["mutants_killed"] == 3
+    assert first.publication.provenance["mutation_execution"]["uses_network"] is True
     assert target.read_bytes() == original
     assert observed_stage_roots and not observed_stage_roots[0].exists()
 
@@ -370,7 +371,7 @@ def test_provider_is_registered_only_for_trusted_deep_and_reports_exact_tool(
     assert mutation.descriptor.invalidation_strategy == "dynamic_suite"
     assert mutation.descriptor.imports_content is True
     assert mutation.descriptor.executes_content is True
-    assert mutation.descriptor.uses_network is False
+    assert mutation.descriptor.uses_network is True
     assert mutation.descriptor.mutation_authority is False
     assert provider_tool_versions()[COSMIC_RAY_MUTATION_PROVIDER_ID] == "8.4.6"
 
