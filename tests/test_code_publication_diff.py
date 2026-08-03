@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from pathlib import Path
 
 from _04_Nucleo_Operativo.code_contracts import (
@@ -14,10 +15,13 @@ from _04_Nucleo_Operativo.code_contracts import (
 from _04_Nucleo_Operativo.code_publication_diff import compare_code_publications
 from _04_Nucleo_Operativo.code_schema import (
     checkpoint_code_wal,
+    initialize_code_state,
     remove_checkpointed_code_sidecars,
 )
 from _04_Nucleo_Operativo.code_state import CodeState
 from tests.test_code_review import _analysis, _source_range
+from tests.test_external_provider_platform import _run as _run_provider_publication
+from tests.test_external_provider_platform import _tree as _provider_source_tree
 
 
 PROCESSING_SIGNATURE = "code-publication-diff-fixture-v1"
@@ -108,9 +112,7 @@ def _build_publication(
         )
     ]
     if hotspot == "pkg.first":
-        diagnostics.append(
-            _diagnostic("long_function", first_range, value=230, threshold=200)
-        )
+        diagnostics.append(_diagnostic("long_function", first_range, value=230, threshold=200))
     for symbol in probable_dead:
         diagnostics.append(
             _diagnostic(
@@ -143,8 +145,7 @@ def _build_publication(
         for name, target in assignments.items():
             target_ids = None if target is None else symbol_ids[target]
             state.connection.execute(
-                "UPDATE code_references SET target_symbol_id=?,target_version_id=? "
-                "WHERE name=?",
+                "UPDATE code_references SET target_symbol_id=?,target_version_id=? WHERE name=?",
                 (
                     None if target_ids is None else target_ids[0],
                     None if target_ids is None else target_ids[1],
@@ -169,6 +170,91 @@ def _build_publication(
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _retain_only_legacy_ruff_and_migrate_v2_to_v3(database: Path) -> None:
+    """Model an rc22 Ruff publication copied and migrated for read-only diff."""
+
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """DELETE FROM external_tool_runs WHERE tool_run_id IN (
+            SELECT tool_run_id FROM external_run_contracts)"""
+        )
+        for table in (
+            "external_run_counters",
+            "external_run_replays",
+            "external_findings",
+            "external_run_inputs",
+            "external_run_contracts",
+        ):
+            connection.execute(f"DROP TABLE {table}")
+        connection.execute("DELETE FROM schema_migrations WHERE version=3")
+        connection.execute("UPDATE metadata SET value='2' WHERE key='schema_version'")
+        connection.execute("PRAGMA user_version=2")
+        connection.commit()
+    finally:
+        connection.close()
+
+    initialize_code_state(database)
+    connection = sqlite3.connect(database)
+    try:
+        checkpoint_code_wal(connection)
+    finally:
+        connection.close()
+    remove_checkpointed_code_sidecars(database)
+
+
+def test_migrated_legacy_ruff_compares_with_current_protected_contract(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repository"
+    baseline_state = tmp_path / "rc22-copy"
+    current_state = tmp_path / "current"
+    paths = _provider_source_tree(root)
+    paths[1].write_text("value = 1\n", encoding="utf-8")
+
+    _run_provider_publication(root, baseline_state, paths, 1, "protected")
+    _retain_only_legacy_ruff_and_migrate_v2_to_v3(baseline_state / "code.sqlite3")
+    _run_provider_publication(root, current_state, paths, 1, "trusted-static")
+
+    result = compare_code_publications(baseline_state, current_state)
+
+    providers = {item.provider_id: item for item in result.providers}
+    protected = providers["ruff-protected-basic"]
+    assert result.status == "ready"
+    assert result.analysis_profile == "trusted-static"
+    assert protected.baseline is not None
+    assert protected.current is not None
+    assert protected.baseline.profile == protected.current.profile == "protected"
+    assert protected.baseline.provider_schema == protected.current.provider_schema
+    assert protected.baseline.tool_version == protected.current.tool_version
+    assert protected.baseline.comparability_signature.startswith("external-ruff-v1:xxh3_128:")
+    assert protected.current.comparability_signature.startswith(
+        "ruff-protected-basic-comparable-v1:xxh3_128:"
+    )
+    assert protected.baseline.comparability_signature != protected.current.comparability_signature
+    assert protected.status == "ready"
+    assert protected.reason is None
+    assert protected.common == 0
+    assert protected.added == 0
+    assert protected.resolved == 0
+    assert protected.gate == "passed"
+    assert result.verdict == "equivalent_under_observed_metrics"
+    assert {
+        provider_id for provider_id, delta in providers.items() if delta.status == "not_evaluated"
+    } == {
+        "mypy-trusted-project",
+        "pyright-trusted-project",
+        "ruff-trusted-project",
+    }
+    assert all(
+        delta.gate == "not_evaluated"
+        for provider_id, delta in providers.items()
+        if provider_id != "ruff-protected-basic"
+    )
 
 
 def test_publication_diff_reports_only_common_unchanged_call_sites(

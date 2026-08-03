@@ -26,6 +26,7 @@ def framework_config_from_args(args: argparse.Namespace) -> FrameworkConfig:
         root=args.root,
         state_directory=args.state_directory,
         self_analysis=args.self_analysis,
+        analysis_profile=args.analysis_profile,
         corpus_access_mode="analyze_only" if args.self_analysis else "normal",
         apply_actions=args.apply,
         preview_group_limit=args.show_groups,
@@ -106,9 +107,7 @@ def framework_config_from_args(args: argparse.Namespace) -> FrameworkConfig:
         audio_model_name=args.whisper_model,
         audio_device=args.whisper_device,
         audio_compute_type=args.whisper_compute_type,
-        audio_language=(
-            None if args.audio_language.casefold() == "auto" else args.audio_language
-        ),
+        audio_language=(None if args.audio_language.casefold() == "auto" else args.audio_language),
         audio_beam_size=args.whisper_beam_size,
         audio_vad_filter=args.audio_vad,
         audio_include_video=args.audio_include_video,

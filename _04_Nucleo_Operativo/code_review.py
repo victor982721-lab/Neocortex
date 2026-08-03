@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    read_external_evidence,
+)
 from .code_review_actionability import (
     CODE_REVIEW_ACTIONABILITY,
     CodeReviewActionabilityInput,
@@ -23,8 +27,8 @@ from .code_review_models import (
     CODE_REVIEW_SCHEMA,
     CodeReviewCaller,
     CodeReviewCoverage,
-    CodeReviewDigest,
     CodeReviewDiagnostic,
+    CodeReviewDigest,
     CodeReviewFinding,
     CodeReviewImpact,
     CodeReviewRecommendation,
@@ -33,10 +37,6 @@ from .code_review_models import (
     FindingCategory,
     RecommendationStatus,
     build_code_review_recommendations,
-)
-from .code_external_evidence import (
-    ExternalEvidenceStatus,
-    read_external_evidence,
 )
 from .code_review_serialization import build_code_review_digest
 from .code_review_work_packages import (
@@ -51,13 +51,14 @@ from .code_schema import (
     readonly_code_database,
     validate_code_schema,
 )
+from .external_evidence_models import ExternalEvidenceSuiteStatus
+from .external_evidence_store import read_external_evidence_suite
 from .self_analysis_status import (
     CodeRunStatusEvidence,
     read_self_analysis_status,
     require_sqlite_sidecars_absent,
 )
 from .semantic_models import canonical_json, fingerprint_text
-
 
 CODE_REVIEW_RANKING = "python-confirmed-hotspots-v2"
 CODE_REVIEW_LIMIT = 10
@@ -115,6 +116,7 @@ class _ReviewRead:
     planning_links: tuple[CodeReviewPlanningLink, ...]
     enumeration_truncated: bool
     external_evidence: ExternalEvidenceStatus
+    external_evidence_suite: ExternalEvidenceSuiteStatus
 
 
 _CANDIDATE_SQL = """
@@ -238,9 +240,7 @@ def _candidate(row: sqlite3.Row) -> _Candidate:
         file_id=int(row["file_id"]),
         volume_id=str(row["volume_id"]),
         physical_file_id=str(row["physical_file_id"]),
-        project_root=(
-            None if row["project_root"] is None else str(row["project_root"])
-        ),
+        project_root=(None if row["project_root"] is None else str(row["project_root"])),
         version_id=int(row["version_id"]),
         symbol_id=int(row["symbol_id"]),
         path=str(row["current_path"]),
@@ -267,9 +267,7 @@ def _candidate(row: sqlite3.Row) -> _Candidate:
         resolved_static_callers=callers,
         analyzer_id=str(row["analyzer_id"]),
         analyzer_version=str(row["analyzer_version"]),
-        file_xxh3_128=(
-            None if row["raw_xxh3_128"] is None else str(row["raw_xxh3_128"])
-        ),
+        file_xxh3_128=(None if row["raw_xxh3_128"] is None else str(row["raw_xxh3_128"])),
         file_xxh3_64_guard=(
             None if row["raw_xxh3_64_guard"] is None else str(row["raw_xxh3_64_guard"])
         ),
@@ -378,11 +376,7 @@ def _diagnostics(
         if raw_code not in {"high_complexity", "long_function"}:
             raise ValueError("code review diagnostic is unsupported")
         code = cast(Literal["high_complexity", "long_function"], raw_code)
-        value = (
-            candidate.complexity
-            if code == "high_complexity"
-            else candidate.function_lines
-        )
+        value = candidate.complexity if code == "high_complexity" else candidate.function_lines
         threshold_value = metadata.get("threshold")
         threshold = (
             None
@@ -430,9 +424,7 @@ def _callers(
     return tuple(
         CodeReviewCaller(
             path=str(row["current_path"]),
-            symbol=(
-                None if row["qualified_name"] is None else str(row["qualified_name"])
-            ),
+            symbol=(None if row["qualified_name"] is None else str(row["qualified_name"])),
             start_line=int(row["start_line"]),
             end_line=int(row["end_line"]),
             confidence=float(row["confidence"]),
@@ -644,9 +636,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         validate_code_schema(connection)
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if schema_version != CODE_SCHEMA_VERSION:
-            raise RuntimeError(
-                f"code state schema {schema_version} is unsupported for review"
-            )
+            raise RuntimeError(f"code state schema {schema_version} is unsupported for review")
         latest_run = _latest_run(connection)
         rows = connection.execute(
             _CANDIDATE_SQL,
@@ -705,6 +695,11 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
             -1 if latest_run is None else latest_run.analysis_run_id,
             enforce_current_runtime=True,
         )[0]
+        external_evidence_suite = read_external_evidence_suite(
+            connection,
+            -1 if latest_run is None else latest_run.analysis_run_id,
+            enforce_current_runtime=True,
+        )
     return _ReviewRead(
         latest_run=latest_run,
         coverage=CodeReviewCoverage(
@@ -722,6 +717,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         planning_links=planning_links,
         enumeration_truncated=total_candidates > len(candidates),
         external_evidence=external_evidence,
+        external_evidence_suite=external_evidence_suite,
     )
 
 
@@ -743,6 +739,7 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         recommendations=(),
         work_packages=(),
         external_evidence=None,
+        external_evidence_suite=None,
         limitations=(),
         digest=None,
     )
@@ -756,9 +753,7 @@ def review_code_state(
     """Return a bounded maintenance shortlist without writing any owner."""
 
     if isinstance(limit, bool) or not 1 <= limit <= CODE_REVIEW_MAX_LIMIT:
-        raise ValueError(
-            f"code review limit must be between 1 and {CODE_REVIEW_MAX_LIMIT}"
-        )
+        raise ValueError(f"code review limit must be between 1 and {CODE_REVIEW_MAX_LIMIT}")
     state_directory = Path(state_directory)
     path = state_directory / "code.sqlite3"
     require_sqlite_sidecars_absent(path)
@@ -795,6 +790,13 @@ def review_code_state(
         )
     elif read.external_evidence.gate == "baseline":
         limitations.append("ruff_external_evidence_baseline_only")
+    for provider in read.external_evidence_suite.providers:
+        if provider.status != "ready":
+            limitations.append(
+                f"provider_not_ready:{provider.provider_id}:{provider.reason or provider.status}"
+            )
+        elif provider.gate == "baseline":
+            limitations.append(f"provider_baseline_only:{provider.provider_id}")
     snapshot = CodeReviewSnapshot(
         analysis_run_id=read.latest_run.analysis_run_id,
         framework_run_id=read.latest_run.framework_run_id,
@@ -813,18 +815,14 @@ def review_code_state(
         read.planning_findings,
         limit=CODE_REVIEW_RECOMMENDATION_LIMIT,
     )
-    recommendation_status: RecommendationStatus = (
-        "ready" if recommendations else "abstained"
-    )
+    recommendation_status: RecommendationStatus = "ready" if recommendations else "abstained"
     recommendation_reason = (
         None if recommendations else "no_act_now_candidate_within_bounded_findings"
     )
-    work_packages, work_package_status, work_package_reason = (
-        plan_code_review_work_packages(
-            read.planning_findings,
-            planning_recommendations,
-            read.planning_links,
-        )
+    work_packages, work_package_status, work_package_reason = plan_code_review_work_packages(
+        read.planning_findings,
+        planning_recommendations,
+        read.planning_links,
     )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
@@ -844,6 +842,7 @@ def review_code_state(
         recommendations=recommendations,
         work_packages=work_packages,
         external_evidence=read.external_evidence,
+        external_evidence_suite=read.external_evidence_suite,
         limitations=limitation_tuple,
         digest=build_code_review_digest(
             snapshot,
@@ -859,6 +858,7 @@ def review_code_state(
             work_package_reason=work_package_reason,
             work_packages=work_packages,
             external_evidence=read.external_evidence,
+            external_evidence_suite=read.external_evidence_suite,
             limitations=limitation_tuple,
         ),
     )
@@ -873,8 +873,8 @@ __all__ = [
     "CODE_REVIEW_SCHEMA",
     "CodeReviewCaller",
     "CodeReviewCoverage",
-    "CodeReviewDigest",
     "CodeReviewDiagnostic",
+    "CodeReviewDigest",
     "CodeReviewFinding",
     "CodeReviewImpact",
     "CodeReviewRecommendation",

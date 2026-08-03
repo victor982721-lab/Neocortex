@@ -11,15 +11,12 @@ from _02_Deduplicacion import InventoryExclusionPolicy
 
 from .models import FrameworkConfig
 
-
 # region [01] Stable profile and manifest contracts
 
 
 SELF_ANALYSIS_PROFILE_VERSION = "neocortex.self-analysis-profile/v1"
 SELF_ANALYSIS_MANIFEST_SCHEMA = "neocortex.self-analysis-manifest/v2"
-LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS = frozenset(
-    {"neocortex.self-analysis-manifest/v1"}
-)
+LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS = frozenset({"neocortex.self-analysis-manifest/v1"})
 SELF_ANALYSIS_MANIFEST_PHASE = "self-analysis-manifest"
 SELF_ANALYSIS_MANIFEST_MESSAGE = "Manifest de autoanálisis publicado"
 MAX_SELF_ANALYSIS_MANIFEST_BYTES = 256 * 1024
@@ -191,6 +188,8 @@ def self_analysis_commands(
     analyze = [
         "Neocortex",
         "--self-analysis",
+        "--analysis-profile",
+        config.analysis_profile,
         "--root",
         str(root),
         "--state-directory",
@@ -232,9 +231,7 @@ def _bounded_argv(values: Sequence[str], *, label: str) -> list[str]:
         not result
         or len(result) > 128
         or any(
-            not isinstance(value, str)
-            or not value
-            or len(value.encode("utf-8")) > 32_768
+            not isinstance(value, str) or not value or len(value.encode("utf-8")) > 32_768
             for value in result
         )
     ):
@@ -306,8 +303,8 @@ def build_self_analysis_completion_manifest(
 
 
 __all__ = [
-    "MAX_SELF_ANALYSIS_MANIFEST_BYTES",
     "LEGACY_SELF_ANALYSIS_MANIFEST_SCHEMAS",
+    "MAX_SELF_ANALYSIS_MANIFEST_BYTES",
     "SELF_ANALYSIS_MANIFEST_MESSAGE",
     "SELF_ANALYSIS_MANIFEST_PHASE",
     "SELF_ANALYSIS_MANIFEST_SCHEMA",

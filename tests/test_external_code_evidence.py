@@ -14,8 +14,8 @@ from _02_Deduplicacion import FileSnapshot
 from _04_Nucleo_Operativo.cli_code import _read_code_status_snapshot
 from _04_Nucleo_Operativo.code_contracts import CodeRouteConfig, CodeSearchQuery
 from _04_Nucleo_Operativo.code_external_evidence import (
-    ExternalEvidenceFile,
     RUFF_CONFIGURATION_SIGNATURE,
+    ExternalEvidenceFile,
     RuffEvidenceProvider,
     current_external_status_from_row,
     external_status_digest_payload,
@@ -175,8 +175,12 @@ def test_ruff_publication_is_visible_and_exact_replay_skips_process(
     assert second_status["resolved"] == 0
     assert second_status["gate"] == "passed"
     with readonly_code_database(state / "code.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM external_tool_runs").fetchone()[0] == 4
         assert (
-            connection.execute("SELECT COUNT(*) FROM external_tool_runs").fetchone()[0]
+            connection.execute(
+                """SELECT COUNT(*) FROM external_run_contracts
+                WHERE provider_id='ruff-protected-basic'"""
+            ).fetchone()[0]
             == 2
         )
         assert (
@@ -242,10 +246,7 @@ def test_unicode_paths_share_one_deterministic_input_order(tmp_path: Path) -> No
 
     assert first.external_evidence["status"] == "ready"
     assert second.external_evidence["status"] == "ready"
-    assert (
-        second.external_evidence["result_digest"]
-        == first.external_evidence["result_digest"]
-    )
+    assert second.external_evidence["result_digest"] == first.external_evidence["result_digest"]
     assert replay.external_cache_hits == 1
 
 
@@ -298,10 +299,7 @@ def test_current_status_abstains_for_stale_configuration_or_tool(
         current_external_status_from_row(stale_configuration).reason
         == "external_configuration_stale"
     )
-    assert (
-        current_external_status_from_row(stale_tool).reason
-        == "external_tool_version_stale"
-    )
+    assert current_external_status_from_row(stale_tool).reason == "external_tool_version_stale"
 
 
 def test_oversized_provenance_abstains_before_json_parsing(
@@ -570,12 +568,8 @@ def test_digest_projection_excludes_local_ids_but_includes_the_gate(
     )
     failed_gate = replace(baseline, comparable=True, added=1, gate="failed")
 
-    assert external_status_digest_payload(baseline) == external_status_digest_payload(
-        local_replay
-    )
-    assert external_status_digest_payload(baseline) != external_status_digest_payload(
-        failed_gate
-    )
+    assert external_status_digest_payload(baseline) == external_status_digest_payload(local_replay)
+    assert external_status_digest_payload(baseline) != external_status_digest_payload(failed_gate)
     assert baseline.configuration_signature == RUFF_CONFIGURATION_SIGNATURE
 
 

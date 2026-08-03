@@ -1,4 +1,4 @@
-# Autoanálisis protegido del código fuente
+# Autoanálisis de código y evidencia externa
 
 > **Estado del contrato.** Esta capacidad pertenece a la fuente `0.7.2` bajo
 > `%USERPROFILE%\Neocortex\Repository`. Debe ejecutarse desde un runtime
@@ -19,47 +19,68 @@ confiable sin autorizar trabajo común sobre el corpus. El preset:
 - excluye código generado y vendorizado;
 - escribe estado derivado en un directorio separado, pero no modifica los
   archivos de la raíz analizada;
-- produce evidencia externa Ruff v1 sobre cada Python vigente que Code publicó
-  con fingerprint exacto —incluidos parseos internos parciales—, con ejecución
-  aislada, acotada y sin autoridad de mutación.
+- ejecuta una suite versionada de proveedores externos sobre cada Python vigente
+  que Code publicó con fingerprint exacto —incluidos parseos internos
+  parciales—, con ejecución aislada, acotada y sin autoridad de mutación.
 
 No es una consulta read-only: crea o actualiza `framework.sqlite3`,
 `dedup.sqlite3` y `code.sqlite3` en el estado indicado. El código observado se
 trata como datos; nunca se ejecuta ni adquiere autoridad para pedir
 herramientas, permisos, red o mutaciones.
 
-## Evidencia externa Ruff v1
+## Plataforma de evidencia externa v1
 
-Ruff es parte del runtime canónico y se ejecuta únicamente dentro de
-`--self-analysis`. Code entrega una lista explícita de versiones Python
-vigentes, con fingerprint exacto, no generadas y no vendorizadas; Ruff no
-recorre la raíz por su cuenta. Esto incluye archivos cuyo parser interno quedó
-`partial`, para que las reglas sintácticas E9 no desaparezcan del denominador.
-NeoCortex lee y verifica cada versión por handle, materializa una copia temporal
-con el mismo árbol relativo bajo el directorio de estado disjunto y Ruff sólo
-abre esas copias. No confía en `TEMP/TMP` para elegir staging: cualquier scratch
-que resuelva dentro de la raíz observada falla cerrado. Después vuelve a
-verificar los mismos inputs publicados; cualquier ruta desconocida, cambio
-concurrente en ellos, salida inválida, timeout, overflow o límite alcanzado hace
-fallar o abstener la evidencia externa sin ocultar el estado AST útil. Una ruta
-nueva sólo entra después de que el inventario la publique.
+Code entrega a cada proveedor una lista explícita de versiones Python vigentes,
+con fingerprint exacto, no generadas y no vendorizadas; ningún proveedor
+descubre la raíz por su cuenta. NeoCortex verifica cada versión por handle,
+materializa una copia temporal con el mismo árbol relativo bajo el estado
+disjunto y vuelve a verificar los originales después del proceso. Cualquier
+ruta desconocida, cambio concurrente, salida inválida, timeout, overflow o
+límite alcanzado falla o abstiene sólo al proveedor afectado sin ocultar el
+estado AST ni los demás resultados válidos.
 
-El adaptador invoca `python -I -m ruff check` con `--isolated`, Python 3.13,
-reglas `E4,E7,E9,F`, JSON, `--no-cache` y todas las formas de fix deshabilitadas.
-Usa cwd y entorno controlados, elimina overrides `RUFF_*` y no ejecuta ni
-importa el código observado. Los límites públicos son 2 000 archivos y 512 MiB
-de inputs, 50 archivos/24 KiB de argv por lote, 30 s por lote y 180 s totales,
-512 MiB de memoria, 10 000 diagnósticos, 8 MiB de stdout, 64 KiB de stderr,
-4 MiB de resultado y 8 MiB de provenance. La versión, configuración, inputs,
-digest recomputado, cobertura, límites y resultado quedan en
-`external_tool_runs`; la proyección vigente se publica en `diagnostics` como
-`external:ruff`, advisory y sin autoridad de mutación.
+`--analysis-profile` admite dos perfiles públicos:
 
-La publicación de Ruff, sus diagnósticos y la finalización de Code comparten una
-transacción. Un replay exacto valida de nuevo fingerprints, registra
-`skipped/cache_replay` y referencia la ejecución completa reutilizada sin
-duplicar diagnósticos. Una corrida parcial, indisponible o fallida no puede
-aprobar el gate externo ni dejar una proyección vieja aparentando frescura.
+| Perfil | Proveedores | Configuración y confianza |
+|---|---|---|
+| `protected` (predeterminado) | `ruff-protected-basic` | Ruff `E4,E7,E9,F` con `--isolated`, sin configuración del proyecto. Es la frontera `untrusted-safe`. |
+| `trusted-static` | `ruff-protected-basic`, `ruff-trusted-project`, `mypy-trusted-project`, `pyright-trusted-project` | Añade una política estática versionada sólo para una raíz declarada confiable. Rechaza extensiones Ruff, plugins/`mypy_path` de Mypy y rutas externas de Pyright. |
+
+Ruff trusted selecciona `E4,E7,E9,F,B,C4,PIE,RUF`. Omite deliberadamente
+`I,PT,SIM,UP`: ordenar imports, convenciones pytest, simplificación y
+modernización generan señal demasiado amplia para la prioridad actual y no son
+gates de esta plataforma. La política sigue derivándose del `pyproject.toml`
+con el subconjunto permitido fijado por el adaptador; no es una invitación a
+ejecutar todas las reglas configuradas en el repositorio.
+
+Ruff y Mypy se resuelven desde el mismo intérprete de NeoCortex; ambos forman
+parte de la base Python. Pyright `1.1.411` se mantiene como paquete npm aislado
+junto al runtime y se ejecuta mediante Node, no mediante scripts del proyecto.
+Cada adaptador usa salida estructurada, cwd/entorno controlados, caché efímera o
+deshabilitada, límites de proceso, tiempo, memoria, inputs, diagnósticos y
+salida. Todas las formas de fix permanecen deshabilitadas. Los descriptores
+declaran `imports_content=false`, `executes_content=false`, `uses_network=false`,
+`authority=advisory` y `mutation_authority=false`.
+
+Mypy y Pyright publican findings `typing` separados. `type_consensus` compara
+únicamente proveedores completos y compatibles; cuenta `both_report`,
+`mypy_only` y `pyright_only` por ruta, línea y categoría. No fusiona reglas ni
+interpreta silencio como aprobación. Si uno no está listo, el resumen queda
+`not_comparable`. El estado reserva la categoría `contradictory`, pero la
+versión vigente no infiere contradicciones semánticas entre mensajes.
+
+Cada ejecución registra contrato, inputs y findings normalizados en Code v3,
+además de contadores como archivos/bytes verificados, bytes leídos o staged,
+invocaciones, stdout/stderr, tiempo, findings, errores, timeouts y hits/misses de
+caché. Un replay exacto vuelve a verificar todos los fingerprints, registra
+`execution=cache_replay`, referencia la publicación completa y no abre procesos
+ni duplica findings. La suite, sus proyecciones compatibles y la finalización
+de Code se confirman atómicamente. Una corrida parcial, indisponible o fallida
+no puede aprobar su gate ni aparentar frescura.
+
+`trusted-deep` está reservado en los contratos persistentes para una futura
+frontera de ejecución confiable; no es una opción CLI ni tiene proveedores
+implementados.
 
 ## Preflight y disjunción obligatoria
 
@@ -84,7 +105,10 @@ Con un artefacto instalado que coincida con esta fuente, la forma canónica es:
 ```powershell
 $Root = Join-Path $HOME 'Neocortex\Repository'
 $State = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\smokes\run-id'
+# Elija un perfil para el estado de esta secuencia:
 Neocortex --self-analysis --root $Root --state-directory $State
+# o, sólo para una raíz confiable:
+Neocortex --self-analysis --analysis-profile trusted-static --root $Root --state-directory $State
 Neocortex --state-directory $State --code-status --code-json
 Neocortex --state-directory $State --code-review
 ```
@@ -215,9 +239,10 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v4` conserva íntegramente las capas v2/v3 y
-declara ambas compatibilidades en el envelope. Añade `external_evidence` sin
-cambiar ranking, actionability o selección de paquetes. `findings` selecciona
+El contrato `neocortex.code-review/v5` conserva las capas v2/v3 y la proyección
+legacy `external_evidence`; añade `external_evidence_suite` con perfil, estado,
+proveedores, cobertura, counters, gates y consenso de tipos. Esta evidencia no
+cambia ranking, actionability o selección de paquetes. `findings` selecciona
 sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
 enumera hasta 10 000 hotspots y mantiene el ranking v2 auditable. Devuelve 10
 por defecto, primero uno por archivo y luego un segundo hasta completar;
@@ -259,10 +284,11 @@ conserva profundidad, símbolo puente, confianza mínima y provenance; el paquet
 expone riesgo conservador, contratos, orden de ejecución, validación y los gates
 históricos de caracterización exacta, cero hotspots sustitutos, cero
 resoluciones corregidas/perdidas y replay completamente incremental. También
-expone `no_added_ruff_diagnostics`: sólo puede aprobarse frente a una línea base
-Ruff comparable. La primera publicación sana queda `baseline`; si falta el
-proveedor o cambia versión/configuración queda `not_evaluated`. Los guards
-no son objetivos automáticos y el paquete nunca autoriza modificar código.
+expone los gates de proveedor normalizados. Cada uno sólo puede aprobarse frente
+a una línea base comparable del mismo adaptador, versión, configuración y
+entorno. La primera publicación sana queda `baseline`; si falta el proveedor o
+cambia su firma queda `not_evaluated` o `abstained` sin borrar los demás. Los
+guards no son objetivos automáticos y el paquete nunca autoriza modificar código.
 
 `probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
 portable de 40 entre los 246 candidatos de rc11 encontró 36 usos demostrables,
@@ -347,14 +373,16 @@ explícita: demuestra qué se publicó, no que el árbol vivo no cambió despué
 Journal `advanced`/`discontinuous`, vínculo incompatible, sidecars o schema no
 admitido causan abstención con código `2`. El digest excluye timestamps, rutas
 locales, IDs SQLite, firma de input local y modo full/replay. Sí incorpora la
-comparabilidad y el gate Ruff: adquirir por primera vez una línea base comparable
-cambia honestamente la decisión aunque los diagnósticos permanezcan iguales.
+comparabilidad y los gates externos: adquirir por primera vez una línea base
+comparable cambia honestamente la decisión aunque los findings permanezcan
+iguales.
 
 ## Comparación read-only entre publicaciones
 
 `--code-publication-diff` convierte la comparación de dos publicaciones Code
-en una operación canónica, acotada y determinista. El envelope v2 conserva v1 y
-añade un delta Ruff comparable. El argumento identifica el
+en una operación canónica, acotada y determinista. El envelope v3 conserva
+compatibilidad declarada con v1/v2 y añade deltas por proveedor y un veredicto
+agregado. El argumento identifica el
 estado baseline; `--state-directory` identifica la publicación actual:
 
 ```powershell
@@ -374,10 +402,12 @@ resueltas; los cambios de texto que desplazan un rango aparecen honestamente
 como sitios exclusivos de una publicación. Los hotspots se identifican por
 ruta relativa y qualified name. El conteo `probable_dead` se muestra sólo como
 delta no calibrado y nunca autoriza cambios de código o corpus.
-Ruff se compara únicamente cuando ambas publicaciones están listas y conservan
-la misma versión y firma de configuración; entonces informa IDs comunes,
-añadidos y resueltos y el gate correspondiente. Un baseline histórico sin Ruff
-o incompatible produce `not_evaluated`, no corrupción ni un falso aprobado.
+Cada proveedor se compara únicamente cuando ambas publicaciones están listas y
+conservan su firma de comparabilidad; entonces informa IDs comunes, añadidos y
+resueltos y el gate correspondiente. Un baseline histórico Ruff-only se lee por
+la proyección compatible; los proveedores ausentes o incompatibles producen
+`not_evaluated`, no corrupción ni un falso aprobado. El veredicto no convierte
+una suite parcial en certeza y conserva las limitaciones observadas.
 
 ## Mini-root de laboratorio
 
@@ -396,7 +426,9 @@ Neocortex --state-directory $MiniState --code-review --code-json
 
 El ejemplo presupone que un fixture sintético de 20–50 archivos ya creó
 `$MiniRoot`; esa raíz acotada es el límite físico y permite una publicación
-completa de evidencia Ruff. No autoriza
+completa del perfil `protected`. Para probar `trusted-static`, el fixture debe
+incluir su `pyproject.toml` versionado y el runtime debe contener los cuatro
+proveedores. No autoriza
 crear, copiar o limpiar datos fuera del laboratorio. Use un estado nuevo por
 secuencia aislada; para validar full→incremental/no-op/cambio, reutilice ese
 mismo estado sólo dentro de la secuencia controlada y con la misma configuración.

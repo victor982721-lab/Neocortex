@@ -26,10 +26,23 @@ Las versiones siguientes son las instaladas en el entorno indicado, no una prome
 
 ### Addendum de declaración fuente 0.7.2
 
-Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15 pasó de
-la dependencia de desarrollo a la base como proveedor de External Code Evidence
-v1; conserva la declaración MIT observada aquí. Un inventario de redistribución
-0.7.2 debe volver a medir el cierre y sus artefactos antes de publicarlos.
+Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15 y Mypy
+2.1 pasaron de desarrollo a la base como proveedores de External Evidence v1;
+ambos conservan la declaración MIT observada aquí. El perfil `trusted-static`
+añade Pyright `1.1.411`, también MIT, como paquete npm aislado junto al runtime,
+ejecutado mediante Node. Pyright y Node no son dependencias Python ni se
+redistribuyen dentro del wheel de NeoCortex; cualquier bundle que los incluya
+debe inventariar por separado el paquete npm, Node y sus avisos transitivos.
+
+| Componente declarado por la fuente 0.7.2 | Entrega | Alcance operativo | Declaración |
+|---|---|---|---|
+| Ruff `0.15.17` | dependencia Python base, pin en `constraints.txt` | perfiles `protected` y `trusted-static` | MIT |
+| Mypy `2.1.0` | dependencia Python base, pin en `constraints.txt` | perfil `trusted-static` | MIT |
+| Pyright `1.1.411` | paquete npm aislado junto al runtime | perfil `trusted-static`, mediante Node | MIT |
+| Node | runtime externo | host de Pyright; no ejecuta scripts del proyecto | inventariar la distribución instalada antes de redistribuir |
+
+Un inventario de redistribución 0.7.2 debe volver a medir el cierre y sus
+artefactos antes de publicarlos.
 
 ### Revalidación PRE-REPORT de continuación
 
@@ -101,7 +114,11 @@ La diferencia operativa entre estas modalidades y el procedimiento seguro para c
 | win32_setctime | 1.2.0 | semantic | transitiva | MIT license | https://github.com/Delgan/win32-setctime | 1 |
 | xxhash | 3.8.1 | base | base | BSD-2-Clause | https://github.com/ifduyue/python-xxhash | 1 |
 
-## Herramientas sólo de desarrollo
+## Herramientas sólo de desarrollo en el snapshot 2026-07-25
+
+Las filas Mypy y Ruff siguientes conservan el alcance que tenían al capturar el
+snapshot. La declaración fuente 0.7.2 del addendum superior las mueve a la base;
+no deben interpretarse como el cierre vigente.
 
 | Paquete | Versión | Alcance | Relación | Declaración observada | Origen metadata | Archivos |
 |---|---:|---|---|---|---|---:|

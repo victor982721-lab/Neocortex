@@ -53,7 +53,7 @@ class ExplicitArgumentParser(argparse.ArgumentParser):
             action = self._option_string_actions.get(option)
             if action is not None:
                 explicit.add(action.dest)
-        setattr(parsed, "_explicit_options", frozenset(explicit))
+        parsed._explicit_options = frozenset(explicit)
         return parsed, extras
 
 
@@ -83,9 +83,7 @@ def hexadecimal_identifier(value: str) -> int:
     try:
         identity = int(normalized, 16)
     except ValueError as exc:
-        raise argparse.ArgumentTypeError(
-            "identity must be a hexadecimal integer"
-        ) from exc
+        raise argparse.ArgumentTypeError("identity must be a hexadecimal integer") from exc
     if identity < 0:
         raise argparse.ArgumentTypeError("identity cannot be negative")
     return identity
@@ -101,9 +99,7 @@ def retention_days_ns(value: str) -> int:
             "retention age must be a non-negative number of days"
         ) from exc
     if not days.is_finite() or days < 0:
-        raise argparse.ArgumentTypeError(
-            "retention age must be a non-negative number of days"
-        )
+        raise argparse.ArgumentTypeError("retention age must be a non-negative number of days")
     nanoseconds = int(days * 86_400_000_000_000)
     if days > 0 and nanoseconds < 1:
         raise argparse.ArgumentTypeError("retention age is below one nanosecond")
@@ -127,8 +123,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--self-analysis",
         action="store_true",
         help=(
-            "analyze one explicitly named source tree as protected, untrusted "
-            "code evidence; requires explicit --root and --state-directory"
+            "analyze one explicitly named source tree as bounded code evidence; "
+            "defaults to the protected profile and requires explicit --root and "
+            "--state-directory"
+        ),
+    )
+    parser.add_argument(
+        "--analysis-profile",
+        choices=("protected", "trusted-static"),
+        default="protected",
+        help=(
+            "external-evidence profile for --self-analysis; protected is the "
+            "safe default, trusted-static loads the explicitly trusted project's "
+            "versioned static-analysis policy"
         ),
     )
 
@@ -495,9 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
     global_resources.add_argument("--global-min-free-memory-mb", type=int)
     global_resources.add_argument("--global-min-free-commit-mb", type=int)
     global_resources.add_argument("--global-cpu-slots", type=int)
-    global_resources.add_argument(
-        "--global-max-cpu-load-percent", type=float, default=90.0
-    )
+    global_resources.add_argument("--global-max-cpu-load-percent", type=float, default=90.0)
     global_resources.add_argument(
         "--global-resource-wait-timeout",
         type=float,

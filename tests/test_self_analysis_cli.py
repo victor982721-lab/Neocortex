@@ -15,6 +15,7 @@ import pytest
 from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+
 # endregion [01]
 
 # region [02] Implementación
@@ -32,13 +33,13 @@ def _extended_drive_alias(path: Path) -> Path:
 
 @pytest.mark.parametrize(
     ("arguments", "message"),
-    (
+    [
         (("--self-analysis",), "requires explicit --root"),
         (
             ("--self-analysis", "--root", "."),
             "requires explicit --state-directory",
         ),
-    ),
+    ],
 )
 def test_self_analysis_requires_explicit_paths(
     arguments: tuple[str, ...],
@@ -50,7 +51,7 @@ def test_self_analysis_requires_explicit_paths(
 
 @pytest.mark.parametrize(
     ("extra", "message"),
-    (
+    [
         (("--apply",), "cannot be combined with --apply"),
         (("--all",), "cannot be combined with --all"),
         (("--route", "pdf"), "permits only --route code"),
@@ -60,7 +61,7 @@ def test_self_analysis_requires_explicit_paths(
         (("--pdf-workers", "1"), "is not consumed by --self-analysis"),
         (("--code-generated",), "rejects --code-generated"),
         (("--code-vendored",), "rejects --code-vendored"),
-    ),
+    ],
 )
 def test_self_analysis_rejects_unsafe_or_unused_combinations(
     tmp_path: Path,
@@ -102,6 +103,33 @@ def test_self_analysis_preset_is_code_only_and_analyze_only(tmp_path: Path) -> N
     assert not config.document_catalog_enabled
     assert not config.code_include_generated
     assert not config.code_include_vendored
+    assert config.analysis_profile == "protected"
+
+
+def test_self_analysis_trusted_static_profile_is_explicit(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    args = _validate(
+        "--self-analysis",
+        "--analysis-profile",
+        "trusted-static",
+        "--root",
+        str(root),
+        "--state-directory",
+        str(tmp_path / "state"),
+    )
+
+    assert framework_config_from_args(args).analysis_profile == "trusted-static"
+
+
+def test_analysis_profile_requires_self_analysis(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="--analysis-profile requires --self-analysis"):
+        _validate(
+            "--analysis-profile",
+            "trusted-static",
+            "--root",
+            str(tmp_path),
+        )
 
 
 def test_self_analysis_rejects_intersecting_state_directory(

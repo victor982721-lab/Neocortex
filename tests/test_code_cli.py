@@ -19,6 +19,7 @@ from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
 from _04_Nucleo_Operativo.code_schema import initialize_code_state
+
 # endregion [01]
 
 # region [02] Implementación
@@ -61,7 +62,7 @@ def test_code_route_configuration_is_translated_without_eager_analyzers(
 
 @pytest.mark.parametrize(
     ("arguments", "message"),
-    (
+    [
         (("--code-search", " "), "--code-search must be non-empty"),
         (
             ("--code-language", "python"),
@@ -79,7 +80,7 @@ def test_code_route_configuration_is_translated_without_eager_analyzers(
             ("--code-projects", "--route", "code"),
             "direct code operations cannot be combined with --route",
         ),
-    ),
+    ],
 )
 def test_code_direct_options_reject_ambiguous_or_unsafe_combinations(
     arguments: tuple[str, ...],
@@ -95,22 +96,31 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    status_args = _validated(
-        "--state-directory", str(tmp_path), "--code-status", "--code-json"
-    )
+    status_args = _validated("--state-directory", str(tmp_path), "--code-status", "--code-json")
     assert dispatch_direct(status_args) == 0
     status = json.loads(capsys.readouterr().out)
 
-    doctor_args = _validated(
-        "--state-directory", str(tmp_path), "--code-doctor", "--code-json"
-    )
+    doctor_args = _validated("--state-directory", str(tmp_path), "--code-doctor", "--code-json")
     assert dispatch_direct(doctor_args) == 0
     doctor = json.loads(capsys.readouterr().out)
 
-    assert status["kind"] == "code-status" and not status["exists"]
+    assert status["kind"] == "code-status"
+    assert not status["exists"]
     assert status["self_analysis"] is None
     assert doctor["kind"] == "code-doctor"
     assert doctor["schema"] == "not-initialized"
+    assert set(doctor["external_evidence_providers"]) == {
+        "ruff-protected-basic",
+        "ruff-trusted-project",
+        "mypy-trusted-project",
+        "pyright-trusted-project",
+    }
+    assert "node" in doctor["tools"]
+    assert "pyright" in doctor["tools"]
+    assert all(
+        provider["authority"] == "advisory" and provider["mutation_authority"] is False
+        for provider in doctor["external_evidence_providers"].values()
+    )
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
@@ -134,11 +144,12 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
-    assert payload["schema"] == "neocortex.code-review/v4"
+    assert payload["schema"] == "neocortex.code-review/v5"
     assert "neocortex.code-review/v3" in payload["compatible_schemas"]
     assert payload["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
+        "neocortex.code-review/v4",
     ]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
@@ -177,9 +188,7 @@ def test_code_publication_diff_abstains_without_initializing_state(
 
 
 def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:
-    args = build_parser().parse_args(
-        ("--semantic-index", "text", "--semantic-source", "code")
-    )
+    args = build_parser().parse_args(("--semantic-index", "text", "--semantic-source", "code"))
 
     validate_arguments(args)
 

@@ -12,9 +12,11 @@ from __future__ import annotations
 import os
 import stat
 import time
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import asdict, replace
-from typing import Iterable, Mapping, Protocol
+from pathlib import Path
+from typing import Protocol
 
 from _02_Deduplicacion import (
     FileChangedError,
@@ -51,13 +53,23 @@ from .code_detection import (
 from .code_external_evidence import (
     ExternalEvidencePublication,
     RuffEvidenceProvider,
+    external_input_signature,
     failed_external_publication,
     skipped_external_publication,
 )
 from .code_schema import checkpoint_code_wal, remove_checkpointed_code_sidecars
 from .code_state import CachedCodeVersion, CodeState, SkippedCodeObservation
+from .external_evidence_models import (
+    ExternalEvidenceBundle,
+    ExternalProviderPublication,
+    external_root_identity,
+)
+from .external_evidence_providers import (
+    RUFF_PROTECTED_PROVIDER_ID,
+    RuffProtectedBasicProvider,
+    providers_for_profile,
+)
 from .semantic_models import fingerprint_bytes
-
 
 # region [01] Structural collaborators and safe I/O
 
@@ -163,9 +175,7 @@ def _read_exact_snapshot(
     if not stat.S_ISREG(path_stat.st_mode):
         raise FileChangedError(f"refusing non-regular file: {snapshot.path}")
     if snapshot.size > limit:
-        raise ValueError(
-            f"file exceeds configured code limit ({snapshot.size}>{limit})"
-        )
+        raise ValueError(f"file exceeds configured code limit ({snapshot.size}>{limit})")
 
     flags = os.O_RDONLY | int(getattr(os, "O_BINARY", 0))
     flags |= int(getattr(os, "O_NOFOLLOW", 0))
@@ -175,9 +185,7 @@ def _read_exact_snapshot(
         with os.fdopen(descriptor, "rb", buffering=0) as stream:
             descriptor = None
             before = os.fstat(stream.fileno())
-            if not stat.S_ISREG(before.st_mode) or not stat_matches_snapshot(
-                snapshot, before
-            ):
+            if not stat.S_ISREG(before.st_mode) or not stat_matches_snapshot(snapshot, before):
                 raise FileChangedError(
                     f"inventory identity changed before reading: {snapshot.path}"
                 )
@@ -188,9 +196,7 @@ def _read_exact_snapshot(
                     cancellation.checkpoint()
                 chunk = stream.read(min(1024 * 1024, remaining))
                 if not chunk:
-                    raise FileChangedError(
-                        f"unexpected end of file while reading: {snapshot.path}"
-                    )
+                    raise FileChangedError(f"unexpected end of file while reading: {snapshot.path}")
                 chunks.append(chunk)
                 remaining -= len(chunk)
             if stream.read(1):
@@ -199,9 +205,7 @@ def _read_exact_snapshot(
                 cancellation.checkpoint()
             after = os.fstat(stream.fileno())
             if not stat_matches_snapshot(snapshot, after):
-                raise FileChangedError(
-                    f"inventory identity changed while reading: {snapshot.path}"
-                )
+                raise FileChangedError(f"inventory identity changed while reading: {snapshot.path}")
             return b"".join(chunks)
     except FileChangedError:
         raise
@@ -265,19 +269,14 @@ class CodeRoute:
         self.cancellation = cancellation or CancellationToken()
         self.analyzers = analyzers or builtin_analyzer_registry()
         self.memory_gate = memory_gate
-        self.external_evidence_provider = (
-            external_evidence_provider
-            if external_evidence_provider is not None
-            else RuffEvidenceProvider()
-        )
+        self.external_evidence_provider = external_evidence_provider
         self.processing_signature = (
             f"{self.config.processing_signature}|"
             f"artifact-detector={DETECTOR_VERSION}|"
             f"{self.analyzers.processing_signature}"
         )
         self._selected_paths = frozenset(
-            os.path.normcase(os.path.abspath(item))
-            for item in self.config.selection.paths
+            os.path.normcase(os.path.abspath(item)) for item in self.config.selection.paths
         )
 
     def _emit(
@@ -311,9 +310,7 @@ class CodeRoute:
         normalized = os.path.normcase(os.path.abspath(path))
         return normalized in self._selected_paths
 
-    def _candidate_admission(
-        self, snapshot: FileSnapshot
-    ) -> AbstractContextManager[None]:
+    def _candidate_admission(self, snapshot: FileSnapshot) -> AbstractContextManager[None]:
         if self.memory_gate is None:
             return nullcontext()
         estimated_bytes = estimate_code_analysis_memory_bytes(
@@ -324,9 +321,7 @@ class CodeRoute:
     def _graph_admission(self) -> AbstractContextManager[None]:
         if self.memory_gate is None:
             return nullcontext()
-        return self.memory_gate.admit(
-            estimate_code_graph_memory_bytes(self.config.state_path)
-        )
+        return self.memory_gate.admit(estimate_code_graph_memory_bytes(self.config.state_path))
 
     def _external_evidence(
         self,
@@ -334,11 +329,149 @@ class CodeRoute:
         *,
         full_reconciliation: bool,
         counters: dict[str, int],
-    ) -> ExternalEvidencePublication | None:
+    ) -> ExternalEvidencePublication | ExternalEvidenceBundle | None:
         root = self.config.external_evidence_root
         if root is None:
             return None
         started = time.perf_counter_ns()
+        if self.external_evidence_provider is not None:
+            return self._legacy_external_evidence(
+                state,
+                root=root,
+                full_reconciliation=full_reconciliation,
+                counters=counters,
+                started=started,
+            )
+        publications: tuple[ExternalProviderPublication, ...]
+        try:
+            files = state.external_evidence_files(root)
+        except (OSError, ValueError) as exc:
+            legacy = failed_external_publication(
+                root,
+                reason="input_projection_failed",
+                error=exc,
+            )
+            publications = ()
+        else:
+            if not full_reconciliation:
+                legacy = skipped_external_publication(
+                    root,
+                    files=files,
+                    reason="partial_code_run_not_publishable",
+                )
+                publications = ()
+            else:
+                providers = providers_for_profile(self.config.analysis_profile, root)
+                normalized: list[ExternalProviderPublication] = []
+                protected_provider = next(
+                    item
+                    for item in providers
+                    if item.descriptor.provider_id == RUFF_PROTECTED_PROVIDER_ID
+                )
+                assert isinstance(protected_provider, RuffProtectedBasicProvider)
+                protected_version = protected_provider.tool_version()
+                protected_exact = None
+                protected_comparable = None
+                if protected_version is not None:
+                    protected_exact, protected_comparable = state.external_provider_baselines(
+                        descriptor=protected_provider.descriptor,
+                        tool_version=protected_version,
+                        root_identity=external_root_identity(root),
+                        input_signature=external_input_signature(files),
+                    )
+                legacy_provider = RuffEvidenceProvider()
+                legacy_version = legacy_provider.tool_version()
+                legacy_exact = None
+                legacy_comparable = None
+                if legacy_version is not None:
+                    legacy_exact, legacy_comparable = state.external_evidence_baselines(
+                        root=root,
+                        tool_name=legacy_provider.tool_name,
+                        tool_version=legacy_version,
+                        configuration_signature=legacy_provider.configuration_signature,
+                        files=files,
+                    )
+                if protected_exact is not None and legacy_exact is not None:
+                    legacy = legacy_provider.replay(root, files, legacy_exact)
+                else:
+                    legacy = legacy_provider.run(
+                        root,
+                        files,
+                        baseline=legacy_comparable,
+                        scratch_root=self.config.state_path.parent,
+                    )
+                normalized.append(
+                    protected_provider.normalize_legacy(
+                        root,
+                        files,
+                        legacy,
+                        baseline=(
+                            protected_exact if protected_exact is not None else protected_comparable
+                        ),
+                    )
+                )
+                for provider in providers:
+                    if provider is protected_provider:
+                        continue
+                    version = provider.tool_version()
+                    exact = None
+                    comparable = None
+                    if version is not None:
+                        exact, comparable = state.external_provider_baselines(
+                            descriptor=provider.descriptor,
+                            tool_version=version,
+                            root_identity=external_root_identity(root),
+                            input_signature=external_input_signature(files),
+                        )
+                    normalized.append(
+                        provider.run(
+                            root,
+                            files,
+                            baseline=exact if exact is not None else comparable,
+                            scratch_root=self.config.state_path.parent,
+                        )
+                    )
+                publications = tuple(normalized)
+        counters["external_tool_runs"] = len(publications) or 1
+        counters["external_diagnostics"] = (
+            sum(int(item.counters.get("findings", len(item.findings))) for item in publications)
+            if publications
+            else legacy.diagnostic_count
+        )
+        counters["external_added_diagnostics"] = (
+            sum(int(item.counters.get("added", 0)) for item in publications)
+            if publications
+            else legacy.added_count
+        )
+        counters["external_resolved_diagnostics"] = (
+            sum(int(item.counters.get("resolved", 0)) for item in publications)
+            if publications
+            else legacy.resolved_count
+        )
+        counters["external_cache_hits"] = (
+            sum(int(item.execution == "cache_replay") for item in publications)
+            if publications
+            else int(legacy.execution == "cache_replay")
+        )
+        counters["external_errors"] = (
+            sum(int(item.status in {"failed", "timeout", "unavailable"}) for item in publications)
+            if publications
+            else int(legacy.status in {"failed", "timeout", "unavailable"})
+        )
+        counters["external_milliseconds"] = (time.perf_counter_ns() - started) // 1_000_000
+        return ExternalEvidenceBundle(legacy, publications)
+
+    def _legacy_external_evidence(
+        self,
+        state: CodeState,
+        *,
+        root: Path,
+        full_reconciliation: bool,
+        counters: dict[str, int],
+        started: int,
+    ) -> ExternalEvidencePublication:
+        provider = self.external_evidence_provider
+        assert provider is not None
         try:
             files = state.external_evidence_files(root)
         except (OSError, ValueError) as exc:
@@ -355,32 +488,27 @@ class CodeRoute:
                     reason="partial_code_run_not_publishable",
                 )
             else:
-                version = self.external_evidence_provider.tool_version()
+                version = provider.tool_version()
                 exact = None
                 comparable = None
                 if version is not None:
                     exact, comparable = state.external_evidence_baselines(
                         root=root,
-                        tool_name=self.external_evidence_provider.tool_name,
+                        tool_name=provider.tool_name,
                         tool_version=version,
-                        configuration_signature=(
-                            self.external_evidence_provider.configuration_signature
-                        ),
+                        configuration_signature=provider.configuration_signature,
                         files=files,
                     )
-                if exact is not None:
-                    publication = self.external_evidence_provider.replay(
-                        root,
-                        files,
-                        exact,
-                    )
-                else:
-                    publication = self.external_evidence_provider.run(
+                publication = (
+                    provider.replay(root, files, exact)
+                    if exact is not None
+                    else provider.run(
                         root,
                         files,
                         baseline=comparable,
                         scratch_root=self.config.state_path.parent,
                     )
+                )
         counters["external_tool_runs"] = 1
         counters["external_diagnostics"] = publication.diagnostic_count
         counters["external_added_diagnostics"] = publication.added_count
@@ -389,9 +517,7 @@ class CodeRoute:
         counters["external_errors"] = int(
             publication.status in {"failed", "timeout", "unavailable"}
         )
-        counters["external_milliseconds"] = (
-            time.perf_counter_ns() - started
-        ) // 1_000_000
+        counters["external_milliseconds"] = (time.perf_counter_ns() - started) // 1_000_000
         return publication
 
     def _resolve_analyzer_identity(
@@ -453,12 +579,8 @@ class CodeRoute:
             encoding=encoding,
             text_excerpt=text,
             text_truncated=bool(text) and len(text) >= self.config.max_text_chars,
-            raw_xxh3_128=(
-                None if raw_fingerprint is None else raw_fingerprint.xxh3_128
-            ),
-            raw_xxh3_64_guard=(
-                None if raw_fingerprint is None else raw_fingerprint.xxh3_64_guard
-            ),
+            raw_xxh3_128=(None if raw_fingerprint is None else raw_fingerprint.xxh3_128),
+            raw_xxh3_64_guard=(None if raw_fingerprint is None else raw_fingerprint.xxh3_64_guard),
             provenance=provenance or {},
         )
 
@@ -491,9 +613,7 @@ class CodeRoute:
         classification = classify_artifact(snapshot.path, text)
         classification = replace(
             classification,
-            evidence=tuple(
-                dict.fromkeys((*classification.evidence, *encoding_evidence))
-            ),
+            evidence=tuple(dict.fromkeys((*classification.evidence, *encoding_evidence))),
         )
         source = CodeFileInput(
             snapshot=snapshot,
@@ -568,10 +688,7 @@ class CodeRoute:
     ) -> bool:
         """Process one candidate and report whether graph inputs changed."""
 
-        if (
-            self.config.cache_validation == "metadata"
-            or snapshot.size > self.config.max_file_bytes
-        ):
+        if self.config.cache_validation == "metadata" or snapshot.size > self.config.max_file_bytes:
             cached = state.reuse_cached(
                 snapshot,
                 self.processing_signature,
@@ -591,8 +708,7 @@ class CodeRoute:
                 AnalysisStatus.SKIPPED_LIMIT,
                 _diagnostic(
                     "file_limit",
-                    f"file size {snapshot.size} exceeds "
-                    f"limit {self.config.max_file_bytes}",
+                    f"file size {snapshot.size} exceeds limit {self.config.max_file_bytes}",
                     severity=DiagnosticSeverity.WARNING,
                 ),
                 provenance={
@@ -601,9 +717,7 @@ class CodeRoute:
                 },
             )
             persist_started = time.perf_counter_ns()
-            _, replaced_version = state.store_skipped(
-                observation, self.framework_run_id
-            )
+            _, replaced_version = state.store_skipped(observation, self.framework_run_id)
             elapsed_nanoseconds["persist"] += time.perf_counter_ns() - persist_started
             counters["processed"] += 1
             counters["skipped_limit"] += 1
@@ -614,9 +728,7 @@ class CodeRoute:
         with self._candidate_admission(snapshot):
             self.cancellation.checkpoint()
             preloaded_raw: bytes | None = None
-            preload_error: (
-                FileChangedError | OSError | UnicodeError | ValueError | None
-            ) = None
+            preload_error: FileChangedError | OSError | UnicodeError | ValueError | None = None
             if self.config.cache_validation == "full":
                 try:
                     read_started = time.perf_counter_ns()
@@ -694,9 +806,7 @@ class CodeRoute:
 
             persist_started = time.perf_counter_ns()
             if isinstance(result, CodeAnalysis):
-                _, replaced_version = state.store_analysis(
-                    result, self.framework_run_id
-                )
+                _, replaced_version = state.store_analysis(result, self.framework_run_id)
                 counters["symbols"] += len(result.symbols)
                 counters["references"] += len(result.references)
                 counters["diagnostics"] += len(result.diagnostics)
@@ -749,9 +859,9 @@ class CodeRoute:
                 self._emit(0)
                 for snapshot in self.dedup_index.snapshots(self.scan_id):
                     self.cancellation.checkpoint()
-                    if not likely_code_candidate(
+                    if not likely_code_candidate(snapshot.path) or not self._selected_path(
                         snapshot.path
-                    ) or not self._selected_path(snapshot.path):
+                    ):
                         continue
                     if not state.matches_selection(snapshot, self.config.selection):
                         continue
@@ -787,8 +897,7 @@ class CodeRoute:
                 )
                 graph_started = time.perf_counter_ns()
                 full_reconciliation = (
-                    self.config.max_documents is None
-                    and not self.config.selection.active
+                    self.config.max_documents is None and not self.config.selection.active
                 )
                 self.cancellation.checkpoint()
                 if full_reconciliation:
@@ -837,10 +946,7 @@ class CodeRoute:
                 state.complete_run(
                     analysis_run_id,
                     payload,
-                    partial=(
-                        self.config.max_documents is not None
-                        or self.config.selection.active
-                    ),
+                    partial=(self.config.max_documents is not None or self.config.selection.active),
                     graph_current=True,
                     external_evidence=external_evidence,
                 )

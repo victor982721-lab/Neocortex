@@ -26,7 +26,6 @@ from .route_selection import (
     normalize_route_selection,
 )
 
-
 # region [01] Stable presets
 
 ALL_PRESET = {
@@ -79,6 +78,8 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     """Expand the protected code-only preset and reject unused controls."""
 
     if not args.self_analysis:
+        if "analysis_profile" in set(getattr(args, "_explicit_options", ())):
+            raise SystemExit("--analysis-profile requires --self-analysis")
         return
     explicit = set(getattr(args, "_explicit_options", ()))
     if "root" not in explicit:
@@ -90,17 +91,13 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     if args.apply:
         raise SystemExit("--self-analysis cannot be combined with --apply")
     if args.route_only or args.candidate_run is not None or args.resume_run is not None:
-        raise SystemExit(
-            "--self-analysis cannot be combined with route-only or resume controls"
-        )
+        raise SystemExit("--self-analysis cannot be combined with route-only or resume controls")
     if selected_direct_operations(args):
         raise SystemExit("--self-analysis cannot be combined with direct operations")
 
     if "route" in explicit:
         try:
-            requested_routes = normalize_route_selection(
-                args.route, BUILTIN_ROUTE_ORDER
-            )
+            requested_routes = normalize_route_selection(args.route, BUILTIN_ROUTE_ORDER)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         if requested_routes != ("code",):
@@ -109,8 +106,7 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     unused = sorted(
         name
         for name in explicit
-        if name in _SELF_ANALYSIS_UNUSED_OPTIONS
-        or name.startswith(_SELF_ANALYSIS_UNUSED_PREFIXES)
+        if name in _SELF_ANALYSIS_UNUSED_OPTIONS or name.startswith(_SELF_ANALYSIS_UNUSED_PREFIXES)
     )
     if unused:
         option = "--" + unused[0].replace("_", "-")
@@ -131,8 +127,7 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         intersects = path_trees_intersect(args.root, args.state_directory)
     except (OSError, ValueError) as exc:
         raise SystemExit(
-            "--self-analysis root/state boundary cannot be verified: "
-            f"{type(exc).__name__}: {exc}"
+            f"--self-analysis root/state boundary cannot be verified: {type(exc).__name__}: {exc}"
         ) from exc
     if intersects:
         raise SystemExit("--self-analysis root and state directory must be disjoint")
@@ -236,9 +231,7 @@ def _validate_pdf_processing(args: argparse.Namespace) -> None:
         and args.pdf_max_document_timeout < args.pdf_document_timeout
         and "pdf_max_document_timeout" in set(getattr(args, "_explicit_options", ()))
     ):
-        raise SystemExit(
-            "--pdf-max-document-timeout cannot be below --pdf-document-timeout"
-        )
+        raise SystemExit("--pdf-max-document-timeout cannot be below --pdf-document-timeout")
 
 
 def _validate_pdf_memory(args: argparse.Namespace) -> None:
@@ -317,10 +310,7 @@ def _validate_action_recovery_operation(args: argparse.Namespace) -> None:
         raise SystemExit("--action-recovery-run must be positive")
     if recording and args.action_recovery_record < 1:
         raise SystemExit("--action-recovery-record must be positive")
-    if (
-        args.action_recovery_expected_event is not None
-        and args.action_recovery_expected_event < 1
-    ):
+    if args.action_recovery_expected_event is not None and args.action_recovery_expected_event < 1:
         raise SystemExit("--action-recovery-expected-event must be positive")
     explicit = set(getattr(args, "_explicit_options", ()))
     status_options = {
@@ -329,29 +319,20 @@ def _validate_action_recovery_operation(args: argparse.Namespace) -> None:
         "action_recovery_run",
     }
     if status_options.intersection(explicit) and not args.action_recovery_status:
-        raise SystemExit(
-            "action recovery page filters require --action-recovery-status"
-        )
+        raise SystemExit("action recovery page filters require --action-recovery-status")
     record_options = {
         "action_recovery_expected_event",
         "action_recovery_actor",
         "confirm_reconciliation_record",
     }
     if record_options.intersection(explicit) and not recording:
+        raise SystemExit("reconciliation record options require --action-recovery-record")
+    if "action_recovery_json" in explicit and not (args.action_recovery_status or recording):
         raise SystemExit(
-            "reconciliation record options require --action-recovery-record"
-        )
-    if "action_recovery_json" in explicit and not (
-        args.action_recovery_status or recording
-    ):
-        raise SystemExit(
-            "--action-recovery-json requires --action-recovery-status "
-            "or --action-recovery-record"
+            "--action-recovery-json requires --action-recovery-status or --action-recovery-record"
         )
     if recording and not args.confirm_reconciliation_record:
-        raise SystemExit(
-            "--action-recovery-record requires --confirm-reconciliation-record"
-        )
+        raise SystemExit("--action-recovery-record requires --confirm-reconciliation-record")
     if recording and not (args.action_recovery_actor or "").strip():
         raise SystemExit("--action-recovery-record requires --action-recovery-actor")
     if (args.action_recovery_status or recording) and args.apply:
@@ -389,16 +370,10 @@ def _validate_retention_operation(
         if value < 0:
             raise SystemExit(f"--retention-{store}-after cannot be negative")
         if f"retention_{store}_after" in explicit and store not in selected:
-            raise SystemExit(
-                f"--retention-{store}-after requires --retention-store {store}"
-            )
+            raise SystemExit(f"--retention-{store}-after requires --retention-store {store}")
     if args.retention_status and args.apply:
-        raise SystemExit(
-            "--retention-status is read-only and cannot be combined with --apply"
-        )
-    if args.retention_status and normalize_route_selection(
-        args.route, BUILTIN_ROUTE_ORDER
-    ):
+        raise SystemExit("--retention-status is read-only and cannot be combined with --apply")
+    if args.retention_status and normalize_route_selection(args.route, BUILTIN_ROUTE_ORDER):
         raise SystemExit("--retention-status cannot be combined with --route")
 
 
@@ -427,24 +402,18 @@ def _validate_watcher_operation(
     if args.watch_max_debounce_seconds <= 0:
         raise SystemExit("--watch-max-debounce-seconds must be positive")
     if args.watch_max_debounce_seconds < args.watch_debounce_seconds:
-        raise SystemExit(
-            "--watch-max-debounce-seconds cannot be below --watch-debounce-seconds"
-        )
+        raise SystemExit("--watch-max-debounce-seconds cannot be below --watch-debounce-seconds")
     if args.watch_error_backoff_initial_seconds < 0:
         raise SystemExit("--watch-error-backoff-initial-seconds cannot be negative")
     if args.watch_error_backoff_max_seconds < args.watch_error_backoff_initial_seconds:
-        raise SystemExit(
-            "--watch-error-backoff-max-seconds cannot be below the initial backoff"
-        )
+        raise SystemExit("--watch-error-backoff-max-seconds cannot be below the initial backoff")
     if args.watch_error_backoff_multiplier < 1:
         raise SystemExit("--watch-error-backoff-multiplier must be at least 1")
     if (
         not math.isfinite(args.watch_portable_interval_seconds)
         or not 1 <= args.watch_portable_interval_seconds <= 86_400
     ):
-        raise SystemExit(
-            "--watch-portable-interval-seconds must be between 1 and 86400"
-        )
+        raise SystemExit("--watch-portable-interval-seconds must be between 1 and 86400")
     if args.apply:
         raise SystemExit("--watch cannot be combined with --apply")
     if args.route_only:
@@ -478,10 +447,7 @@ def _validate_review_record(args: argparse.Namespace) -> None:
         not args.review_note or args.review_note.strip() != args.review_note
     ):
         raise SystemExit("--review-note must be non-empty and trimmed")
-    if (
-        args.review_note is not None
-        and len(args.review_note.encode("utf-8")) > 8 * 1024
-    ):
+    if args.review_note is not None and len(args.review_note.encode("utf-8")) > 8 * 1024:
         raise SystemExit("--review-note cannot exceed 8192 UTF-8 bytes")
 
 
@@ -505,9 +471,7 @@ def _validate_review_evidence_operations(
         raise SystemExit("--review-evidence-batch-size must be between 1 and 256")
     if "review_evidence_batch_size" in explicit and not args.review_evidence_sync:
         raise SystemExit("--review-evidence-batch-size requires --review-evidence-sync")
-    if args.review_evidence_list is not None and not (
-        1 <= args.review_evidence_list <= 1000
-    ):
+    if args.review_evidence_list is not None and not (1 <= args.review_evidence_list <= 1000):
         raise SystemExit("--review-evidence-list must be between 1 and 1000")
     common_filter_requested = any(
         (
@@ -522,19 +486,14 @@ def _validate_review_evidence_operations(
         args.review_evidence_metrics or args.review_evidence_list is not None
     ):
         raise SystemExit(
-            "review evidence filters require --review-evidence-metrics "
-            "or --review-evidence-list"
+            "review evidence filters require --review-evidence-metrics or --review-evidence-list"
         )
-    list_filter_requested = bool(
-        args.review_evidence_status or args.review_evidence_completeness
-    )
+    list_filter_requested = bool(args.review_evidence_status or args.review_evidence_completeness)
     if list_filter_requested and args.review_evidence_list is None:
         raise SystemExit(
             "review evidence status/completeness filters require --review-evidence-list"
         )
-    review_operation = bool(
-        selected_direct_operations(args, family=DirectOperationFamily.REVIEW)
-    )
+    review_operation = bool(selected_direct_operations(args, family=DirectOperationFamily.REVIEW))
     if args.review_json and not review_operation:
         raise SystemExit("--review-json requires a review command")
     if evidence_operation and args.apply:
@@ -548,8 +507,7 @@ def _validate_review_operations(
     _validate_review_limits(args)
     _validate_review_evidence_operations(args, explicit)
     review_operation = any(
-        operation.destination
-        in {"review_candidates", "review_decisions", "review_record"}
+        operation.destination in {"review_candidates", "review_decisions", "review_record"}
         for operation in selected_direct_operations(
             args,
             family=DirectOperationFamily.REVIEW,
@@ -562,8 +520,7 @@ def _validate_review_operations(
     )
     if args.review_candidates is None and candidate_filter_requested:
         raise SystemExit(
-            "review filters require --review-candidates "
-            "(--review-recommendation/--review-status)"
+            "review filters require --review-candidates (--review-recommendation/--review-status)"
         )
     shared_review_filter_requested = any(
         (
@@ -587,9 +544,7 @@ def _validate_review_operations(
     if args.review_generation is not None and args.review_generation < 0:
         raise SystemExit("--review-generation cannot be negative")
     if (args.review_volume_id is None) != (args.review_file_id is None):
-        raise SystemExit(
-            "--review-volume-id and --review-file-id must be supplied together"
-        )
+        raise SystemExit("--review-volume-id and --review-file-id must be supplied together")
     if args.review_decision_status is not None and args.review_decisions is None:
         raise SystemExit("--review-decision-status requires --review-decisions")
 
@@ -606,9 +561,7 @@ def _validate_review_operations(
         and args.review_record is None
         and decision_target_filter
     ):
-        raise SystemExit(
-            "decision identity filters require --review-decisions or --review-record"
-        )
+        raise SystemExit("decision identity filters require --review-decisions or --review-record")
     if args.review_actor is not None and args.review_record is None:
         raise SystemExit("--review-actor requires --review-record")
     if args.review_note is not None and args.review_record is None:
@@ -617,13 +570,9 @@ def _validate_review_operations(
     _validate_review_record(args)
 
     if args.review_candidates is not None and args.apply:
-        raise SystemExit(
-            "--review-candidates is read-only and cannot be combined with --apply"
-        )
+        raise SystemExit("--review-candidates is read-only and cannot be combined with --apply")
     if args.review_decisions is not None and args.apply:
-        raise SystemExit(
-            "--review-decisions is read-only and cannot be combined with --apply"
-        )
+        raise SystemExit("--review-decisions is read-only and cannot be combined with --apply")
     if args.review_record is not None and args.apply:
         raise SystemExit("--review-record cannot be combined with --apply")
 
@@ -640,9 +589,7 @@ def _validate_organization_operations(
         args.apply and ORGANIZABLE_ROUTE_NAMES.intersection(selected_routes)
     )
     if organization_direct and args.apply:
-        raise SystemExit(
-            "document catalog/organization commands cannot be combined with --apply"
-        )
+        raise SystemExit("document catalog/organization commands cannot be combined with --apply")
     if args.catalog_preview is not None and not 1 <= args.catalog_preview <= 10_000:
         raise SystemExit("--catalog-preview must be between 1 and 10000")
     catalog_filter_requested = any(
@@ -657,18 +604,10 @@ def _validate_organization_operations(
     )
     if catalog_filter_requested and args.catalog_preview is None:
         raise SystemExit("catalog filters require --catalog-preview")
-    if (
-        args.organization_preview is not None
-        and not 1 <= args.organization_preview <= 10_000
-    ):
+    if args.organization_preview is not None and not 1 <= args.organization_preview <= 10_000:
         raise SystemExit("--organization-preview must be between 1 and 10000")
-    if (
-        args.organization_preview_status is not None
-        and args.organization_preview is None
-    ):
-        raise SystemExit(
-            "--organization-preview-status requires --organization-preview"
-        )
+    if args.organization_preview_status is not None and args.organization_preview is None:
+        raise SystemExit("--organization-preview-status requires --organization-preview")
     if not 0.0 <= args.organization_min_confidence <= 1.0:
         raise SystemExit("--organization-min-confidence must be between 0 and 1")
     if not 1 <= args.organization_max_actions <= 10_000:
@@ -676,9 +615,7 @@ def _validate_organization_operations(
     if args.organization_root is not None and not (
         args.organization_plan or args.organization_apply or integrated_organization
     ):
-        raise SystemExit(
-            "--organization-root requires an organization command or routed --apply"
-        )
+        raise SystemExit("--organization-root requires an organization command or routed --apply")
     if args.no_document_catalog and (
         args.catalog_documents
         or args.organization_plan
@@ -691,17 +628,13 @@ def _validate_organization_operations(
     if args.document_taxonomy is not None and not args.document_taxonomy.is_file():
         raise SystemExit("--document-taxonomy must name an existing TOML file")
     if organization_direct and selected_routes:
-        raise SystemExit(
-            "direct catalog/organization commands cannot be combined with --route"
-        )
+        raise SystemExit("direct catalog/organization commands cannot be combined with --route")
     if (
         "organization_min_confidence" in explicit
         and not args.organization_plan
         and not integrated_organization
     ):
-        raise SystemExit(
-            "--organization-min-confidence requires a plan or routed --apply"
-        )
+        raise SystemExit("--organization-min-confidence requires a plan or routed --apply")
     if "organization_max_actions" in explicit and not args.organization_apply:
         raise SystemExit("--organization-max-actions requires --organization-apply")
 
@@ -746,9 +679,7 @@ def _validate_route_only(args: argparse.Namespace) -> None:
         or args.failed_pages_only
     )
     if selection_requested and not route_only:
-        raise SystemExit(
-            "explicit route selection requires --route-only or --resume-run"
-        )
+        raise SystemExit("explicit route selection requires --route-only or --resume-run")
     if any(not value.strip() for value in args.select_error_type):
         raise SystemExit("--select-error-type cannot be empty")
     if args.failed_pages_only and selected_routes not in {(), ("pdf",)}:

@@ -202,7 +202,7 @@ sólo evidencia de recuperación: no autoriza clasificación ni mutación. El ca
 canónico es el del estado; `--semantic-model-cache DIRECTORIO` se reserva para
 un cache local explícito, por ejemplo en un laboratorio aislado.
 
-### Autoanálisis protegido de código
+### Autoanálisis de código
 
 `--self-analysis` ejecuta sólo la ruta `code` sobre una raíz explícita en modo
 `analyze_only`. Exige un estado externo cuyo árbol sea completamente disjunto,
@@ -219,16 +219,30 @@ Neocortex --state-directory $MiniState --code-review
 ```
 
 El primer comando escribe inventario y estado de código; no es una consulta de
-sólo lectura. En esa frontera protegida también ejecuta Ruff con una política
-fija y aislada sobre los archivos Python ya publicados: no carga configuración
-del proyecto, no importa el código, no aplica fixes ni crea caché en la raíz.
-Su evidencia es consultiva y aparece en status, review y publication diff; una
-indisponibilidad o límite alcanzado obliga a abstener el gate externo, no a
-inventar una publicación limpia. El status sí es estrictamente read-only:
+sólo lectura. El perfil predeterminado `protected` ejecuta Ruff con una política
+fija `E4,E7,E9,F`, aislada de la configuración del proyecto. Para una raíz que
+Victor haya declarado confiable, `--analysis-profile trusted-static` añade,
+como proveedores independientes, Ruff con la política versionada del proyecto,
+acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright. Ruff trusted omite
+deliberadamente `I,PT,SIM,UP`: esas familias de estilo, tests y modernización no
+deben ahogar la señal de mantenimiento en esta etapa. Los dos type checkers
+conservan hallazgos separados y publican
+un resumen explícito de coincidencias y discrepancias; la ausencia de uno queda
+`not_comparable`, nunca se disfraza de consenso.
+
+Todos los proveedores trabajan sobre copias verificadas, tienen límites,
+publican versión, firmas, cobertura, contadores de proceso/bytes/tiempo/caché y
+evidencia únicamente advisory. No importan ni ejecutan el código observado, no
+aplican fixes y no poseen autoridad de mutación. Un replay exacto vuelve a
+verificar los inputs y reutiliza la publicación sin abrir otro proceso. La suite
+aparece en status, review, publication diff y code doctor; una indisponibilidad
+o límite alcanzado obliga a abstener el gate afectado, no borra la evidencia de
+los demás proveedores. `trusted-deep` está reservado y aún no se implementa.
+El status sí es estrictamente read-only:
 cualquier `-wal`, `-shm`
 o `-journal` junto a `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`,
 incluso vacío o desacoplado, causa abstención total con código `2` sin tocar el
-estado. Consulte [Autoanálisis protegido](docs/SELF_ANALYSIS.md) antes de usar
+estado. Consulte [Autoanálisis de código](docs/SELF_ANALYSIS.md) antes de usar
 el preset.
 
 Si el proceso no puede abrir el journal USN, el autoanálisis degrada a un
@@ -238,9 +252,10 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v4 conserva las capas v2/v3, el ranking bruto y hasta
-tres recomendaciones `act_now`, y añade la evidencia Ruff junto al gate
-`no_added_ruff_diagnostics` sin alterar ranking ni actionability. Mantiene un
+explicable. El envelope v5 conserva las capas anteriores, el ranking bruto y
+hasta tres recomendaciones `act_now`, y añade
+`external_evidence_suite` con los proveedores y gates normalizados sin alterar
+ranking ni actionability. Mantiene un
 único `work_package` como siguiente cambio coherente.
 Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
 los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
@@ -254,10 +269,11 @@ resolución de llamadas. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` v2 compara dos publicaciones Code completadas sin
+`--code-publication-diff` v3 compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
-diagnósticos Ruff añadidos/resueltos cuando versión y configuración coinciden.
+hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
+coinciden, además de un veredicto agregado que conserva limitaciones parciales.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
@@ -418,7 +434,7 @@ WAL.
 - [Operación y watcher](docs/OPERATIONS.md)
 - [Instalación offline y wheelhouse](docs/OFFLINE_INSTALLATION.md)
 - [Arquitectura](docs/ARCHITECTURE.md)
-- [Autoanálisis protegido de código](docs/SELF_ANALYSIS.md)
+- [Autoanálisis de código y evidencia externa](docs/SELF_ANALYSIS.md)
 - [Knowledge Plane](docs/KNOWLEDGE.md)
 - [Handoff operativo vigente](.codex/handoffs/NEOCORTEX_0.7.2_PAUSE_2026-07-30.md)
 - [Persistencia y migraciones](docs/PERSISTENCE.md)
