@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, cast
 
 from .code_architecture_analysis import (
@@ -16,6 +16,7 @@ from .code_coverage_analysis import (
     project_work_package_coverage,
     project_work_package_coverage_scope,
 )
+from .code_unused_analysis import CodeUnusedAnalysis, UnusedConsensusCandidate
 from .code_review_actionability import classify_source_role
 from .code_review_models import (
     CodeReviewFinding,
@@ -28,11 +29,12 @@ from .code_review_models import (
 )
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v3"
+CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v4"
 _CODE_REVIEW_PACKAGE_ID_PLANNING = "python-maintenance-work-packages-v1"
 CODE_REVIEW_PLANNING_FINDING_LIMIT = 50
-CODE_REVIEW_WORK_PACKAGE_LIMIT = 1
+CODE_REVIEW_WORK_PACKAGE_LIMIT = 4
 CODE_REVIEW_WORK_PACKAGE_MEMBER_LIMIT = 5
+CODE_REVIEW_UNUSED_WORK_PACKAGE_LIMIT = 3
 
 _ACCEPTANCE_GATES = (
     "characterization_fixture_exact",
@@ -59,6 +61,23 @@ _ACCEPTANCE_GATES = (
     "branch_coverage_not_degraded",
 )
 _RISK_ORDER = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
+_UNUSED_REQUIRED_PRECISION_GATES = frozenset(
+    {
+        "calibration_probable_unused_precision",
+        "holdout_probable_unused_precision",
+    }
+)
+_UNUSED_ACCEPTANCE_GATES = (
+    "unused_analysis_comparable",
+    "candidate_remains_probable_unused_high_consensus",
+    "dynamic_usage_ruled_out_by_human_review",
+    "human_confirmation_recorded",
+    "tests_passed",
+    "public_import_surface_preserved",
+    "architecture_contracts_not_degraded",
+    "no_new_import_cycles",
+    "unused_coverage_status_honest",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +353,221 @@ def _package_risk(
     return selected
 
 
+def _normalized_path(value: str) -> str:
+    return value.replace("\\", "/").strip("/").casefold()
+
+
+def _candidate_matches_member(
+    candidate: UnusedConsensusCandidate,
+    member: CodeReviewWorkPackageMember,
+) -> bool:
+    candidate_path = _normalized_path(candidate.relative_path)
+    member_path = _normalized_path(member.path)
+    path_matches = member_path == candidate_path or member_path.endswith("/" + candidate_path)
+    symbol_matches = (
+        candidate.symbol == member.symbol or member.symbol.rsplit(".", 1)[-1] == candidate.name
+    )
+    return path_matches and symbol_matches
+
+
+def _annotate_unused_candidates(
+    package: CodeReviewWorkPackage,
+    unused_analysis: CodeUnusedAnalysis | None,
+) -> CodeReviewWorkPackage:
+    if unused_analysis is None or unused_analysis.status != "ready":
+        return package
+    matching = tuple(
+        candidate
+        for candidate in unused_analysis.candidates
+        if any(_candidate_matches_member(candidate, member) for member in package.members)
+    )[:CODE_REVIEW_WORK_PACKAGE_MEMBER_LIMIT]
+    if not matching:
+        return package
+    return replace(
+        package,
+        unused_candidates=matching,
+        requires_human_confirmation=True,
+        acceptance_gates=tuple(
+            dict.fromkeys(
+                (
+                    *package.acceptance_gates,
+                    "unused_analysis_comparable",
+                    "unused_evidence_not_degraded",
+                    "human_confirmation_recorded",
+                )
+            )
+        ),
+        evidence=(
+            *package.evidence,
+            *(f"unused_candidate:{item.candidate_id}:{item.state}" for item in matching),
+        ),
+        limitations=(
+            *package.limitations,
+            "unused_evidence_is_advisory_and_requires_human_confirmation",
+            "unused_evidence_has_zero_delete_or_mutation_authority",
+        ),
+    )
+
+
+def _unused_package_id(candidate: UnusedConsensusCandidate) -> str:
+    payload = canonical_json(
+        {
+            "planning": "unused-characterization-work-packages-v1",
+            "candidate_id": candidate.candidate_id,
+        }
+    )
+    return "code-unused-work-package-v1:xxh3_128:" + fingerprint_text(payload).xxh3_128
+
+
+def _unused_package_steps(
+    candidate: UnusedConsensusCandidate,
+) -> tuple[CodeReviewWorkPackageStep, ...]:
+    target = candidate.symbol or candidate.name
+    return (
+        CodeReviewWorkPackageStep(
+            1,
+            "characterize",
+            target,
+            "verify_import_reexport_callback_registry_protocol_and_entry_point_usage",
+        ),
+        CodeReviewWorkPackageStep(
+            2,
+            "validate",
+            target,
+            "run_targeted_tests_and_public_import_smoke_without_mutating_code",
+        ),
+        CodeReviewWorkPackageStep(
+            3,
+            "validate",
+            target,
+            "record_explicit_human_confirmation_or_reclassify_with_new_evidence",
+        ),
+        CodeReviewWorkPackageStep(
+            4,
+            "publish",
+            target,
+            "require_comparable_unused_analysis_replay_before_any_separate_change",
+        ),
+    )
+
+
+def _unused_characterization_packages(
+    analysis: CodeUnusedAnalysis | None,
+    *,
+    architecture: CodeArchitectureAnalysis | None,
+    test_coverage: CodeCoverageAnalysis | None,
+    excluded_candidate_ids: frozenset[str],
+) -> tuple[CodeReviewWorkPackage, ...]:
+    precision_gates: dict[str, str] = {}
+    if analysis is not None:
+        precision_gates = {
+            gate.gate: gate.status
+            for gate in analysis.gates
+            if gate.gate in _UNUSED_REQUIRED_PRECISION_GATES
+        }
+    if (
+        analysis is None
+        or analysis.status != "ready"
+        or any(precision_gates.get(gate) != "passed" for gate in _UNUSED_REQUIRED_PRECISION_GATES)
+    ):
+        return ()
+    selected = tuple(
+        candidate
+        for candidate in analysis.candidates
+        if candidate.state == "probable_unused_high_consensus"
+        and candidate.candidate_id not in excluded_candidate_ids
+    )[:CODE_REVIEW_UNUSED_WORK_PACKAGE_LIMIT]
+    packages: list[CodeReviewWorkPackage] = []
+    for candidate in selected:
+        target = candidate.symbol or candidate.name
+        module_id = candidate.module_id
+        import_chains = (
+            ()
+            if architecture is None or module_id is None
+            else bounded_import_chains(architecture, module_id)
+        )
+        affected_contracts = (
+            ()
+            if architecture is None or module_id is None
+            else tuple(
+                sorted(
+                    contract.contract_id
+                    for contract in architecture.contracts
+                    if module_id in contract.importer_modules
+                    or module_id in contract.imported_modules
+                )
+            )
+        )
+        coverage_projection = (
+            None if test_coverage is None else project_work_package_coverage(test_coverage, target)
+        )
+        coverage_scope = (
+            None
+            if test_coverage is None
+            else project_work_package_coverage_scope(test_coverage, target)
+        )
+        packages.append(
+            CodeReviewWorkPackage(
+                package_rank=0,
+                package_id=_unused_package_id(candidate),
+                title=f"{target} unused-code characterization",
+                objective="characterize_high_consensus_unused_candidate_without_mutation",
+                primary_finding_id=candidate.candidate_id,
+                primary_hotspot_id=candidate.candidate_id,
+                primary_symbol=target,
+                primary_module=module_id,
+                change_risk="unknown",
+                members=(),
+                members_truncated=False,
+                consumer_module_examples=(),
+                import_chains=import_chains,
+                affected_architecture_contracts=affected_contracts,
+                test_coverage=coverage_projection,
+                test_coverage_scope=coverage_scope,
+                contracts_to_preserve=(
+                    "public_import_and_reexport_surface",
+                    "callbacks_registries_protocols_and_entry_points",
+                    "runtime_and_test_fixture_behavior",
+                ),
+                steps=_unused_package_steps(candidate),
+                recommended_validation=(
+                    "inspect_import_reexport_and___all___usage",
+                    "inspect_callbacks_registries_protocols_and_entry_points",
+                    "run_targeted_tests_and_public_import_smoke",
+                    "record_human_confirmation_before_any_separate_change",
+                ),
+                acceptance_gates=_UNUSED_ACCEPTANCE_GATES,
+                evidence=(
+                    f"unused_candidate:{candidate.candidate_id}:{candidate.state}",
+                    *(f"provider:{item}" for item in candidate.provider_ids),
+                    *(f"reason:{item}" for item in candidate.reasons),
+                    f"calibration_signature:{analysis.calibration_signature}",
+                    f"coverage_status:{analysis.coverage_status}",
+                    "architecture:"
+                    + (architecture.status if architecture is not None else "not_evaluated"),
+                ),
+                limitations=(
+                    "characterization_package_is_advice_not_change_authorization",
+                    "candidate_requires_explicit_human_confirmation",
+                    "dynamic_usage_may_remain_unobserved",
+                    "coverage_can_explain_usage_but_never_strengthens_missing_evidence",
+                    "package_has_zero_delete_or_mutation_authority",
+                    *(
+                        ()
+                        if architecture is not None and architecture.status == "ready"
+                        else ("architecture_gates_require_comparable_ready_evidence",)
+                    ),
+                ),
+                confidence="unused_high_consensus_advisory",
+                package_kind="unused_characterization",
+                unused_candidates=(candidate,),
+                requires_human_confirmation=True,
+                mutation_authority=False,
+            )
+        )
+    return tuple(packages)
+
+
 def build_code_review_work_packages(
     findings: tuple[CodeReviewFinding, ...],
     recommendations: tuple[CodeReviewRecommendation, ...],
@@ -342,6 +576,7 @@ def build_code_review_work_packages(
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
+    unused_analysis: CodeUnusedAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
     """Build the single next coherent package; never batch independent roots."""
 
@@ -426,57 +661,56 @@ def build_code_review_work_packages(
         "unprotected": ("work_package_target_has_no_observed_protecting_test",),
         "not_evaluated": ("coverage_gates_require_ready_trusted_deep_evidence",),
     }[coverage_status]
-    return (
-        CodeReviewWorkPackage(
-            package_rank=1,
-            package_id=_package_id(primary, related),
-            title=f"{primary.symbol} maintenance package",
-            objective="reduce_confirmed_hotspots_without_contract_regression",
-            primary_finding_id=primary.finding_id,
-            primary_hotspot_id=primary.hotspot_id,
-            primary_symbol=primary.symbol,
-            primary_module=primary_module,
-            change_risk=_package_risk(primary, related),
-            members=members,
-            members_truncated=members_truncated,
-            consumer_module_examples=_ordered_union(
-                tuple(finding.impact.consumer_module_examples for finding in package_findings)
-            ),
-            import_chains=import_chains,
-            affected_architecture_contracts=affected_contracts,
-            test_coverage=coverage_projection,
-            test_coverage_scope=coverage_scope,
-            contracts_to_preserve=_ordered_union(
-                tuple(finding.contracts_to_preserve for finding in package_findings)
-            ),
-            steps=_package_steps(primary, related),
-            recommended_validation=_ordered_union(
-                tuple(finding.recommended_validation for finding in package_findings)
-            ),
-            acceptance_gates=_ACCEPTANCE_GATES,
-            evidence=(
-                "bounded_planning_horizon:50",
-                "primary_recommendation_rank:1",
-                architecture_evidence,
-                f"test_coverage:{coverage_status}",
-                *(
-                    ()
-                    if coverage_projection is None
-                    else (f"test_coverage_subject:{coverage_projection.primary_symbol}",)
-                ),
-                *relationship_evidence,
-            ),
-            limitations=(
-                "work_package_is_advice_not_authorization",
-                "relationship_graph_is_bounded_to_two_static_call_hops",
-                "dynamic_dispatch_is_not_observed",
-                "related_members_require_characterization_before_change",
-                *architecture_limitations,
-                *coverage_limitations,
-            ),
-            confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
+    package = CodeReviewWorkPackage(
+        package_rank=1,
+        package_id=_package_id(primary, related),
+        title=f"{primary.symbol} maintenance package",
+        objective="reduce_confirmed_hotspots_without_contract_regression",
+        primary_finding_id=primary.finding_id,
+        primary_hotspot_id=primary.hotspot_id,
+        primary_symbol=primary.symbol,
+        primary_module=primary_module,
+        change_risk=_package_risk(primary, related),
+        members=members,
+        members_truncated=members_truncated,
+        consumer_module_examples=_ordered_union(
+            tuple(finding.impact.consumer_module_examples for finding in package_findings)
         ),
+        import_chains=import_chains,
+        affected_architecture_contracts=affected_contracts,
+        test_coverage=coverage_projection,
+        test_coverage_scope=coverage_scope,
+        contracts_to_preserve=_ordered_union(
+            tuple(finding.contracts_to_preserve for finding in package_findings)
+        ),
+        steps=_package_steps(primary, related),
+        recommended_validation=_ordered_union(
+            tuple(finding.recommended_validation for finding in package_findings)
+        ),
+        acceptance_gates=_ACCEPTANCE_GATES,
+        evidence=(
+            "bounded_planning_horizon:50",
+            "primary_recommendation_rank:1",
+            architecture_evidence,
+            f"test_coverage:{coverage_status}",
+            *(
+                ()
+                if coverage_projection is None
+                else (f"test_coverage_subject:{coverage_projection.primary_symbol}",)
+            ),
+            *relationship_evidence,
+        ),
+        limitations=(
+            "work_package_is_advice_not_authorization",
+            "relationship_graph_is_bounded_to_two_static_call_hops",
+            "dynamic_dispatch_is_not_observed",
+            "related_members_require_characterization_before_change",
+            *architecture_limitations,
+            *coverage_limitations,
+        ),
+        confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
     )
+    return (_annotate_unused_candidates(package, unused_analysis),)
 
 
 def plan_code_review_work_packages(
@@ -487,6 +721,7 @@ def plan_code_review_work_packages(
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
+    unused_analysis: CodeUnusedAnalysis | None = None,
 ) -> tuple[
     tuple[CodeReviewWorkPackage, ...],
     RecommendationStatus,
@@ -501,19 +736,34 @@ def plan_code_review_work_packages(
         architecture=architecture,
         architecture_root=architecture_root,
         test_coverage=test_coverage,
+        unused_analysis=unused_analysis,
+    )
+    annotated_candidate_ids = frozenset(
+        candidate.candidate_id for package in packages for candidate in package.unused_candidates
+    )
+    unused_packages = _unused_characterization_packages(
+        unused_analysis,
+        architecture=architecture,
+        test_coverage=test_coverage,
+        excluded_candidate_ids=annotated_candidate_ids,
+    )
+    packages = tuple(
+        replace(package, package_rank=rank)
+        for rank, package in enumerate((*packages, *unused_packages), start=1)
     )
     if packages:
         return packages, "ready", None
     return (
         (),
         "abstained",
-        "no_primary_act_now_recommendation_within_bounded_findings",
+        "no_primary_act_now_or_high_consensus_unused_candidate_within_bounded_evidence",
     )
 
 
 __all__ = [
     "CODE_REVIEW_PLANNING",
     "CODE_REVIEW_PLANNING_FINDING_LIMIT",
+    "CODE_REVIEW_UNUSED_WORK_PACKAGE_LIMIT",
     "CODE_REVIEW_WORK_PACKAGE_LIMIT",
     "CodeReviewPlanningLink",
     "build_code_review_work_packages",

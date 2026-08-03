@@ -10,6 +10,7 @@ from .code_external_evidence import (
     ExternalEvidenceStatus,
     external_status_digest_payload,
 )
+from .code_unused_analysis import CodeUnusedAnalysis
 from .code_review_models import (
     CODE_REVIEW_SCHEMA,
     CodeReviewCoverage,
@@ -42,6 +43,7 @@ def build_code_review_digest(
     external_evidence_suite: ExternalEvidenceSuiteStatus,
     architecture: CodeArchitectureAnalysis,
     test_coverage: CodeCoverageAnalysis,
+    unused_analysis: CodeUnusedAnalysis,
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     """Hash every decision-bearing field while excluding local database paths."""
@@ -70,6 +72,7 @@ def build_code_review_digest(
             "external_evidence_suite": external_evidence_suite.as_payload(),
             "architecture": architecture.digest_payload(),
             "test_coverage": test_coverage.digest_payload(),
+            "unused_analysis": unused_analysis.digest_payload(),
             "limitations": list(limitations),
         }
     )

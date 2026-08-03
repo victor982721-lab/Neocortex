@@ -7,18 +7,24 @@ import json
 import shutil
 import sqlite3
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from .code_architecture_analysis import CodeArchitectureAnalysis
     from .code_coverage_analysis import CodeCoverageAnalysis
-    from .code_publication_diff import CodeArchitectureDelta, CodeModuleArchitectureDelta
+    from .code_publication_diff import (
+        CodeArchitectureDelta,
+        CodeModuleArchitectureDelta,
+        CodeUnusedAnalysisDelta,
+    )
+    from .code_review_models import CodeReviewResult
 
 
 _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT = 20
 _CODE_CLI_COVERAGE_EXAMPLE_LIMIT = 20
+_CODE_CLI_UNUSED_EXAMPLE_LIMIT = 20
 _CODE_ARCHITECTURE_PROVIDER_IDS = (
     "complexipy-cognitive",
     "grimp-architecture",
@@ -82,6 +88,7 @@ class _CodeStatusSnapshot:
     external_evidence_suite: dict[str, object]
     architecture: dict[str, object]
     test_coverage: dict[str, object]
+    unused_analysis: dict[str, object] = field(default_factory=dict)
 
 
 def _architecture_abstained_payload(
@@ -246,6 +253,37 @@ def _coverage_abstained_payload(
     }
 
 
+def _unused_abstained_payload(
+    database: str,
+    reason: str,
+    *,
+    analysis_run_id: int | None = None,
+) -> dict[str, object]:
+    return {
+        "kind": "code-unused-analysis",
+        "schema": "neocortex.code-unused-analysis/v1",
+        "database": database,
+        "analysis_run_id": analysis_run_id,
+        "status": "abstained",
+        "reason": reason,
+        "counts": {
+            "total": 0,
+            "explained_usage": 0,
+            "dynamic_usage_possible": 0,
+            "insufficient_evidence": 0,
+            "probable_unused_high_consensus": 0,
+        },
+        "providers": [],
+        "candidates": [],
+        "calibration": None,
+        "holdout": None,
+        "gates": [],
+        "limitations": ["unused_evidence_not_ready"],
+        "authority": "advisory",
+        "mutation_authority": False,
+    }
+
+
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
     active_embedding_links = int(
         connection.execute("SELECT COUNT(*) FROM embedding_links WHERE active=1").fetchone()[0]
@@ -326,6 +364,8 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
     from .code_architecture_analysis import read_code_architecture_analysis
     from .code_coverage_analysis import read_code_coverage_analysis
     from .code_external_evidence import read_external_evidence
+    from .code_review_models import bounded_code_unused_payload
+    from .code_unused_analysis import read_code_unused_analysis
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
     from .external_evidence_store import read_external_evidence_suite
     from .self_analysis_status import quiescent_sqlite_database
@@ -393,6 +433,13 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                     database=str(path),
                 )
             )
+        unused_analysis = bounded_code_unused_payload(
+            read_code_unused_analysis(
+                connection,
+                -1 if latest is None else int(latest["analysis_run_id"]),
+                database=str(path),
+            )
+        )
     return _CodeStatusSnapshot(
         version,
         counts,
@@ -401,6 +448,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
         suite,
         architecture,
         test_coverage,
+        unused_analysis,
     )
 
 
@@ -463,6 +511,7 @@ def _emit_missing_code_status(
         },
         "architecture": architecture,
         "test_coverage": _coverage_abstained_payload(str(path), "code_state_missing"),
+        "unused_analysis": _unused_abstained_payload(str(path), "code_state_missing"),
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -472,6 +521,10 @@ def _emit_missing_code_status(
     _emit_code_coverage(
         "CODE_COVERAGE",
         _coverage_abstained_payload(str(path), "code_state_missing"),
+    )
+    _emit_code_unused(
+        "CODE_UNUSED",
+        _unused_abstained_payload(str(path), "code_state_missing"),
     )
 
 
@@ -564,6 +617,98 @@ def _emit_code_coverage(prefix: str, coverage: dict[str, object]) -> None:
             )
 
 
+def _emit_code_unused(prefix: str, analysis: dict[str, object]) -> None:
+    """Render bounded advisory unused-code evidence across all four states."""
+
+    counts_value = analysis.get("counts")
+    counts = counts_value if isinstance(counts_value, dict) else {}
+    state_total = sum(
+        int(counts.get(state, 0))
+        for state in (
+            "explained_usage",
+            "dynamic_usage_possible",
+            "insufficient_evidence",
+            "probable_unused_high_consensus",
+        )
+    )
+    _print_console_line(
+        f"{prefix} status={analysis.get('status')} "
+        f"total={counts.get('total', state_total)} "
+        f"explained_usage={counts.get('explained_usage', 0)} "
+        f"dynamic_usage_possible={counts.get('dynamic_usage_possible', 0)} "
+        f"insufficient_evidence={counts.get('insufficient_evidence', 0)} "
+        f"probable_unused_high_consensus="
+        f"{counts.get('probable_unused_high_consensus', 0)} "
+        f"authority={analysis.get('authority')} "
+        f"mutation_authority={int(bool(analysis.get('mutation_authority')))} "
+        f"reason={json.dumps(analysis.get('reason'), ensure_ascii=True)}"
+    )
+    providers = analysis.get("providers")
+    if isinstance(providers, (list, tuple)):
+        for provider in providers[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+            if not isinstance(provider, dict):
+                continue
+            _print_console_line(
+                f"{prefix}_PROVIDER id={provider.get('provider_id')} "
+                f"status={provider.get('status')} "
+                f"comparability={provider.get('comparability')} "
+                f"findings={provider.get('findings', 0)} "
+                f"eligible={provider.get('eligible_candidates', 0)} "
+                f"covered={provider.get('covered_candidates', 0)} "
+                f"reason={json.dumps(provider.get('reason'), ensure_ascii=True)}"
+            )
+    for split in ("calibration", "holdout"):
+        report = analysis.get(split)
+        if not isinstance(report, dict):
+            _print_console_line(f"{prefix}_{split.upper()} status=not_evaluated")
+            continue
+        _print_console_line(
+            f"{prefix}_{split.upper()} signature={report.get('signature')} "
+            f"samples={report.get('total', 0)} "
+            f"precision={report.get('precision')} recall={report.get('recall')} "
+            f"abstention={report.get('abstention_rate', report.get('abstention'))} "
+            f"unsupported={report.get('unsupported', 0)}"
+        )
+    candidates = analysis.get("candidates")
+    if isinstance(candidates, (list, tuple)):
+        for candidate in candidates[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+            if not isinstance(candidate, dict):
+                continue
+            reasons = candidate.get("reasons")
+            bounded_reasons = (
+                reasons[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]
+                if isinstance(reasons, (list, tuple))
+                else []
+            )
+            _print_console_line(
+                f"{prefix}_CANDIDATE id={candidate.get('candidate_id')} "
+                f"state={candidate.get('state')} "
+                f"path={json.dumps(candidate.get('relative_path'), ensure_ascii=True)} "
+                f"symbol={json.dumps(candidate.get('symbol'), ensure_ascii=True)} "
+                f"line={candidate.get('start_line')} "
+                f"providers={json.dumps(candidate.get('provider_ids'), ensure_ascii=True)} "
+                f"reasons={json.dumps(bounded_reasons, ensure_ascii=True)}"
+            )
+        if len(candidates) > _CODE_CLI_UNUSED_EXAMPLE_LIMIT:
+            _print_console_line(
+                f"{prefix}_CANDIDATES shown={_CODE_CLI_UNUSED_EXAMPLE_LIMIT} "
+                f"omitted={len(candidates) - _CODE_CLI_UNUSED_EXAMPLE_LIMIT}"
+            )
+    limitations = analysis.get("limitations")
+    if isinstance(limitations, (list, tuple)):
+        for limitation in limitations[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+            _print_console_line(f"{prefix}_LIMITATION {limitation}")
+    gates = analysis.get("gates")
+    if isinstance(gates, (list, tuple)):
+        for gate in gates[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+            if not isinstance(gate, dict):
+                continue
+            _print_console_line(
+                f"{prefix}_GATE id={gate.get('gate')} status={gate.get('status')} "
+                f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
+            )
+
+
 def _emit_code_status(
     path: Path,
     analyzers: object,
@@ -587,6 +732,7 @@ def _emit_code_status(
         "external_evidence_suite": snapshot.external_evidence_suite,
         "architecture": snapshot.architecture,
         "test_coverage": snapshot.test_coverage,
+        "unused_analysis": snapshot.unused_analysis,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -628,6 +774,7 @@ def _emit_code_status(
     )
     _emit_code_status_architecture(snapshot.architecture)
     _emit_code_coverage("CODE_COVERAGE", snapshot.test_coverage)
+    _emit_code_unused("CODE_UNUSED", snapshot.unused_analysis)
 
 
 def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
@@ -772,11 +919,59 @@ def run_code_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _emit_code_review_unused_result(result: CodeReviewResult) -> None:
+    from .code_review_models import bounded_code_unused_payload
+
+    unused_analysis = getattr(result, "unused_analysis", None)
+    if unused_analysis is None:
+        _emit_code_unused(
+            "CODE_REVIEW_UNUSED",
+            _unused_abstained_payload(result.database, "unused_result_missing"),
+        )
+        return
+    _emit_code_unused(
+        "CODE_REVIEW_UNUSED",
+        bounded_code_unused_payload(unused_analysis),
+    )
+
+
+def _emit_code_review_ranked_evidence(result: CodeReviewResult) -> None:
+    for recommendation in result.recommendations:
+        _print_console_line(
+            "CODE_REVIEW_RECOMMENDATION status=ready "
+            f"recommendation_rank={recommendation.recommendation_rank} "
+            f"hotspot_rank={recommendation.hotspot_rank} "
+            f"construction={recommendation.construction} "
+            f"risk={recommendation.change_risk} "
+            f"production_callers={recommendation.production_callers} "
+            f"test_callers={recommendation.test_callers} "
+            f"path={json.dumps(recommendation.path, ensure_ascii=True)} "
+            f"symbol={json.dumps(recommendation.symbol, ensure_ascii=True)}"
+        )
+    for finding in result.findings:
+        _print_console_line(
+            f"CODE_REVIEW_FINDING rank={finding.rank} "
+            f"score_bp={finding.score_basis_points} category={finding.category} "
+            f"construction={finding.construction} "
+            f"actionability={finding.actionability} risk={finding.change_risk} "
+            f"complexity={finding.complexity} lines={finding.function_lines} "
+            f"production_callers={finding.impact.production_callers} "
+            f"test_callers={finding.impact.test_callers + finding.impact.fixture_callers} "
+            f"path={json.dumps(finding.path, ensure_ascii=True)} "
+            f"symbol={json.dumps(finding.symbol, ensure_ascii=True)} "
+            f"line={finding.start_line}"
+        )
+    for limitation in result.limitations:
+        _print_console_line(f"CODE_REVIEW_LIMITATION {limitation}")
+
+
 def run_code_review(args: argparse.Namespace) -> int:
     """Rank confirmed Python hotspots in the published self-analysis snapshot."""
 
     from .code_review import review_code_state
-    from .code_review_models import bounded_code_coverage_payload
+    from .code_review_models import (
+        bounded_code_coverage_payload,
+    )
 
     try:
         result = review_code_state(
@@ -859,6 +1054,7 @@ def run_code_review(args: argparse.Namespace) -> int:
             "CODE_REVIEW_TEST_COVERAGE",
             bounded_code_coverage_payload(result.test_coverage),
         )
+    _emit_code_review_unused_result(result)
     if result.recommendation_status == "abstained":
         _print_console_line(
             f"CODE_REVIEW_RECOMMENDATION status=abstained reason={result.recommendation_reason}"
@@ -878,12 +1074,27 @@ def run_code_review(args: argparse.Namespace) -> int:
         _print_console_line(
             "CODE_REVIEW_WORK_PACKAGE status=ready "
             f"package_rank={package.package_rank} risk={package.change_risk} "
+            f"kind={getattr(package, 'package_kind', 'hotspot_maintenance')} "
             f"members={len(package.members)} "
             f"members_truncated={int(package.members_truncated)} "
             f"confidence={package.confidence} "
             f"primary={json.dumps(package.primary_symbol, ensure_ascii=True)} "
+            f"human_confirmation="
+            f"{int(bool(getattr(package, 'requires_human_confirmation', False)))} "
+            f"mutation_authority="
+            f"{int(bool(getattr(package, 'mutation_authority', False)))} "
             f"package_id={package.package_id}"
         )
+        unused_candidates = getattr(package, "unused_candidates", ())
+        for candidate in unused_candidates[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+            _print_console_line(
+                "CODE_REVIEW_WORK_PACKAGE_UNUSED "
+                f"package_rank={package.package_rank} package_id={package.package_id} "
+                f"candidate_id={candidate.candidate_id} state={candidate.state} "
+                f"path={json.dumps(candidate.relative_path, ensure_ascii=True)} "
+                f"symbol={json.dumps(candidate.symbol, ensure_ascii=True)} "
+                f"reasons={json.dumps(candidate.reasons, ensure_ascii=True)}"
+            )
         _print_console_line(
             "CODE_REVIEW_WORK_PACKAGE_ARCHITECTURE status=ready "
             f"package_rank={package.package_rank} package_id={package.package_id} "
@@ -948,34 +1159,43 @@ def run_code_review(args: argparse.Namespace) -> int:
                 f"gate={bounded_gate.get('status')} "
                 f"reason={json.dumps(bounded_gate.get('reason'), ensure_ascii=True)}"
             )
-    for recommendation in result.recommendations:
-        _print_console_line(
-            "CODE_REVIEW_RECOMMENDATION status=ready "
-            f"recommendation_rank={recommendation.recommendation_rank} "
-            f"hotspot_rank={recommendation.hotspot_rank} "
-            f"construction={recommendation.construction} "
-            f"risk={recommendation.change_risk} "
-            f"production_callers={recommendation.production_callers} "
-            f"test_callers={recommendation.test_callers} "
-            f"path={json.dumps(recommendation.path, ensure_ascii=True)} "
-            f"symbol={json.dumps(recommendation.symbol, ensure_ascii=True)}"
-        )
-    for finding in result.findings:
-        _print_console_line(
-            f"CODE_REVIEW_FINDING rank={finding.rank} "
-            f"score_bp={finding.score_basis_points} category={finding.category} "
-            f"construction={finding.construction} "
-            f"actionability={finding.actionability} risk={finding.change_risk} "
-            f"complexity={finding.complexity} lines={finding.function_lines} "
-            f"production_callers={finding.impact.production_callers} "
-            f"test_callers={finding.impact.test_callers + finding.impact.fixture_callers} "
-            f"path={json.dumps(finding.path, ensure_ascii=True)} "
-            f"symbol={json.dumps(finding.symbol, ensure_ascii=True)} "
-            f"line={finding.start_line}"
-        )
-    for limitation in result.limitations:
-        _print_console_line(f"CODE_REVIEW_LIMITATION {limitation}")
+    _emit_code_review_ranked_evidence(result)
     return 0
+
+
+def _emit_code_publication_unused(analysis: CodeUnusedAnalysisDelta) -> None:
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_UNUSED status={analysis.status} "
+        f"common={analysis.common} added={analysis.added} removed={analysis.removed} "
+        f"state_changes={analysis.state_changes} "
+        f"high_consensus_added={analysis.high_consensus_added} "
+        f"high_consensus_resolved={analysis.high_consensus_resolved} "
+        f"gate={analysis.gate} "
+        f"gate_reason={json.dumps(analysis.gate_reason, ensure_ascii=True)} "
+        f"reason={json.dumps(analysis.reason, ensure_ascii=True)}"
+    )
+    for change in analysis.state_change_examples[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_UNUSED_STATE "
+            f"id={change.candidate_id} "
+            f"baseline={change.baseline_state} current={change.current_state} "
+            f"path={json.dumps(change.relative_path, ensure_ascii=True)} "
+            f"symbol={json.dumps(change.symbol, ensure_ascii=True)}"
+        )
+    for candidate in analysis.added_examples[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_UNUSED_ADDED "
+            f"id={candidate.candidate_id} state={candidate.state} "
+            f"path={json.dumps(candidate.relative_path, ensure_ascii=True)} "
+            f"symbol={json.dumps(candidate.symbol, ensure_ascii=True)}"
+        )
+    for candidate in analysis.removed_examples[:_CODE_CLI_UNUSED_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_UNUSED_REMOVED "
+            f"id={candidate.candidate_id} state={candidate.state} "
+            f"path={json.dumps(candidate.relative_path, ensure_ascii=True)} "
+            f"symbol={json.dumps(candidate.symbol, ensure_ascii=True)}"
+        )
 
 
 def run_code_publication_diff(args: argparse.Namespace) -> int:
@@ -1075,6 +1295,14 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
                 f"status={gate.get('status')} "
                 f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
             )
+    unused_delta = getattr(result, "unused_analysis", None)
+    if unused_delta is None:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_UNUSED status=not_evaluated "
+            'gate=not_evaluated reason="unused_delta_missing"'
+        )
+    else:
+        _emit_code_publication_unused(unused_delta)
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0

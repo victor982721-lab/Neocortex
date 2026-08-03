@@ -44,6 +44,67 @@ def _validated(*arguments: str):
     return args
 
 
+def test_unused_human_output_is_bounded_and_surfaces_all_states(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    states = (
+        "explained_usage",
+        "dynamic_usage_possible",
+        "insufficient_evidence",
+        "probable_unused_high_consensus",
+    )
+    cli_code._emit_code_unused(
+        "CODE_UNUSED",
+        {
+            "status": "ready",
+            "reason": None,
+            "counts": {"total": 4, **dict.fromkeys(states, 1)},
+            "authority": "advisory",
+            "mutation_authority": False,
+            "calibration": {
+                "signature": "calibration-v1",
+                "total": 8,
+                "precision": 1.0,
+                "recall": 0.75,
+                "abstention": 0.25,
+                "unsupported": 0,
+            },
+            "holdout": {
+                "signature": "holdout-v1",
+                "total": 4,
+                "precision": 1.0,
+                "recall": 1.0,
+                "abstention": 0.0,
+                "unsupported": 0,
+            },
+            "candidates": [
+                {
+                    "candidate_id": f"candidate-{index}",
+                    "state": state,
+                    "relative_path": f"pkg/module_{index}.py",
+                    "symbol": f"pkg.symbol_{index}",
+                    "start_line": index + 1,
+                    "provider_ids": ["vulture-unused-static"],
+                    "reasons": [state],
+                }
+                for index, state in enumerate(states)
+            ],
+            "limitations": ["advisory_only"],
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert "CODE_UNUSED status=ready total=4" in output
+    for state in states:
+        assert f"{state}=1" in output
+        assert f"state={state}" in output
+    assert output.count("CODE_UNUSED_CANDIDATE ") == 4
+    assert "mutation_authority=0" in output
+    assert "CODE_UNUSED_CALIBRATION signature=calibration-v1" in output
+    assert "CODE_UNUSED_HOLDOUT signature=holdout-v1" in output
+    assert "CODE_UNUSED_LIMITATION advisory_only" in output
+
+
 def test_code_route_configuration_is_translated_without_eager_analyzers(
     tmp_path: Path,
 ) -> None:
@@ -126,6 +187,8 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert len(status["architecture"]["gates"]) == 3
     assert status["test_coverage"]["status"] == "abstained"
     assert status["test_coverage"]["reason"] == "code_state_missing"
+    assert status["unused_analysis"]["status"] == "abstained"
+    assert status["unused_analysis"]["mutation_authority"] is False
     assert doctor["kind"] == "code-doctor"
     assert doctor["schema"] == "not-initialized"
     assert set(doctor["external_evidence_providers"]) == set(provider_tool_versions())
@@ -143,6 +206,7 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert "CODE_ARCHITECTURE_SUMMARY status=not_evaluated" in human_status
     assert human_status.count("CODE_ARCHITECTURE_GATE ") == 3
     assert "CODE_COVERAGE status=abstained" in human_status
+    assert "CODE_UNUSED status=abstained total=0" in human_status
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
@@ -166,7 +230,7 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
-    assert payload["schema"] == "neocortex.code-review/v7"
+    assert payload["schema"] == "neocortex.code-review/v8"
     assert "neocortex.code-review/v3" in payload["compatible_schemas"]
     assert payload["compatible_schemas"] == [
         "neocortex.code-review/v2",
@@ -174,12 +238,13 @@ def test_code_review_abstains_without_initializing_absent_state(
         "neocortex.code-review/v4",
         "neocortex.code-review/v5",
         "neocortex.code-review/v6",
+        "neocortex.code-review/v7",
     ]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
     assert payload["actionability_version"] == "python-maintenance-actionability-v1"
     assert payload["recommendation_status"] == "not_evaluated"
-    assert payload["planning_version"] == "python-maintenance-work-packages-v3"
+    assert payload["planning_version"] == "python-maintenance-work-packages-v4"
     assert payload["work_package_status"] == "not_evaluated"
     assert payload["work_packages"] == []
     assert not (tmp_path / "code.sqlite3").exists()
