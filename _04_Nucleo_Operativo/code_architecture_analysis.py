@@ -2,7 +2,8 @@
 
 The provider tables are generic persistence.  This module is their first public
 consumer: it turns the three Hito 2 providers into one bounded, deterministic,
-and explicitly abstaining architecture view.
+and explicitly abstaining architecture view.  Hito 6 derives bounded graph
+reach, owner crossings, and named centrality from that same published graph.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_ARCHITECTURE_SCHEMA = "neocortex.code-architecture-analysis/v1"
+CODE_ARCHITECTURE_SCHEMA = "neocortex.code-architecture-analysis/v2"
 CODE_ARCHITECTURE_REQUIRED_PROVIDERS = (
     "complexipy-cognitive",
     "grimp-architecture",
@@ -35,6 +36,11 @@ CODE_ARCHITECTURE_RELATION_LIMIT = 250_000
 CODE_ARCHITECTURE_SYMBOL_LIMIT = 50_000
 CODE_ARCHITECTURE_IMPORT_CHAIN_LIMIT = 20
 CODE_ARCHITECTURE_IMPORT_CHAIN_DEPTH = 3
+CODE_ARCHITECTURE_REACHABILITY_LIMIT = 2_000
+CODE_ARCHITECTURE_CENTRALITY_FORMULA = (
+    "(distinct_direct_importers_excluding_self + "
+    "distinct_direct_dependencies_excluding_self) / (2 * (module_count - 1))"
+)
 
 ArchitectureStatus = Literal["ready", "abstained"]
 ArchitectureComparison = Literal["both", "ruff_only", "grimp_only"]
@@ -121,6 +127,16 @@ class ArchitectureModule:
     grimp_fan_out: int | None
     grimp_scc_size: int | None
     grimp_cycle_membership: bool | None
+    owner_id: str | None = None
+    dependency_reach: int = 0
+    dependency_reach_truncated: bool = False
+    dependency_owner_ids: tuple[str, ...] = ()
+    blast_radius: int = 0
+    blast_radius_truncated: bool = False
+    consumer_owner_ids: tuple[str, ...] = ()
+    directed_degree_centrality: float = 0.0
+    cross_owner_fan_in: int = 0
+    cross_owner_fan_out: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +271,20 @@ class _Relation:
     target_id: str
     confirmed: bool
     confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleGraphMetrics:
+    owner_id: str
+    dependency_reach: int
+    dependency_reach_truncated: bool
+    dependency_owner_ids: tuple[str, ...]
+    blast_radius: int
+    blast_radius_truncated: bool
+    consumer_owner_ids: tuple[str, ...]
+    directed_degree_centrality: float
+    cross_owner_fan_in: int
+    cross_owner_fan_out: int
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -744,6 +774,99 @@ def _module_indexes(
     return module_ids, fan_in, fan_out, cycles_by_module, contracts_by_module, symbol_counts
 
 
+def _module_owner(module_id: str) -> str:
+    """Return the deterministic owner label derived from the first dotted component."""
+
+    first, _, _ = module_id.partition(".")
+    return first or module_id
+
+
+def _bounded_reach(
+    module_id: str,
+    adjacency: Mapping[str, set[str]],
+    *,
+    limit: int,
+) -> tuple[frozenset[str], bool]:
+    """Return a deterministic transitive closure and whether it exceeded ``limit``."""
+
+    if limit < 1:
+        raise ValueError("architecture reachability limit must be positive")
+    seen = {module_id}
+    reached: set[str] = set()
+    queue = deque([module_id])
+    while queue:
+        source = queue.popleft()
+        for target in sorted(adjacency.get(source, set())):
+            if target in seen:
+                continue
+            if len(reached) >= limit:
+                return frozenset(reached), True
+            seen.add(target)
+            reached.add(target)
+            queue.append(target)
+    return frozenset(reached), False
+
+
+def _module_graph_metrics(
+    module_ids: set[str],
+    fan_in: Mapping[str, set[str]],
+    fan_out: Mapping[str, set[str]],
+    *,
+    reachability_limit: int,
+) -> dict[str, _ModuleGraphMetrics]:
+    module_count = len(module_ids)
+    denominator = 2 * (module_count - 1)
+    result: dict[str, _ModuleGraphMetrics] = {}
+    for module_id in sorted(module_ids):
+        owner_id = _module_owner(module_id)
+        direct_consumers = fan_in.get(module_id, set()) - {module_id}
+        direct_dependencies = fan_out.get(module_id, set()) - {module_id}
+        dependencies, dependencies_truncated = _bounded_reach(
+            module_id,
+            fan_out,
+            limit=reachability_limit,
+        )
+        consumers, consumers_truncated = _bounded_reach(
+            module_id,
+            fan_in,
+            limit=reachability_limit,
+        )
+        centrality = (
+            0.0
+            if denominator == 0
+            else round((len(direct_consumers) + len(direct_dependencies)) / denominator, 12)
+        )
+        result[module_id] = _ModuleGraphMetrics(
+            owner_id,
+            len(dependencies),
+            dependencies_truncated,
+            tuple(
+                sorted(
+                    {
+                        _module_owner(dependency)
+                        for dependency in dependencies
+                        if _module_owner(dependency) != owner_id
+                    }
+                )
+            ),
+            len(consumers),
+            consumers_truncated,
+            tuple(
+                sorted(
+                    {
+                        _module_owner(consumer)
+                        for consumer in consumers
+                        if _module_owner(consumer) != owner_id
+                    }
+                )
+            ),
+            centrality,
+            sum(_module_owner(consumer) != owner_id for consumer in direct_consumers),
+            sum(_module_owner(dependency) != owner_id for dependency in direct_dependencies),
+        )
+    return result
+
+
 def _modules(
     edges: tuple[ArchitectureImportEdge, ...],
     cycles: tuple[ArchitectureCycle, ...],
@@ -751,6 +874,8 @@ def _modules(
     complexities: dict[str, tuple[float | None, float | None]],
     symbols: tuple[ArchitectureSymbolComplexity, ...],
     grimp_metrics: dict[str, dict[str, int]],
+    *,
+    reachability_limit: int = CODE_ARCHITECTURE_REACHABILITY_LIMIT,
 ) -> tuple[ArchitectureModule, ...]:
     (
         module_ids,
@@ -760,6 +885,12 @@ def _modules(
         contracts_by_module,
         symbol_counts,
     ) = _module_indexes(edges, cycles, contracts, complexities, symbols, grimp_metrics)
+    graph_metrics = _module_graph_metrics(
+        module_ids,
+        fan_in,
+        fan_out,
+        reachability_limit=reachability_limit,
+    )
     return tuple(
         ArchitectureModule(
             module,
@@ -778,6 +909,16 @@ def _modules(
                 if "module_cycle_membership" not in grimp_metrics.get(module, {})
                 else bool(grimp_metrics[module]["module_cycle_membership"])
             ),
+            graph_metrics[module].owner_id,
+            graph_metrics[module].dependency_reach,
+            graph_metrics[module].dependency_reach_truncated,
+            graph_metrics[module].dependency_owner_ids,
+            graph_metrics[module].blast_radius,
+            graph_metrics[module].blast_radius_truncated,
+            graph_metrics[module].consumer_owner_ids,
+            graph_metrics[module].directed_degree_centrality,
+            graph_metrics[module].cross_owner_fan_in,
+            graph_metrics[module].cross_owner_fan_out,
         )
         for module in sorted(module_ids)
     )
@@ -897,8 +1038,9 @@ def read_code_architecture_analysis(
     analysis_run_id: int,
     *,
     database: str = "",
+    reachability_limit: int = CODE_ARCHITECTURE_REACHABILITY_LIMIT,
 ) -> CodeArchitectureAnalysis:
-    """Read Hito 2 providers from an already validated read-only connection."""
+    """Read providers and derive bounded graph analytics from a read-only connection."""
 
     try:
         evidence, provider_statuses = _provider_evidence(connection, analysis_run_id)
@@ -919,6 +1061,7 @@ def read_code_architecture_analysis(
             complexities,
             symbols,
             grimp_module_metrics,
+            reachability_limit=reachability_limit,
         )
         summary = _summary(modules, edges, cycles, grimp_run_metrics)
     except (sqlite3.Error, TypeError, ValueError) as exc:
@@ -943,6 +1086,10 @@ def read_code_architecture_analysis(
         "import_graph_is_static_and_does_not_observe_dynamic_imports",
         "ruff_grimp_disagreement_is_preserved_not_forced_to_consensus",
         "cognitive_complexity_is_a_tool_metric_not_defect_probability",
+        "module_owner_id_is_the_first_dotted_module_component_not_repository_ownership",
+        "directed_degree_centrality_formula:" + CODE_ARCHITECTURE_CENTRALITY_FORMULA,
+        f"transitive_reach_is_exact_until_module_limit:{reachability_limit}",
+        "truncated_transitive_reach_counts_are_lower_bounds",
         "architecture_evidence_is_advisory_and_has_no_mutation_authority",
     )
     return CodeArchitectureAnalysis(
@@ -1065,8 +1212,10 @@ def bounded_import_chains(
 
 
 __all__ = [
+    "CODE_ARCHITECTURE_CENTRALITY_FORMULA",
     "CODE_ARCHITECTURE_IMPORT_CHAIN_DEPTH",
     "CODE_ARCHITECTURE_IMPORT_CHAIN_LIMIT",
+    "CODE_ARCHITECTURE_REACHABILITY_LIMIT",
     "CODE_ARCHITECTURE_REQUIRED_PROVIDERS",
     "CODE_ARCHITECTURE_SCHEMA",
     "ArchitectureContract",

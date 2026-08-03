@@ -5,8 +5,11 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 from _04_Nucleo_Operativo.code_architecture_analysis import (
+    CODE_ARCHITECTURE_CENTRALITY_FORMULA,
+    CODE_ARCHITECTURE_REACHABILITY_LIMIT,
     read_code_architecture_analysis,
 )
 from _04_Nucleo_Operativo.code_external_evidence import ExternalEvidencePublication
@@ -103,12 +106,16 @@ def _publication(provider_id: str) -> ExternalProviderPublication:
             _relation(provider_id, "pkg.a", "pkg.b"),
             _relation(provider_id, "pkg.b", "pkg.a"),
             _relation(provider_id, "pkg.b", "pkg.c"),
+            _relation(provider_id, "pkg.c", "other.api"),
+            _relation(provider_id, "other.api", "third.worker"),
         )
     elif provider_id == "grimp-architecture":
         relations = (
             _relation(provider_id, "pkg.a", "pkg.b"),
             _relation(provider_id, "pkg.b", "pkg.a"),
             _relation(provider_id, "pkg.b", "pkg.d"),
+            _relation(provider_id, "pkg.c", "other.api"),
+            _relation(provider_id, "other.api", "third.worker"),
         )
         metrics = (
             _metric(
@@ -180,6 +187,20 @@ def _publication(provider_id: str) -> ExternalProviderPublication:
                 "pkg.b",
                 "module_cognitive_complexity_max",
                 12,
+            ),
+            _metric(
+                provider_id,
+                "module",
+                "solo.node",
+                "module_cognitive_complexity_total",
+                1,
+            ),
+            _metric(
+                provider_id,
+                "module",
+                "solo.node",
+                "module_cognitive_complexity_max",
+                1,
             ),
             _metric(
                 provider_id,
@@ -319,10 +340,67 @@ def test_architecture_analysis_is_ready_and_replay_exact(tmp_path: Path) -> None
     assert modules["pkg.a"].cognitive_complexity_total == 10
     assert modules["pkg.a"].fan_in == 1
     assert modules["pkg.b"].fan_out == 3
+    assert modules["pkg.a"].owner_id == "pkg"
+    assert modules["pkg.a"].dependency_reach == 5
+    assert modules["pkg.a"].dependency_reach_truncated is False
+    assert modules["pkg.a"].dependency_owner_ids == ("other", "third")
+    assert modules["third.worker"].blast_radius == 4
+    assert modules["third.worker"].consumer_owner_ids == ("other", "pkg")
+    assert modules["pkg.b"].directed_degree_centrality == 0.333333333333
+    assert modules["pkg.c"].cross_owner_fan_out == 1
+    assert modules["other.api"].cross_owner_fan_in == 1
+    assert modules["solo.node"].dependency_reach == 0
+    assert modules["solo.node"].blast_radius == 0
+    assert modules["solo.node"].directed_degree_centrality == 0.0
+    payload_modules = {
+        item["module_id"]: item
+        for item in cast(list[dict[str, object]], baseline.as_payload()["modules"])
+    }
+    assert payload_modules["pkg.a"]["dependency_reach"] == 5
+    assert payload_modules["pkg.a"]["owner_id"] == "pkg"
+    assert (
+        "directed_degree_centrality_formula:" + CODE_ARCHITECTURE_CENTRALITY_FORMULA
+        in baseline.limitations
+    )
+    assert (
+        f"transitive_reach_is_exact_until_module_limit:{CODE_ARCHITECTURE_REACHABILITY_LIMIT}"
+        in baseline.limitations
+    )
     assert baseline.symbols[0].symbol_id == "pkg.a:run:1:2"
     assert "pkg.a:run:1:2" not in modules
     assert all(item.execution == "cache_replay" for item in replay.providers)
     assert all(item.source_tool_run_id in {1, 2, 3} for item in replay.providers)
+
+
+def test_architecture_reachability_limit_is_deterministic_and_explicit(tmp_path: Path) -> None:
+    database = _database(tmp_path)
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    try:
+        first = read_code_architecture_analysis(
+            connection,
+            1,
+            database="fixture",
+            reachability_limit=2,
+        )
+        second = read_code_architecture_analysis(
+            connection,
+            1,
+            database="fixture",
+            reachability_limit=2,
+        )
+    finally:
+        connection.close()
+
+    assert first.digest_payload() == second.digest_payload()
+    modules = {item.module_id: item for item in first.modules}
+    assert modules["pkg.a"].dependency_reach == 2
+    assert modules["pkg.a"].dependency_reach_truncated is True
+    assert modules["third.worker"].blast_radius == 2
+    assert modules["third.worker"].blast_radius_truncated is True
+    assert modules["solo.node"].dependency_reach_truncated is False
+    assert modules["solo.node"].blast_radius_truncated is False
+    assert "transitive_reach_is_exact_until_module_limit:2" in first.limitations
 
 
 def test_architecture_analysis_abstains_when_provider_is_missing(tmp_path: Path) -> None:
