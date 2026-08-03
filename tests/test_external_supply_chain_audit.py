@@ -69,7 +69,8 @@ def _metric(
 
 
 def _pip_payload() -> bytes:
-    return (_FIXTURES / "pip_audit_vulnerabilities_v1.json").read_bytes()
+    dependencies = json.loads((_FIXTURES / "pip_audit_vulnerabilities_v1.json").read_text("utf-8"))
+    return json.dumps({"dependencies": dependencies, "fixes": []}).encode()
 
 
 def _install_fixture(tmp_path: Path) -> tuple[Path, Path, list[_FakeDistribution]]:
@@ -117,6 +118,7 @@ def test_pip_audit_is_bounded_no_fix_and_normalizes_advisories(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     observed_commands: list[tuple[str, ...]] = []
+    observed_scratch: list[Path] = []
 
     def run(arguments, **kwargs):
         command = tuple(arguments)
@@ -124,7 +126,14 @@ def test_pip_audit_is_bounded_no_fix_and_normalizes_advisories(
         assert kwargs["timeout_seconds"] == 180.0
         assert kwargs["stdout_limit_bytes"] == 8 * 1024 * 1024
         assert kwargs["stderr_limit_bytes"] == 128 * 1024
-        assert kwargs["environment"] == {"SAFE_SENTINEL": "1"}
+        cache_path = Path(command[command.index("--cache-dir") + 1])
+        assert kwargs["environment"]["SAFE_SENTINEL"] == "1"
+        assert kwargs["environment"]["HOME"] == str(cache_path.parent)
+        assert "PIP_AUDIT_FORMAT" not in kwargs["environment"]
+        if audit.os.name == "nt":
+            assert kwargs["environment"]["USERPROFILE"] == str(cache_path.parent)
+        observed_scratch.append(cache_path.parent)
+        assert cache_path.is_file()
         return subprocess.CompletedProcess(arguments, 1, _pip_payload(), b"2 vulnerabilities")
 
     monkeypatch.setattr(audit.importlib.metadata, "version", lambda _name: "2.10.0")
@@ -141,6 +150,8 @@ def test_pip_audit_is_bounded_no_fix_and_normalizes_advisories(
     assert command[command.index("--desc") + 1] == "off"
     assert command[command.index("--progress-spinner") + 1] == "off"
     assert command[command.index("--timeout") + 1] == "15"
+    assert not Path(command[command.index("--cache-dir") + 1]).exists()
+    assert observed_scratch and not observed_scratch[0].exists()
     assert "--fix" not in command
     assert result.counters == audit.PipAuditCounters(3, 2, 1, 1, 2, 2)
     assert result.uses_network is True
@@ -169,7 +180,12 @@ def test_pip_audit_accepts_clean_exit_and_rejects_failure_and_bounds(
     monkeypatch.setattr(
         audit,
         "run_bounded_capture",
-        lambda arguments, **_kwargs: subprocess.CompletedProcess(arguments, 0, b"[]", b""),
+        lambda arguments, **_kwargs: subprocess.CompletedProcess(
+            arguments,
+            0,
+            b'{"dependencies": [], "fixes": []}',
+            b"",
+        ),
     )
     clean = audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
     assert clean.counters.vulnerabilities == 0
@@ -178,16 +194,24 @@ def test_pip_audit_accepts_clean_exit_and_rejects_failure_and_bounds(
     monkeypatch.setattr(
         audit,
         "run_bounded_capture",
-        lambda arguments, **_kwargs: subprocess.CompletedProcess(arguments, 2, b"[]", b"bad"),
+        lambda arguments, **_kwargs: subprocess.CompletedProcess(
+            arguments,
+            2,
+            b'{"dependencies": [], "fixes": []}',
+            b"bad",
+        ),
     )
     with pytest.raises(ValueError, match="unexpected_exit:2"):
         audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
 
     payload = json.dumps(
-        [
-            {"name": "first", "version": "1", "vulns": []},
-            {"name": "second", "version": "1", "vulns": []},
-        ]
+        {
+            "dependencies": [
+                {"name": "first", "version": "1", "vulns": []},
+                {"name": "second", "version": "1", "vulns": []},
+            ],
+            "fixes": [],
+        }
     ).encode()
     monkeypatch.setattr(audit, "_MAX_AUDIT_PACKAGES", 1)
     monkeypatch.setattr(
@@ -197,6 +221,77 @@ def test_pip_audit_accepts_clean_exit_and_rejects_failure_and_bounds(
     )
     with pytest.raises(ValueError, match="package count"):
         audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
+
+
+def test_pip_audit_rejects_failed_exit_one_schema_drift_and_fix_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(audit.importlib.metadata, "version", lambda _name: "2.10.1")
+    monkeypatch.setattr(
+        audit,
+        "run_bounded_capture",
+        lambda arguments, **_kwargs: subprocess.CompletedProcess(
+            arguments,
+            1,
+            b"",
+            b"fatal cache initialization",
+        ),
+    )
+    with pytest.raises(ValueError, match="unexpected_exit:1:fatal cache initialization"):
+        audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
+
+    invalid_payloads = (
+        b"[]",
+        b'{"dependencies": [], "fixes": [], "future": true}',
+        b'{"dependencies": [], "fixes": [{"name": "changed"}]}',
+    )
+    for payload in invalid_payloads:
+        monkeypatch.setattr(
+            audit,
+            "run_bounded_capture",
+            lambda arguments, _payload=payload, **_kwargs: subprocess.CompletedProcess(
+                arguments,
+                0,
+                _payload,
+                b"",
+            ),
+        )
+        with pytest.raises(ValueError):
+            audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
+
+
+def test_pip_audit_exit_status_must_match_vulnerability_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(audit.importlib.metadata, "version", lambda _name: "2.10.1")
+    clean = b'{"dependencies": [], "fixes": []}'
+    vulnerable = json.dumps(
+        {
+            "dependencies": [
+                {
+                    "name": "demo",
+                    "version": "1",
+                    "vulns": [{"id": "PYSEC-1", "aliases": [], "fix_versions": []}],
+                }
+            ],
+            "fixes": [],
+        }
+    ).encode()
+    for returncode, payload in ((1, clean), (0, vulnerable)):
+        monkeypatch.setattr(
+            audit,
+            "run_bounded_capture",
+            lambda arguments, _returncode=returncode, _payload=payload, **_kwargs: (
+                subprocess.CompletedProcess(
+                    arguments,
+                    _returncode,
+                    _payload,
+                    b"",
+                )
+            ),
+        )
+        with pytest.raises(ValueError, match="exit status disagrees"):
+            audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
 
 
 def test_installed_inventory_correlates_pyproject_licenses_requirements_and_record(

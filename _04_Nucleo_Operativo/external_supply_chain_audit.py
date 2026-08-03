@@ -18,7 +18,9 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
+import tempfile
 import tomllib
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -361,7 +363,37 @@ def _pip_audit_payload(raw: bytes) -> list[object]:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("pip-audit JSON output is malformed") from exc
-    return _required_list(payload, label="pip-audit output")
+    envelope = _required_mapping(payload, label="pip-audit output")
+    if set(envelope) != {"dependencies", "fixes"}:
+        raise ValueError("pip-audit JSON output has an unsupported schema")
+    fixes = _required_list(envelope.get("fixes"), label="pip-audit fixes")
+    if fixes:
+        raise ValueError("pip-audit output reports applied fixes")
+    return _required_list(envelope.get("dependencies"), label="pip-audit dependencies")
+
+
+def _pip_audit_cache_parent(environment: Mapping[str, str]) -> Path:
+    normalized = {str(key).casefold(): str(value) for key, value in environment.items()}
+    configured = next(
+        (normalized[name] for name in ("temp", "tmp", "tmpdir") if normalized.get(name)),
+        None,
+    )
+    selected = Path(tempfile.gettempdir()) if configured is None else Path(configured)
+    try:
+        parent = selected.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("pip-audit cache parent cannot be resolved") from exc
+    if not parent.is_dir():
+        raise ValueError("pip-audit cache parent is not a directory")
+    return parent
+
+
+def _pip_audit_exit_error(completed: subprocess.CompletedProcess[bytes]) -> ValueError:
+    detail = " ".join(
+        (completed.stderr or completed.stdout).decode("utf-8", errors="replace").split()
+    )[:2048]
+    message = f"pip_audit_unexpected_exit:{completed.returncode}"
+    return ValueError(message if not detail else f"{message}:{detail}")
 
 
 def _bounded_text_list(value: object, *, label: str, maximum_items: int) -> tuple[str, ...]:
@@ -383,39 +415,59 @@ def execute_pip_audit_known_vulnerabilities(
     if not 60 <= freshness_seconds <= 7 * 24 * 60 * 60:
         raise ValueError("pip-audit freshness window is outside its bound")
     tool_version = _pip_audit_version()
-    command = (
-        sys.executable,
-        "-m",
-        "pip_audit",
-        "--format",
-        "json",
-        "--vulnerability-service",
-        PIP_AUDIT_SERVICE,
-        "--aliases",
-        "on",
-        "--desc",
-        "off",
-        "--progress-spinner",
-        "off",
-        "--timeout",
-        str(_PIP_AUDIT_SOCKET_TIMEOUT_SECONDS),
-    )
-    completed = run_bounded_capture(
-        command,
-        timeout_seconds=_PIP_AUDIT_TIMEOUT_SECONDS,
-        stdout_limit_bytes=_PIP_AUDIT_STDOUT_LIMIT_BYTES,
-        stderr_limit_bytes=_PIP_AUDIT_STDERR_LIMIT_BYTES,
-        environment=_pip_audit_environment(environment),
-        memory_limit_bytes=_PIP_AUDIT_MEMORY_LIMIT_BYTES if os.name == "nt" else None,
-    )
+    cache_parent = _pip_audit_cache_parent(environment)
+    with tempfile.TemporaryDirectory(
+        prefix="neocortex-pip-audit-",
+        dir=cache_parent,
+    ) as temporary:
+        # pip-audit otherwise writes its implicit cache below the user's
+        # LOCALAPPDATA. A file path deliberately disables that HTTP cache: the
+        # first bounded run remains a fresh network snapshot, while NeoCortex's
+        # own publication replay is the durable cache and performs no network
+        # call. Using a file also avoids leaving child-created cache entries
+        # that a constrained Windows runner cannot remove.
+        cache_sentinel = Path(temporary) / "http-cache-disabled"
+        cache_sentinel.write_bytes(b"")
+        command = (
+            sys.executable,
+            "-m",
+            "pip_audit",
+            "--format",
+            "json",
+            "--vulnerability-service",
+            PIP_AUDIT_SERVICE,
+            "--aliases",
+            "on",
+            "--desc",
+            "off",
+            "--progress-spinner",
+            "off",
+            "--timeout",
+            str(_PIP_AUDIT_SOCKET_TIMEOUT_SECONDS),
+            "--cache-dir",
+            str(cache_sentinel),
+        )
+        completed = run_bounded_capture(
+            command,
+            timeout_seconds=_PIP_AUDIT_TIMEOUT_SECONDS,
+            stdout_limit_bytes=_PIP_AUDIT_STDOUT_LIMIT_BYTES,
+            stderr_limit_bytes=_PIP_AUDIT_STDERR_LIMIT_BYTES,
+            environment={
+                **_pip_audit_environment(environment),
+                "HOME": temporary,
+                **({"USERPROFILE": temporary} if os.name == "nt" else {}),
+            },
+            memory_limit_bytes=_PIP_AUDIT_MEMORY_LIMIT_BYTES if os.name == "nt" else None,
+        )
     if completed.returncode not in {0, 1}:
-        detail = " ".join(
-            (completed.stderr or completed.stdout).decode("utf-8", errors="replace").split()
-        )[:2048]
-        message = f"pip_audit_unexpected_exit:{completed.returncode}"
-        raise ValueError(message if not detail else f"{message}:{detail}")
+        raise _pip_audit_exit_error(completed)
 
-    payload = _pip_audit_payload(completed.stdout)
+    try:
+        payload = _pip_audit_payload(completed.stdout)
+    except ValueError as exc:
+        if completed.returncode == 1:
+            raise _pip_audit_exit_error(completed) from exc
+        raise
     if len(payload) > _MAX_AUDIT_PACKAGES:
         raise ValueError("pip-audit package count exceeds its bound")
     observed = _observation_time(observed_at)
@@ -560,6 +612,9 @@ def execute_pip_audit_known_vulnerabilities(
                     metadata={**evidence_metadata, "category": "known_vulnerability"},
                 )
             )
+
+    if (completed.returncode == 1) != (vulnerability_count > 0):
+        raise ValueError("pip-audit exit status disagrees with vulnerability payload")
 
     summary_key = "project:installed-environment"
     summary_values = (
