@@ -237,6 +237,38 @@ def test_normalizes_canonical_metrics_context_relations_and_missing_ranges(
         if metric.subject_kind in {"file", "module", "symbol"}
     }
     assert observed == canonical
+    expected_coverage = {
+        "executable_lines": 4.0,
+        "covered_lines": 3.0,
+        "missing_lines": 1.0,
+        "line_coverage_percent": 75.0,
+        "branch_exits": 2.0,
+        "covered_branch_exits": 1.0,
+        "missing_branch_exits": 1.0,
+        "branch_coverage_percent": 50.0,
+    }
+    for subject_kind in ("file", "module", "symbol"):
+        assert {
+            metric.metric_name: metric.value
+            for metric in result.metrics
+            if metric.subject_kind == subject_kind
+        } == expected_coverage
+    run_metrics = {
+        metric.metric_name: metric.value
+        for metric in result.metrics
+        if metric.subject_kind == "run"
+    }
+    assert run_metrics == {
+        **expected_coverage,
+        "tests_collected": 3.0,
+        "tests_selected": 3.0,
+        "tests_passed": 3.0,
+        "tests_failed": 0.0,
+        "tests_skipped": 0.0,
+        "shards_total": 2.0,
+        "shards_reused": 0.0,
+    }
+    assert len(result.metrics) == 39
     file_metric = next(
         item
         for item in result.metrics
@@ -260,6 +292,14 @@ def test_normalizes_canonical_metrics_context_relations_and_missing_ranges(
     assert relation.metadata["qualified_name"] == "_04_Nucleo_Operativo.logic.choose"
     assert relation.metadata["start_line"] == 1
     assert relation.metadata["end_line"] == 4
+    for relation in result.relations:
+        test_nodeids = relation.metadata["test_nodeids"]
+        assert isinstance(test_nodeids, list)
+        assert len(test_nodeids) == 1
+        nodeid = test_nodeids[0]
+        assert isinstance(nodeid, str)
+        assert relation.metadata["lines"] == [1, 2, 3]
+        assert relation.metadata["contexts"] == [f"{nodeid}|call"]
     assert result.findings == ()
 
 

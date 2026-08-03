@@ -21,16 +21,19 @@ from _04_Nucleo_Operativo.external_evidence_models import (
     ExternalRunInput,
     ProviderDescriptor,
     ProviderLimits,
+    external_finding_identity,
     external_findings_digest,
     external_metric_identity,
     external_provider_result_digest,
     external_relation_identity,
+    external_signature,
 )
 from _04_Nucleo_Operativo.external_evidence_store import (
     publish_external_provider,
     read_external_evidence_suite,
     read_external_provider_baselines,
     read_external_provider_evidence,
+    read_external_provider_finding_ids,
 )
 
 
@@ -206,6 +209,52 @@ def _full_publication_with_finding(provider_id: str) -> ExternalProviderPublicat
     )
 
 
+def _legacy_pyright_publication(stage_root: str) -> ExternalProviderPublication:
+    provider_id = "pyright-trusted-project"
+    message = f"Cycle detected in import chain\n  {stage_root}/a.py"
+    finding = ExternalProviderFinding(
+        external_signature(
+            "external-finding-v1",
+            {
+                "provider_id": provider_id,
+                "path": "a.py",
+                "category": "typing",
+                "code": "reportImportCycles",
+                "message": message,
+                "start_line": 1,
+                "start_column": 0,
+                "end_line": 1,
+                "end_column": 0,
+            },
+        ),
+        1,
+        "a.py",
+        "typing",
+        "reportImportCycles",
+        "warning",
+        message,
+        True,
+        1.0,
+        None,
+        "advisory",
+        1,
+        0,
+        1,
+        0,
+    )
+    base = _full_publication(provider_id)
+    return replace(
+        base,
+        findings=(finding,),
+        counters={**base.counters, "findings": 1},
+        result_digest=external_provider_result_digest(
+            (finding,),
+            base.metrics,
+            base.relations,
+        ),
+    )
+
+
 def _replay_publication(
     source: ExternalProviderPublication,
     source_tool_run_id: int,
@@ -336,6 +385,62 @@ def test_v1_digest_and_hito1_publication_constructor_remain_exact() -> None:
     assert publication.metrics == ()
     assert publication.relations == ()
     assert external_provider_result_digest(publication.findings) == digest
+
+
+def test_legacy_pyright_stage_paths_read_as_one_portable_identity(tmp_path: Path) -> None:
+    database = tmp_path / "pyright-portable-identity.sqlite3"
+    _create_current_owner(database, 1, 2)
+    first = _legacy_pyright_publication(
+        "C:/lab/first/neocortex-pyright-trusted-project-alpha/source"
+    )
+    second = _legacy_pyright_publication(
+        "C:/lab/second/neocortex-pyright-trusted-project-beta/source"
+    )
+    connection = code_schema.connect_code_state(database, create=False)
+    try:
+        publish_external_provider(connection, 1, first)
+        publish_external_provider(connection, 2, second)
+        raw_ids = tuple(
+            str(row[0])
+            for row in connection.execute(
+                """SELECT portable_finding_id FROM external_findings
+                ORDER BY tool_run_id"""
+            )
+        )
+        first_ids = read_external_provider_finding_ids(connection, 1)
+        second_ids = read_external_provider_finding_ids(connection, 2)
+        exact, comparable = read_external_provider_baselines(
+            connection,
+            provider_id="pyright-trusted-project",
+            profile="protected",
+            tool_version="1.0",
+            configuration_signature="fixture-configuration",
+            environment_signature="fixture-environment",
+            root_identity="fixture-root",
+            input_signature="fixture-input",
+            comparability_signature=("fixture-comparability:pyright-trusted-project"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    expected = external_finding_identity(
+        "pyright-trusted-project",
+        relative_path="a.py",
+        category="typing",
+        code="reportImportCycles",
+        message=first.findings[0].message,
+        start_line=1,
+        start_column=0,
+        end_line=1,
+        end_column=0,
+    )
+    assert raw_ids[0] != raw_ids[1]
+    assert first_ids["pyright-trusted-project"] == frozenset({expected})
+    assert second_ids["pyright-trusted-project"] == frozenset({expected})
+    assert exact is not None
+    assert comparable is not None
+    assert exact.portable_finding_ids == comparable.portable_finding_ids == (expected,)
 
 
 def test_terminal_non_replay_skip_is_publicly_abstained_but_replay_remains_ready(

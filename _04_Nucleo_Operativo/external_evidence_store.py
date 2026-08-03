@@ -26,6 +26,7 @@ from .external_evidence_models import (
     ExternalSubjectKind,
     ProviderGateEvaluation,
     TypeConsensusSummary,
+    external_finding_identity,
     external_provider_result_digest,
 )
 from .semantic_models import canonical_json
@@ -37,6 +38,39 @@ _RELATION_LIMIT = 250_000
 _COUNTER_LIMIT = 128
 _ProviderStatusGate = Literal["passed", "failed", "baseline", "not_evaluated"]
 _SuiteStatus = Literal["ready", "partial", "abstained", "not_recorded"]
+
+
+def _portable_finding_ids(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    provider_id: str,
+) -> tuple[str, ...]:
+    if provider_id != "pyright-trusted-project":
+        rows = connection.execute(
+            """SELECT portable_finding_id FROM external_findings
+            WHERE tool_run_id=? ORDER BY portable_finding_id LIMIT ?""",
+            (tool_run_id, _FINDING_LIMIT + 1),
+        ).fetchall()
+        if len(rows) > _FINDING_LIMIT:
+            raise ValueError("external provider identities exceed their bound")
+        return tuple(str(item[0]) for item in rows)
+    findings = _normalized_provider_findings(connection, tool_run_id)
+    return tuple(
+        sorted(
+            external_finding_identity(
+                provider_id,
+                relative_path=item.relative_path,
+                category=item.category,
+                code=item.code,
+                message=item.message,
+                start_line=item.start_line,
+                start_column=item.start_column,
+                end_line=item.end_line,
+                end_column=item.end_column,
+            )
+            for item in findings
+        )
+    )
 
 
 def _lastrowid(cursor: sqlite3.Cursor) -> int:
@@ -560,13 +594,10 @@ def read_external_provider_baselines(
         digest = row["result_digest"]
         if not isinstance(digest, str):
             continue
-        ids = tuple(
-            str(item[0])
-            for item in connection.execute(
-                """SELECT portable_finding_id FROM external_findings
-                WHERE tool_run_id=? ORDER BY portable_finding_id""",
-                (int(row["tool_run_id"]),),
-            ).fetchall()
+        ids = _portable_finding_ids(
+            connection,
+            int(row["tool_run_id"]),
+            str(row["provider_id"]),
         )
         metric_ids = tuple(
             str(item[0])
@@ -1341,14 +1372,7 @@ def read_external_provider_finding_ids(
                 result[provider_id] = frozenset()
                 continue
             effective = int(replay["source_tool_run_id"])
-        ids = connection.execute(
-            """SELECT portable_finding_id FROM external_findings
-            WHERE tool_run_id=? ORDER BY portable_finding_id LIMIT ?""",
-            (effective, _FINDING_LIMIT + 1),
-        ).fetchall()
-        if len(ids) > _FINDING_LIMIT:
-            raise ValueError("external provider identities exceed their bound")
-        result[provider_id] = frozenset(str(item[0]) for item in ids)
+        result[provider_id] = frozenset(_portable_finding_ids(connection, effective, provider_id))
     return result
 
 

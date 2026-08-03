@@ -1,13 +1,61 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 7 aceptado y publicado mediante el PR #20.
+> Actualizado: 2026-08-03, work package `_normalize` aceptado en candidato.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-Los Hitos 1 a 7 están publicados mediante los PR #14 a #20. El candidato
+El candidato `codex/neocortex-normalize-work-package` cerró el work package
+publicado para `_04_Nucleo_Operativo.external_deep_coverage` /
+`external_deep_coverage._normalize`. El coordinador pasó de complejidad
+cognitiva 124 a 0; el módulo bajó 331→288. El diff elimina exactamente ese
+hotspot, reduce high-complexity 258→257 y long-function 28→27, no añade
+hotspots y aprueba contratos, ciclos y `module_complexity_not_displaced`.
+
+El corte también corrigió un defecto encontrado por el propio autoanálisis:
+Pyright incluía el scratch `neocortex-pyright-trusted-project-*` en mensajes e
+identidades que debían ser portátiles. El productor ahora publica `<project>`
+y la lectura normaliza publicaciones antiguas sin migrarlas. Dos regresiones
+prueban productor, baseline y diff; la barrera integrada de plataforma,
+persistencia v4 y publication diff aprobó `36 passed`. La barrera previa del
+objetivo aprobó `8 passed` antes y después, y la integración afectada obtuvo
+`121 passed, 1 skipped`; Ruff/format y Mypy focal están limpios.
+
+El wheel final tiene 1 591 588 bytes, 298 miembros, `ZipFile.testzip()` y
+`pip check` limpios, y SHA-256
+`FC86A4CC777ECED846EFC6B8BE8601442594A2183D178B9605CCC8097739B300`.
+Los cuatro módulos decisivos son byte-idénticos entre fuente, wheel e
+instalación aislada. No se promovió el launcher estable.
+
+La corrida instalada 19 inventarió 605 archivos y evaluó 592 candidatos:
+procesó 1, reutilizó 591, publicó 18 480 símbolos, 98 750 referencias, 513
+diagnósticos Code y 1 580 externos, sin errores. Duró 295.628 s; la ruta
+externa ocupó 254.112 s. El replay 20 terminó en 31.459 s con 592/592 hits,
+cero bytes y cero tiempo de read/analyze/persist/graph, catorce proveedores
+desde caché, 2.848 s externos y cero errores.
+
+Status, review y diff instalados terminaron en 33.717, 41.260 y 71.102 s,
+respectivamente, con JSON válido, stderr vacío y sin sidecars. Review está
+`ready`, digest `87df971ce74328f91c7adf74a7ac1ef5`, y publica como siguiente paquete
+`_04_Nucleo_Operativo.cli_validation` /
+`cli_validation.apply_self_analysis_preset`.
+
+El diff v8 contra Hito 7 está `ready`, digest
+`60b197dce0f0cb7875ecd2a0a1658efd`, con veredicto `mixed` únicamente porque
+las identidades exactas cuentan 3+3 relocalizaciones Mypy y 4+4 Pyright. Los
+totales permanecen 449/449 y 751/751; una comparación SQLite `immutable`
+normalizada obtuvo 198/198 y 366/366 grupos semánticos con cero diferencias.
+Por tanto no hay finding tipado semántico nuevo, pero publication diff todavía
+no expresa `relocated` como delta separado. Coverage y Mutation no son
+comparables porque cambió su alcance medido; el gate actual de mutación está
+`passed`. Supply chain, Semgrep, dependencias, vulnerabilidades, integridad y
+licencias conservan deltas cero; sus fallos preexistentes no son atribuibles a
+este refactor, que no cambió declaraciones ni paquetes.
+
+Los Hitos 1 a 7 están publicados mediante los PR #14 a #20. Como línea base del
+corte, el candidato
 `codex/neocortex-self-analysis-integration-v1` cerró la aceptación instalada y
 publicación del **Hito 7**, y con ello el programa multianalizador completo.
 `Neocortex --code-query` consume status, review y diff publicados y filtra por
@@ -16,7 +64,7 @@ proveedor, categoría, módulo, estado, delta y work package. Su schema es
 `defect_probability=null`, `authority=advisory` y
 `mutation_authority=false`.
 
-El wheel candidato está en
+El wheel de la línea base Hito 7 está en
 `C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito7-integration-20260803-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
 Tiene 1 589 930 bytes, 298 miembros, integridad ZIP y `pip check` limpios, y
 SHA-256
@@ -57,10 +105,9 @@ uso dinámico posible, 194 insuficientes y 0 de consenso alto.
 
 Permanecen visibles 3 findings Deptry, 3 advisories actuales de `mcp`, 157
 findings Ruff trusted y la deuda SQLite `journal_mode=delete`. Sus gates fallidos
-o no evaluados no se ocultan. El único work package vigente sigue siendo
-`_04_Nucleo_Operativo.external_deep_coverage` /
-`external_deep_coverage._normalize`, con siete pruebas, quince cadenas de import
-y gates de arquitectura, Coverage, tipos, mutación y supply chain.
+o no evaluados no se ocultan. En esa línea base el paquete vigente era
+`external_deep_coverage._normalize`; el candidato actual ya lo cerró y publicó
+`cli_validation.apply_self_analysis_preset` como sucesor.
 
 El workflow `Neocortex CI` separa carriles Windows/Python 3.13 `fast`,
 `standard` y `deep`; standard construye e instala el wheel, y deep permanece
@@ -1300,12 +1347,18 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Usar el work package publicado.** Caracterizar y reducir
-   `external_deep_coverage._normalize`, preservar sus siete pruebas y gates, y
-   cerrar el cambio con un único replay/diff comparable. Reconciliar antes los
-   gates Deptry/pip-audit o declarar su no aplicabilidad con evidencia.
-2. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
-   33-66 s; una proyección publicada de consultas es trabajo futuro justificable,
+1. **Evitar el falso churn antes del siguiente refactor.** Extender publication
+   diff para clasificar findings tipados relocalizados sin perder ruta, mensaje,
+   multiplicidad ni posición exacta. Las relocalizaciones no deben disparar
+   `added/resolved` ni un veredicto `mixed`; los cambios semánticos reales deben
+   seguir fallando el gate.
+2. **Usar el siguiente work package publicado.** Caracterizar y reducir
+   `cli_validation.apply_self_analysis_preset` con sus pruebas CLI/self-analysis
+   existentes. El selector deep actual protege Coverage, no ese objetivo: elegir
+   primero los node ids reales que lo ejercitan y conservar preset, argv y
+   compatibilidad pública exactos.
+3. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
+   34-71 s; una proyección publicada de consultas es trabajo futuro justificable,
    pero no invalida la entrega funcional actual.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de

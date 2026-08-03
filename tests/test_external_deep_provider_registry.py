@@ -415,7 +415,7 @@ def test_suite_profile_priority_is_deep_over_static_and_protected(
             gate="baseline",
             content_executed=row["profile"] == "trusted-deep",
         )
-        return status, ()
+        return status, (), 1, (), ()
 
     monkeypatch.setattr(store_module, "_provider_status", provider_status)
 
