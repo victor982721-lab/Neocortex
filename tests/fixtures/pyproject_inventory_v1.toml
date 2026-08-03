@@ -2,7 +2,10 @@
 name = "neocortex-framework"
 dynamic = ["version"]
 dependencies = [
-    "demo-dep>=1,<2",
+    "demo-dep>=1,<2; python_version >= '3.0'",
+    "missing-dep>=1; python_version >= '3.0'",
+    "mismatch-dep>=2; python_version >= '3.0'",
+    "ignored-dep>=99; python_version < '1.0'",
 ]
 
 [project.optional-dependencies]

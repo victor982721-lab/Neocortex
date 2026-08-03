@@ -104,7 +104,13 @@ def _install_fixture(tmp_path: Path) -> tuple[Path, Path, list[_FakeDistribution
         version="1.5",
         license_text="BSD-3-Clause",
     )
-    return install_root, package_file, [framework, dependency]
+    mismatch = _FakeDistribution(
+        site_packages,
+        name="mismatch-dep",
+        version="1.5",
+        license_expression="Apache-2.0",
+    )
+    return install_root, package_file, [framework, dependency, mismatch]
 
 
 def test_pip_audit_is_bounded_no_fix_and_normalizes_advisories(
@@ -204,10 +210,13 @@ def test_installed_inventory_correlates_pyproject_licenses_requirements_and_reco
         observed_at=_OBSERVED,
     )
 
-    assert result.counters.distributions == 2
-    assert result.counters.pyproject_required_dependencies == 1
-    assert result.counters.pyproject_required_dependencies_installed == 1
-    assert result.counters.pyproject_required_dependencies_missing == 0
+    assert result.counters.distributions == 3
+    assert result.counters.pyproject_required_dependencies == 4
+    assert result.counters.pyproject_required_dependencies_applicable == 3
+    assert result.counters.pyproject_required_dependencies_installed == 2
+    assert result.counters.pyproject_required_dependencies_missing == 1
+    assert result.counters.pyproject_required_dependencies_version_compatible == 1
+    assert result.counters.pyproject_required_dependencies_version_mismatch == 1
     assert result.counters.pyproject_optional_dependencies == 1
     assert result.counters.record_hash_verified == 1
     assert result.counters.record_size_verified == 1
@@ -244,7 +253,80 @@ def test_installed_inventory_correlates_pyproject_licenses_requirements_and_reco
         and item.target_key == "package:demo-dep"
     )
     assert dependency.metadata["target_installed"] is True
-    assert dependency.metadata["version_constraint_evaluated"] is False
+    demo_evaluation = dependency.metadata["base_dependency_evaluations"][0]
+    assert demo_evaluation["marker_evaluated"] is True
+    assert demo_evaluation["marker_applies"] is True
+    assert demo_evaluation["presence_gate_evaluated"] is True
+    assert demo_evaluation["version_constraint_evaluated"] is True
+    assert demo_evaluation["version_compatible"] is True
+    assert demo_evaluation["installed_version"] == "1.5"
+    assert demo_evaluation["marker_environment"]["python_version"] == "3.13"
+
+
+def test_base_dependency_gates_exclude_false_markers_and_optional_extras(
+    tmp_path: Path,
+) -> None:
+    install_root, _package_file, distributions = _install_fixture(tmp_path)
+    result = audit.execute_installed_package_inventory(
+        _FIXTURES / "pyproject_inventory_v1.toml",
+        distributions=distributions,
+        installation_root=install_root,
+        observed_at=_OBSERVED,
+    )
+
+    assert (
+        _metric(
+            result,
+            "project:installed-environment",
+            "pyproject_required_applicable_dependency_count",
+        ).value
+        == 3
+    )
+    assert (
+        _metric(
+            result,
+            "project:installed-environment",
+            "pyproject_required_missing_dependency_count",
+        ).value
+        == 1
+    )
+    assert (
+        _metric(
+            result,
+            "project:installed-environment",
+            "pyproject_required_version_mismatch_count",
+        ).value
+        == 1
+    )
+    ignored = next(
+        item
+        for item in result.relations
+        if item.relation_kind == "project_declares_dependency"
+        and item.target_key == "package:ignored-dep"
+    )
+    ignored_evaluation = ignored.metadata["base_dependency_evaluations"][0]
+    assert ignored_evaluation["marker_applies"] is False
+    assert ignored_evaluation["presence_gate_evaluated"] is False
+    assert ignored_evaluation["version_constraint_evaluated"] is False
+    assert ignored_evaluation["version_compatible"] is None
+    mismatch = next(
+        item
+        for item in result.relations
+        if item.relation_kind == "project_declares_dependency"
+        and item.target_key == "package:mismatch-dep"
+    )
+    assert mismatch.metadata["base_dependency_evaluations"][0]["version_compatible"] is False
+    optional = next(
+        item
+        for item in result.relations
+        if item.relation_kind == "project_declares_dependency"
+        and item.target_key == "package:optional-extra"
+    )
+    optional_metadata = optional.metadata["optional_declarations"][0]
+    assert optional_metadata["extra_group_selected"] is False
+    assert optional_metadata["presence_gate_evaluated"] is False
+    assert optional_metadata["version_constraint_evaluated"] is False
+    assert all("recorded_not_evaluated" not in item for item in result.limitations)
 
 
 def test_installed_inventory_detects_altered_record_member_and_changes_snapshot(

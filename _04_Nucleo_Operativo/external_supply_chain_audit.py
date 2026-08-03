@@ -27,6 +27,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
+from packaging.markers import default_environment
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.version import InvalidVersion, Version
+
 from .bounded_subprocess import run_bounded_capture
 from .external_evidence_models import (
     ExternalProviderMetric,
@@ -81,7 +85,8 @@ _PIP_AUDIT_LIMITATIONS = (
     "advisory_only_no_fix_or_mutation_authority",
 )
 _INVENTORY_LIMITATIONS = (
-    "requirement_markers_and_version_constraints_are_recorded_not_evaluated",
+    "optional_extra_and_transitive_requirement_constraints_are_recorded_not_gated",
+    "base_direct_url_origin_is_recorded_not_verified",
     "license_metadata_is_inventory_not_legal_compatibility_analysis",
     "multiple_license_declarations_remain_explicitly_ambiguous",
     "record_verification_cannot_detect_files_omitted_from_record_without_enumeration",
@@ -124,8 +129,11 @@ class InstalledPackageCounters:
     distributions: int
     requirement_relations: int
     pyproject_required_dependencies: int
+    pyproject_required_dependencies_applicable: int
     pyproject_required_dependencies_installed: int
     pyproject_required_dependencies_missing: int
+    pyproject_required_dependencies_version_compatible: int
+    pyproject_required_dependencies_version_mismatch: int
     pyproject_optional_dependencies: int
     packages_with_license_metadata: int
     packages_with_ambiguous_license_metadata: int
@@ -165,6 +173,29 @@ class _LicenseDeclaration:
     value_sha256: str
     excerpt: str
     truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectRequirement:
+    group: str
+    raw: str
+    target: str
+    specifier: str
+    marker: str | None
+    requested_extras: tuple[str, ...]
+    direct_url: str | None
+    marker_evaluated: bool
+    marker_applies: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class _BaseDependencyEvaluation:
+    declaration: _ProjectRequirement
+    target_installed: bool
+    installed_version: str | None
+    presence_gate_evaluated: bool
+    version_constraint_evaluated: bool
+    version_compatible: bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -611,9 +642,40 @@ def _requirement_name(requirement: str) -> str:
     return _normalized_package_name(match.group(1), label="requirement name")
 
 
+def _parse_project_requirement(
+    raw: object,
+    *,
+    group: str,
+    marker_environment: Mapping[str, str],
+) -> _ProjectRequirement:
+    text = _required_text(raw, label="pyproject dependency")
+    try:
+        parsed = Requirement(text)
+    except InvalidRequirement as exc:
+        raise ValueError("pyproject dependency is not a valid PEP 508 requirement") from exc
+    marker = None if parsed.marker is None else str(parsed.marker)
+    marker_evaluated = group == "required"
+    marker_applies = (
+        None
+        if not marker_evaluated
+        else parsed.marker is None or parsed.marker.evaluate(environment=dict(marker_environment))
+    )
+    return _ProjectRequirement(
+        group,
+        text,
+        _normalized_package_name(parsed.name, label="pyproject dependency name"),
+        str(parsed.specifier),
+        marker,
+        tuple(sorted(parsed.extras)),
+        parsed.url,
+        marker_evaluated,
+        marker_applies,
+    )
+
+
 def _project_metadata(
     pyproject_path: Path,
-) -> tuple[str, str, tuple[tuple[str, str, str], ...]]:
+) -> tuple[str, str, tuple[_ProjectRequirement, ...], Mapping[str, str]]:
     raw = _read_verified_file(
         pyproject_path.absolute(), maximum=_MAX_PYPROJECT_BYTES, label="staged pyproject"
     )
@@ -626,12 +688,19 @@ def _project_metadata(
     normalized_name = _normalized_package_name(raw_name, label="pyproject project name")
     if normalized_name != "neocortex-framework":
         raise ValueError("staged pyproject does not describe neocortex-framework")
-    declarations: list[tuple[str, str, str]] = []
+    marker_environment = dict(default_environment())
+    marker_environment["extra"] = ""
+    declarations: list[_ProjectRequirement] = []
     for raw_requirement in _required_list(
         project.get("dependencies", []), label="pyproject dependencies"
     ):
-        requirement = _required_text(raw_requirement, label="pyproject dependency")
-        declarations.append(("required", _requirement_name(requirement), requirement))
+        declarations.append(
+            _parse_project_requirement(
+                raw_requirement,
+                group="required",
+                marker_environment=marker_environment,
+            )
+        )
     optional = _required_mapping(
         project.get("optional-dependencies", {}), label="pyproject optional dependencies"
     )
@@ -640,11 +709,21 @@ def _project_metadata(
         for raw_requirement in _required_list(
             raw_requirements, label="pyproject optional dependency group"
         ):
-            requirement = _required_text(raw_requirement, label="pyproject optional dependency")
-            declarations.append((group, _requirement_name(requirement), requirement))
+            declarations.append(
+                _parse_project_requirement(
+                    raw_requirement,
+                    group=group,
+                    marker_environment=marker_environment,
+                )
+            )
     if len(declarations) > _MAX_REQUIREMENTS:
         raise ValueError("pyproject dependency declarations exceed their bound")
-    return normalized_name, hashlib.sha256(raw).hexdigest(), tuple(declarations)
+    return (
+        normalized_name,
+        hashlib.sha256(raw).hexdigest(),
+        tuple(declarations),
+        marker_environment,
+    )
 
 
 def _metadata_values(distribution: importlib.metadata.Distribution, field: str) -> tuple[str, ...]:
@@ -750,6 +829,89 @@ def _distribution_rows(
             )
         )
     return tuple(sorted(rows, key=lambda item: item.normalized_name))
+
+
+def _evaluate_base_dependencies(
+    declarations: Sequence[_ProjectRequirement],
+    rows_by_name: Mapping[str, _DistributionRow],
+) -> tuple[_BaseDependencyEvaluation, ...]:
+    evaluations: list[_BaseDependencyEvaluation] = []
+    for declaration in declarations:
+        if declaration.group != "required":
+            continue
+        if declaration.marker_applies is None:
+            raise ValueError("base dependency marker was not evaluated")
+        installed = rows_by_name.get(declaration.target)
+        applicable = declaration.marker_applies
+        version_evaluated = bool(
+            applicable and installed is not None and not declaration.direct_url
+        )
+        version_compatible: bool | None = None
+        if version_evaluated:
+            assert installed is not None
+            try:
+                installed_version = Version(installed.version)
+            except InvalidVersion as exc:
+                raise ValueError("installed base dependency version is not valid PEP 440") from exc
+            version_compatible = declaration.specifier == "" or Requirement(
+                declaration.raw
+            ).specifier.contains(installed_version, prereleases=True)
+        evaluations.append(
+            _BaseDependencyEvaluation(
+                declaration,
+                installed is not None,
+                None if installed is None else installed.version,
+                applicable,
+                version_evaluated,
+                version_compatible,
+            )
+        )
+    return tuple(evaluations)
+
+
+def _base_evaluation_payload(
+    evaluation: _BaseDependencyEvaluation,
+    *,
+    marker_environment: Mapping[str, str],
+) -> dict[str, object]:
+    declaration = evaluation.declaration
+    return {
+        "group": declaration.group,
+        "requirement": declaration.raw,
+        "target": declaration.target,
+        "specifier": declaration.specifier,
+        "marker": declaration.marker,
+        "requested_extras": list(declaration.requested_extras),
+        "direct_url": declaration.direct_url,
+        "marker_evaluated": declaration.marker_evaluated,
+        "marker_applies": declaration.marker_applies,
+        "marker_environment": dict(marker_environment),
+        "target_installed": evaluation.target_installed,
+        "installed_version": evaluation.installed_version,
+        "presence_gate_evaluated": evaluation.presence_gate_evaluated,
+        "version_constraint_evaluated": evaluation.version_constraint_evaluated,
+        "version_compatible": evaluation.version_compatible,
+        "gate_scope": "base_project_dependency",
+    }
+
+
+def _optional_declaration_payload(declaration: _ProjectRequirement) -> dict[str, object]:
+    return {
+        "group": declaration.group,
+        "requirement": declaration.raw,
+        "target": declaration.target,
+        "specifier": declaration.specifier,
+        "marker": declaration.marker,
+        "requested_extras": list(declaration.requested_extras),
+        "direct_url": declaration.direct_url,
+        "marker_evaluated": False,
+        "marker_applies": None,
+        "presence_gate_evaluated": False,
+        "version_constraint_evaluated": False,
+        "version_compatible": None,
+        "extra_group_selected": False,
+        "gate_scope": "optional_extra_inventory_only",
+    }
 
 
 def _is_within(path: Path, root: Path) -> bool:
@@ -904,7 +1066,9 @@ def execute_installed_package_inventory(
 ) -> InstalledPackageInventoryExecution:
     """Inventory installed metadata and verify the framework wheel's RECORD."""
 
-    project_name, pyproject_digest, declarations = _project_metadata(pyproject_path)
+    project_name, pyproject_digest, declarations, marker_environment = _project_metadata(
+        pyproject_path
+    )
     rows = _distribution_rows(
         importlib.metadata.distributions() if distributions is None else distributions
     )
@@ -912,6 +1076,10 @@ def execute_installed_package_inventory(
     project_row = rows_by_name.get(project_name)
     if project_row is None:
         raise ValueError("installed neocortex-framework distribution is unavailable")
+    base_evaluations = _evaluate_base_dependencies(declarations, rows_by_name)
+    base_evaluations_by_target: dict[str, list[_BaseDependencyEvaluation]] = defaultdict(list)
+    for evaluation in base_evaluations:
+        base_evaluations_by_target[evaluation.declaration.target].append(evaluation)
     root = Path(sys.prefix) if installation_root is None else installation_root
     record = _record_verification(project_row.distribution, installation_root=root)
     observed = _observation_time(observed_at)
@@ -943,6 +1111,14 @@ def execute_installed_package_inventory(
             "unsafe_entries": record.unsafe_entries,
             "malformed_entries": record.malformed_entries,
         },
+        "marker_environment": dict(marker_environment),
+        "base_dependency_evaluations": [
+            _base_evaluation_payload(
+                evaluation,
+                marker_environment=marker_environment,
+            )
+            for evaluation in base_evaluations
+        ],
         "observed_at_utc": observed_text,
     }
     snapshot_id = (
@@ -961,6 +1137,15 @@ def execute_installed_package_inventory(
         "snapshot_id": snapshot_id,
         "freshness_status": "current_at_observation_only",
         "pyproject_sha256": pyproject_digest,
+        "marker_environment_source": "packaging.markers.default_environment",
+        "marker_environment_sha256": hashlib.sha256(
+            json.dumps(
+                marker_environment,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
         "authority": "advisory",
         "mutation_authority": False,
     }
@@ -1097,15 +1282,30 @@ def execute_installed_package_inventory(
             )
         )
 
-    direct_edges: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    for group, target, requirement in declarations:
-        direct_edges[target].append((group, requirement))
-    required_targets = {
-        target for group, target, _requirement in declarations if group == "required"
-    }
-    optional_count = sum(group != "required" for group, _target, _requirement in declarations)
-    required_installed = sum(target in rows_by_name for target in required_targets)
+    direct_edges: dict[str, list[_ProjectRequirement]] = defaultdict(list)
+    for project_declaration in declarations:
+        direct_edges[project_declaration.target].append(project_declaration)
+    applicable_evaluations = [
+        evaluation
+        for evaluation in base_evaluations
+        if evaluation.declaration.marker_applies is True
+    ]
+    required_installed = sum(evaluation.target_installed for evaluation in applicable_evaluations)
+    required_missing = sum(not evaluation.target_installed for evaluation in applicable_evaluations)
+    required_compatible = sum(
+        evaluation.version_compatible is True for evaluation in applicable_evaluations
+    )
+    required_mismatch = sum(
+        evaluation.version_compatible is False for evaluation in applicable_evaluations
+    )
+    optional_declarations = [
+        declaration for declaration in declarations if declaration.group != "required"
+    ]
     for target, edge_declarations in sorted(direct_edges.items()):
+        target_base_evaluations = base_evaluations_by_target.get(target, [])
+        target_optional_declarations = [
+            declaration for declaration in edge_declarations if declaration.group != "required"
+        ]
         relations.append(
             _relation(
                 INSTALLED_PACKAGE_PROVIDER_ID,
@@ -1116,12 +1316,22 @@ def execute_installed_package_inventory(
                 metadata={
                     **common_metadata,
                     "category": "package_integrity",
-                    "groups": sorted({group for group, _requirement in edge_declarations}),
-                    "requirements": sorted(
-                        {requirement for _group, requirement in edge_declarations}
-                    ),
+                    "groups": sorted({declaration.group for declaration in edge_declarations}),
+                    "requirements": sorted({declaration.raw for declaration in edge_declarations}),
                     "target_installed": target in rows_by_name,
-                    "version_constraint_evaluated": False,
+                    "base_dependency_evaluations": [
+                        _base_evaluation_payload(
+                            evaluation,
+                            marker_environment=marker_environment,
+                        )
+                        for evaluation in target_base_evaluations
+                    ],
+                    "optional_declarations": [
+                        _optional_declaration_payload(declaration)
+                        for declaration in target_optional_declarations
+                    ],
+                    "base_gate_evaluated": bool(target_base_evaluations),
+                    "optional_extras_gate_evaluated": False,
                 },
             )
         )
@@ -1162,14 +1372,21 @@ def execute_installed_package_inventory(
         ("inventory_current_at_observation", 1, "boolean"),
         ("installed_distribution_count", len(rows), "count"),
         ("declared_requirement_relation_count", len(requirement_edges), "count"),
-        ("pyproject_direct_requirement_count", len(required_targets), "count"),
+        ("pyproject_direct_requirement_count", len(base_evaluations), "count"),
         ("pyproject_direct_requirement_installed_count", required_installed, "count"),
         (
-            "pyproject_direct_requirement_missing_count",
-            len(required_targets) - required_installed,
+            "pyproject_required_applicable_dependency_count",
+            len(applicable_evaluations),
             "count",
         ),
-        ("pyproject_optional_dependency_count", optional_count, "count"),
+        ("pyproject_required_missing_dependency_count", required_missing, "count"),
+        (
+            "pyproject_required_version_compatible_count",
+            required_compatible,
+            "count",
+        ),
+        ("pyproject_required_version_mismatch_count", required_mismatch, "count"),
+        ("pyproject_optional_dependency_count", len(optional_declarations), "count"),
     )
     metrics.extend(
         _metric(
@@ -1201,10 +1418,13 @@ def execute_installed_package_inventory(
     counters = InstalledPackageCounters(
         len(rows),
         len(requirement_edges),
-        len(required_targets),
+        len(base_evaluations),
+        len(applicable_evaluations),
         required_installed,
-        len(required_targets) - required_installed,
-        optional_count,
+        required_missing,
+        required_compatible,
+        required_mismatch,
+        len(optional_declarations),
         license_available,
         license_ambiguous,
         license_missing,
