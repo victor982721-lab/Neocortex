@@ -743,7 +743,14 @@ def _project_metadata(
     normalized_name = _normalized_package_name(raw_name, label="pyproject project name")
     if normalized_name != "neocortex-framework":
         raise ValueError("staged pyproject does not describe neocortex-framework")
-    marker_environment = dict(default_environment())
+    marker_environment: dict[str, str] = {}
+    for raw_key, raw_value in default_environment().items():
+        key = _required_text(raw_key, label="marker environment key", maximum=128)
+        marker_environment[key] = _required_text(
+            raw_value,
+            label=f"marker environment value {key}",
+            maximum=4096,
+        )
     marker_environment["extra"] = ""
     declarations: list[_ProjectRequirement] = []
     for raw_requirement in _required_list(
