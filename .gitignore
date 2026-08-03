@@ -38,6 +38,7 @@ htmlcov/
 .codex-bootstrap/
 .pytest-ranking-*/
 .pytest-tmp-*/
+pytest-cache-files-*/
 .test-tmp/
 .tmp/
 tmp/
