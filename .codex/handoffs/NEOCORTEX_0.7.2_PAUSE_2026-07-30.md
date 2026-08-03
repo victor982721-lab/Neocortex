@@ -1,15 +1,15 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 7 aceptado desde wheel aislado; listo para publicación.
+> Actualizado: 2026-08-03, Hito 7 aceptado y publicado mediante el PR #20.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-Los Hitos 1 a 6 ya están publicados mediante los PR #14 a #19. El candidato
-`codex/neocortex-self-analysis-integration-v1` cerró la aceptación instalada del
-**Hito 7** y con ello la implementación funcional del programa multianalizador.
+Los Hitos 1 a 7 están publicados mediante los PR #14 a #20. El candidato
+`codex/neocortex-self-analysis-integration-v1` cerró la aceptación instalada y
+publicación del **Hito 7**, y con ello el programa multianalizador completo.
 `Neocortex --code-query` consume status, review y diff publicados y filtra por
 proveedor, categoría, módulo, estado, delta y work package. Su schema es
 `neocortex.code-analysis-query/v1`; conserva `aggregate_score=null`,
@@ -1300,14 +1300,11 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Publicar y fusionar el Hito 7.** Crear el PR desde el candidato aceptado,
-   fusionarlo sin esperar checks remotos por autorización de Victor y verificar
-   `main == origin/main`. Éste es el cierre del programa compuesto.
-2. **Usar el work package publicado.** Caracterizar y reducir
+1. **Usar el work package publicado.** Caracterizar y reducir
    `external_deep_coverage._normalize`, preservar sus siete pruebas y gates, y
    cerrar el cambio con un único replay/diff comparable. Reconciliar antes los
    gates Deptry/pip-audit o declarar su no aplicabilidad con evidencia.
-3. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
+2. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
    33-66 s; una proyección publicada de consultas es trabajo futuro justificable,
    pero no invalida la entrega funcional actual.
 

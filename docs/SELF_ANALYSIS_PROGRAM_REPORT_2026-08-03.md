@@ -28,7 +28,7 @@ auditoría completa.
 | 4 | Consenso advisory de código potencialmente no usado, calibración y holdout | PR #17, merge `634c083` |
 | 5 | Semgrep local, Deptry, pip-audit e inventario instalado/supply chain | PR #18, merge `8868eac` |
 | 6 | Mutación focal con Cosmic Ray, historia Git y analítica explicable del grafo | PR #19, merge `e54cc17` |
-| 7 | Consultas multidimensionales, fixtures/adversariales/property tests, CI por carriles y cierre instalado | rama `codex/neocortex-self-analysis-integration-v1`; PR asignado al publicar |
+| 7 | Consultas multidimensionales, fixtures/adversariales/property tests, CI por carriles y cierre instalado | PR #20 |
 
 Los schemas públicos finales son:
 
