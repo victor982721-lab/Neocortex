@@ -43,13 +43,18 @@ from _04_Nucleo_Operativo.route_registry import (
 def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
     assert ApplicationConfig is FrameworkConfig
     application_fields = fields(ApplicationConfig)
-    assert len(application_fields) == 125
+    assert len(application_fields) == 130
     assert {item.name for item in application_fields} >= {
         "analysis_profile",
         "deep_test_selectors",
         "deep_max_tests",
         "deep_time_budget_seconds",
         "deep_shard_size",
+        "deep_mutation_target",
+        "deep_mutation_symbol",
+        "deep_mutation_max_mutants",
+        "deep_mutation_timeout_seconds",
+        "deep_mutation_time_budget_seconds",
     }
     base = Path("synthetic-application-config")
 

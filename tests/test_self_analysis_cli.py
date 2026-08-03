@@ -109,6 +109,11 @@ def test_self_analysis_preset_is_code_only_and_analyze_only(tmp_path: Path) -> N
     assert config.deep_max_tests == 3000
     assert config.deep_time_budget_seconds == 600
     assert config.deep_shard_size == 20
+    assert config.deep_mutation_target is None
+    assert config.deep_mutation_symbol is None
+    assert config.deep_mutation_max_mutants == 20
+    assert config.deep_mutation_timeout_seconds == 30
+    assert config.deep_mutation_time_budget_seconds == 600
 
 
 def test_self_analysis_trusted_static_profile_is_explicit(tmp_path: Path) -> None:
@@ -144,6 +149,11 @@ def test_analysis_profile_requires_self_analysis(tmp_path: Path) -> None:
         "--deep-max-tests",
         "--deep-time-budget-seconds",
         "--deep-shard-size",
+        "--deep-mutation-target",
+        "--deep-mutation-symbol",
+        "--deep-mutation-max-mutants",
+        "--deep-mutation-timeout-seconds",
+        "--deep-mutation-time-budget-seconds",
     ),
 )
 def test_deep_controls_require_trusted_deep(
@@ -205,6 +215,16 @@ def test_trusted_deep_normalizes_bounded_selection(
         "900",
         "--deep-shard-size",
         "50",
+        "--deep-mutation-target",
+        r"_04_Nucleo_Operativo\external_deep_coverage.py",
+        "--deep-mutation-symbol",
+        "external_deep_coverage._normalize",
+        "--deep-mutation-max-mutants",
+        "100",
+        "--deep-mutation-timeout-seconds",
+        "120",
+        "--deep-mutation-time-budget-seconds",
+        "900",
     )
     config = framework_config_from_args(args)
 
@@ -216,6 +236,11 @@ def test_trusted_deep_normalizes_bounded_selection(
     assert config.deep_max_tests == 5000
     assert config.deep_time_budget_seconds == 900
     assert config.deep_shard_size == 50
+    assert config.deep_mutation_target == "_04_Nucleo_Operativo/external_deep_coverage.py"
+    assert config.deep_mutation_symbol == "external_deep_coverage._normalize"
+    assert config.deep_mutation_max_mutants == 100
+    assert config.deep_mutation_timeout_seconds == 120
+    assert config.deep_mutation_time_budget_seconds == 900
 
 
 @pytest.mark.parametrize(
@@ -227,6 +252,12 @@ def test_trusted_deep_normalizes_bounded_selection(
         ("--deep-time-budget-seconds", "901", "between 30 and 900"),
         ("--deep-shard-size", "0", "between 1 and 50"),
         ("--deep-shard-size", "51", "between 1 and 50"),
+        ("--deep-mutation-max-mutants", "0", "between 1 and 100"),
+        ("--deep-mutation-max-mutants", "101", "between 1 and 100"),
+        ("--deep-mutation-timeout-seconds", "0", "between 1 and 120"),
+        ("--deep-mutation-timeout-seconds", "121", "between 1 and 120"),
+        ("--deep-mutation-time-budget-seconds", "9", "between 10 and 900"),
+        ("--deep-mutation-time-budget-seconds", "901", "between 10 and 900"),
     ),
 )
 def test_trusted_deep_rejects_out_of_bounds_controls(
@@ -309,6 +340,128 @@ def test_trusted_deep_rejects_duplicate_normalized_selectors(
             r"tests\test_sample.py",
             "--deep-test-selector",
             "tests/test_sample.py",
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        r"C:\repo\module.py",
+        "/absolute/module.py",
+        "../module.py",
+        "package/../module.py",
+        "package//module.py",
+        "package/module.txt",
+        "package/control.py\n",
+    ),
+)
+def test_trusted_deep_rejects_unsafe_mutation_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    root = tmp_path / "canonical"
+    root.mkdir()
+    monkeypatch.setattr(cli_validation, "trusted_deep_expected_root", lambda: root)
+
+    with pytest.raises(SystemExit, match="invalid --deep-mutation-target"):
+        _validate(
+            "--self-analysis",
+            "--analysis-profile",
+            "trusted-deep",
+            "--root",
+            str(root),
+            "--state-directory",
+            str(tmp_path / "state"),
+            "--deep-test-selector",
+            "tests/test_sample.py",
+            "--deep-mutation-target",
+            target,
+        )
+
+
+def test_trusted_deep_mutation_target_requires_explicit_suite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "canonical"
+    root.mkdir()
+    monkeypatch.setattr(cli_validation, "trusted_deep_expected_root", lambda: root)
+
+    with pytest.raises(SystemExit, match="requires explicit --deep-test-selector"):
+        _validate(
+            "--self-analysis",
+            "--analysis-profile",
+            "trusted-deep",
+            "--root",
+            str(root),
+            "--state-directory",
+            str(tmp_path / "state"),
+            "--deep-mutation-target",
+            "_04_Nucleo_Operativo/external_deep_coverage.py",
+        )
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "message"),
+    (
+        ("--deep-mutation-symbol", "bad-name", "invalid --deep-mutation-symbol"),
+        (
+            "--deep-mutation-symbol",
+            "external_deep_coverage._normalize",
+            "requires --deep-mutation-target",
+        ),
+        ("--deep-mutation-max-mutants", "20", "requires --deep-mutation-target"),
+    ),
+)
+def test_trusted_deep_rejects_mutation_controls_without_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    option: str,
+    value: str,
+    message: str,
+) -> None:
+    root = tmp_path / "canonical"
+    root.mkdir()
+    monkeypatch.setattr(cli_validation, "trusted_deep_expected_root", lambda: root)
+
+    with pytest.raises(SystemExit, match=message):
+        _validate(
+            "--self-analysis",
+            "--analysis-profile",
+            "trusted-deep",
+            "--root",
+            str(root),
+            "--state-directory",
+            str(tmp_path / "state"),
+            option,
+            value,
+        )
+
+
+def test_trusted_deep_rejects_duplicate_mutation_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "canonical"
+    root.mkdir()
+    monkeypatch.setattr(cli_validation, "trusted_deep_expected_root", lambda: root)
+
+    with pytest.raises(SystemExit, match="cannot be repeated"):
+        _validate(
+            "--self-analysis",
+            "--analysis-profile",
+            "trusted-deep",
+            "--root",
+            str(root),
+            "--state-directory",
+            str(tmp_path / "state"),
+            "--deep-test-selector",
+            "tests/test_sample.py",
+            "--deep-mutation-target",
+            "module_a.py",
+            "--deep-mutation-target",
+            "module_b.py",
         )
 
 

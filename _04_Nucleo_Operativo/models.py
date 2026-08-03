@@ -162,6 +162,11 @@ class FrameworkConfig:
     deep_max_tests: int = 3000
     deep_time_budget_seconds: int = 600
     deep_shard_size: int = 20
+    deep_mutation_target: str | None = None
+    deep_mutation_symbol: str | None = None
+    deep_mutation_max_mutants: int = 20
+    deep_mutation_timeout_seconds: int = 30
+    deep_mutation_time_budget_seconds: int = 600
 
     @property
     def dedup_database(self) -> Path:

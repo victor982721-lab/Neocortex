@@ -228,6 +228,12 @@ def _publish_trusted_deep_manifest(prepared: _PreparedStatus) -> dict[str, objec
                 "240",
                 "--deep-shard-size",
                 "12",
+                "--deep-mutation-max-mutants",
+                "20",
+                "--deep-mutation-timeout-seconds",
+                "30",
+                "--deep-mutation-time-budget-seconds",
+                "600",
             )
         )
         manifest["deep_analysis"] = {

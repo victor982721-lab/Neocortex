@@ -10,6 +10,7 @@ from pathlib import Path
 from _02_Deduplicacion import InventoryExclusionPolicy
 
 from .code_contracts import (
+    _legacy_deep_configuration_payload,
     deep_configuration_payload,
     deep_configuration_signature,
     normalize_deep_test_selectors,
@@ -219,12 +220,17 @@ def self_analysis_commands(
     if config.code_retry_errors:
         analyze.append("--retry-code-errors")
     deep_selectors = normalize_deep_test_selectors(config.deep_test_selectors)
-    deep_configuration_payload(
+    deep_payload = deep_configuration_payload(
         analysis_profile=config.analysis_profile,
         test_selectors=deep_selectors,
         max_tests=config.deep_max_tests,
         time_budget_seconds=config.deep_time_budget_seconds,
         shard_size=config.deep_shard_size,
+        mutation_target=config.deep_mutation_target,
+        mutation_symbol=config.deep_mutation_symbol,
+        mutation_max_mutants=config.deep_mutation_max_mutants,
+        mutation_timeout_seconds=config.deep_mutation_timeout_seconds,
+        mutation_time_budget_seconds=config.deep_mutation_time_budget_seconds,
     )
     if config.analysis_profile == "trusted-deep":
         for selector in deep_selectors:
@@ -237,6 +243,22 @@ def self_analysis_commands(
                 str(config.deep_time_budget_seconds),
                 "--deep-shard-size",
                 str(config.deep_shard_size),
+            )
+        )
+        mutation_target = deep_payload["mutation_target"]
+        mutation_symbol = deep_payload["mutation_symbol"]
+        if isinstance(mutation_target, str):
+            analyze.extend(("--deep-mutation-target", mutation_target))
+        if isinstance(mutation_symbol, str):
+            analyze.extend(("--deep-mutation-symbol", mutation_symbol))
+        analyze.extend(
+            (
+                "--deep-mutation-max-mutants",
+                str(config.deep_mutation_max_mutants),
+                "--deep-mutation-timeout-seconds",
+                str(config.deep_mutation_timeout_seconds),
+                "--deep-mutation-time-budget-seconds",
+                str(config.deep_mutation_time_budget_seconds),
             )
         )
     return {
@@ -290,6 +312,11 @@ def _deep_analysis_from_argv(argv: Sequence[str]) -> dict[str, object] | None:
         "--deep-max-tests",
         "--deep-time-budget-seconds",
         "--deep-shard-size",
+        "--deep-mutation-target",
+        "--deep-mutation-symbol",
+        "--deep-mutation-max-mutants",
+        "--deep-mutation-timeout-seconds",
+        "--deep-mutation-time-budget-seconds",
     )
     profile_values = _option_values(argv, "--analysis-profile")
     if len(profile_values) > 1:
@@ -305,7 +332,7 @@ def _deep_analysis_from_argv(argv: Sequence[str]) -> dict[str, object] | None:
             raise ValueError("deep analysis controls require trusted-deep")
         return None
     scalar_values: dict[str, int] = {}
-    for option in deep_options[1:]:
+    for option in deep_options[1:4]:
         values = _option_values(argv, option)
         if len(values) != 1:
             raise ValueError(f"trusted-deep requires exactly one {option}")
@@ -313,13 +340,52 @@ def _deep_analysis_from_argv(argv: Sequence[str]) -> dict[str, object] | None:
             scalar_values[option] = int(values[0])
         except ValueError as exc:
             raise ValueError(f"trusted-deep {option} must be an integer") from exc
-    payload = deep_configuration_payload(
-        analysis_profile=profile,
-        test_selectors=_option_values(argv, "--deep-test-selector"),
-        max_tests=scalar_values["--deep-max-tests"],
-        time_budget_seconds=scalar_values["--deep-time-budget-seconds"],
-        shard_size=scalar_values["--deep-shard-size"],
+    test_selectors = _option_values(argv, "--deep-test-selector")
+    max_tests = scalar_values["--deep-max-tests"]
+    time_budget_seconds = scalar_values["--deep-time-budget-seconds"]
+    shard_size = scalar_values["--deep-shard-size"]
+    mutation_options = deep_options[4:]
+    mutation_present = any(
+        token == option or token.startswith(option + "=")
+        for token in argv
+        for option in mutation_options
     )
+    if not mutation_present:
+        payload = _legacy_deep_configuration_payload(
+            analysis_profile=profile,
+            test_selectors=test_selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+        )
+    else:
+        mutation_target_values = _option_values(argv, "--deep-mutation-target")
+        mutation_symbol_values = _option_values(argv, "--deep-mutation-symbol")
+        if len(mutation_target_values) > 1:
+            raise ValueError("trusted-deep mutation target is duplicated")
+        if len(mutation_symbol_values) > 1:
+            raise ValueError("trusted-deep mutation symbol is duplicated")
+        mutation_scalars: dict[str, int] = {}
+        for option in mutation_options[2:]:
+            values = _option_values(argv, option)
+            if len(values) != 1:
+                raise ValueError(f"trusted-deep requires exactly one {option}")
+            try:
+                mutation_scalars[option] = int(values[0])
+            except ValueError as exc:
+                raise ValueError(f"trusted-deep {option} must be an integer") from exc
+        payload = deep_configuration_payload(
+            analysis_profile=profile,
+            test_selectors=test_selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+            mutation_target=(mutation_target_values[0] if mutation_target_values else None),
+            mutation_symbol=(mutation_symbol_values[0] if mutation_symbol_values else None),
+            mutation_max_mutants=mutation_scalars["--deep-mutation-max-mutants"],
+            mutation_timeout_seconds=mutation_scalars["--deep-mutation-timeout-seconds"],
+            mutation_time_budget_seconds=mutation_scalars["--deep-mutation-time-budget-seconds"],
+        )
     return {
         **payload,
         "configuration_signature": deep_configuration_signature(payload),

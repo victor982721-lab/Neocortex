@@ -19,10 +19,14 @@ from _02_Deduplicacion import FileSnapshot
 from .route_filters import CandidateSelection
 from .semantic_models import canonical_json, fingerprint_text
 
-DEEP_CONFIGURATION_SCHEMA = "neocortex.code-deep-configuration/v1"
+DEEP_CONFIGURATION_SCHEMA = "neocortex.code-deep-configuration/v2"
+LEGACY_DEEP_CONFIGURATION_SCHEMA = "neocortex.code-deep-configuration/v1"
 DEFAULT_DEEP_MAX_TESTS = 3000
 DEFAULT_DEEP_TIME_BUDGET_SECONDS = 600
 DEFAULT_DEEP_SHARD_SIZE = 20
+DEFAULT_DEEP_MUTATION_MAX_MUTANTS = 20
+DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS = 30
+DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS = 600
 
 
 def normalize_deep_test_selectors(values: Sequence[str]) -> tuple[str, ...]:
@@ -66,6 +70,49 @@ def normalize_deep_test_selectors(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(normalized, key=lambda item: (item.casefold(), item)))
 
 
+def normalize_deep_mutation_target(value: str | None) -> str | None:
+    """Validate and canonicalize one root-relative Python mutation target."""
+
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or len(value.encode("utf-8")) > 4096
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ValueError("deep mutation target is malformed")
+    target = value.replace("\\", "/")
+    components = target.split("/")
+    if (
+        target.startswith("/")
+        or re.match(r"^[A-Za-z]:", target)
+        or ":" in target
+        or any(component in {"", ".", ".."} for component in components)
+        or not components[-1].casefold().endswith(".py")
+    ):
+        raise ValueError("deep mutation target must be a root-relative Python path")
+    return target
+
+
+def normalize_deep_mutation_symbol(value: str | None) -> str | None:
+    """Validate one optional Python symbol or qualified name."""
+
+    if value is None:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.strip() != value
+        or len(value.encode("utf-8")) > 1024
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", value) is None
+    ):
+        raise ValueError("deep mutation symbol must be a Python qualified name")
+    return value
+
+
 def deep_configuration_payload(
     *,
     analysis_profile: str,
@@ -73,10 +120,17 @@ def deep_configuration_payload(
     max_tests: int,
     time_budget_seconds: int,
     shard_size: int,
+    mutation_target: str | None = None,
+    mutation_symbol: str | None = None,
+    mutation_max_mutants: int = DEFAULT_DEEP_MUTATION_MAX_MUTANTS,
+    mutation_timeout_seconds: int = DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS,
+    mutation_time_budget_seconds: int = DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS,
 ) -> dict[str, object]:
     """Return the separate, versioned execution contract for deep analysis."""
 
     selectors = normalize_deep_test_selectors(test_selectors)
+    normalized_mutation_target = normalize_deep_mutation_target(mutation_target)
+    normalized_mutation_symbol = normalize_deep_mutation_symbol(mutation_symbol)
     if analysis_profile not in {"protected", "trusted-static", "trusted-deep"}:
         raise ValueError("code analysis_profile is unsupported")
     if not 1 <= max_tests <= 5000:
@@ -85,14 +139,38 @@ def deep_configuration_payload(
         raise ValueError("deep time_budget_seconds must be between 30 and 900")
     if not 1 <= shard_size <= 50:
         raise ValueError("deep shard_size must be between 1 and 50")
+    if isinstance(mutation_max_mutants, bool) or not 1 <= mutation_max_mutants <= 100:
+        raise ValueError("deep mutation_max_mutants must be between 1 and 100")
+    if isinstance(mutation_timeout_seconds, bool) or not 1 <= mutation_timeout_seconds <= 120:
+        raise ValueError("deep mutation_timeout_seconds must be between 1 and 120")
+    if (
+        isinstance(mutation_time_budget_seconds, bool)
+        or not 10 <= mutation_time_budget_seconds <= 900
+    ):
+        raise ValueError("deep mutation_time_budget_seconds must be between 10 and 900")
     content_executed = analysis_profile == "trusted-deep"
     if not content_executed and (
         selectors
         or max_tests != DEFAULT_DEEP_MAX_TESTS
         or time_budget_seconds != DEFAULT_DEEP_TIME_BUDGET_SECONDS
         or shard_size != DEFAULT_DEEP_SHARD_SIZE
+        or normalized_mutation_target is not None
+        or normalized_mutation_symbol is not None
+        or mutation_max_mutants != DEFAULT_DEEP_MUTATION_MAX_MUTANTS
+        or mutation_timeout_seconds != DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS
+        or mutation_time_budget_seconds != DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS
     ):
         raise ValueError("deep configuration requires trusted-deep")
+    if normalized_mutation_symbol is not None and normalized_mutation_target is None:
+        raise ValueError("deep mutation symbol requires a mutation target")
+    if normalized_mutation_target is not None and not selectors:
+        raise ValueError("deep mutation target requires explicit test selectors")
+    if normalized_mutation_target is None and (
+        mutation_max_mutants != DEFAULT_DEEP_MUTATION_MAX_MUTANTS
+        or mutation_timeout_seconds != DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS
+        or mutation_time_budget_seconds != DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS
+    ):
+        raise ValueError("deep mutation limits require a mutation target")
     return {
         "schema": DEEP_CONFIGURATION_SCHEMA,
         "analysis_profile": analysis_profile,
@@ -104,13 +182,47 @@ def deep_configuration_payload(
         "max_tests": max_tests,
         "time_budget_seconds": time_budget_seconds,
         "shard_size": shard_size,
+        "mutation_target": normalized_mutation_target,
+        "mutation_symbol": normalized_mutation_symbol,
+        "mutation_max_mutants": mutation_max_mutants,
+        "mutation_timeout_seconds": mutation_timeout_seconds,
+        "mutation_time_budget_seconds": mutation_time_budget_seconds,
+    }
+
+
+def _legacy_deep_configuration_payload(
+    *,
+    analysis_profile: str,
+    test_selectors: Sequence[str],
+    max_tests: int,
+    time_budget_seconds: int,
+    shard_size: int,
+) -> dict[str, object]:
+    """Reconstruct the immutable v1 payload used by historical manifests."""
+
+    current = deep_configuration_payload(
+        analysis_profile=analysis_profile,
+        test_selectors=test_selectors,
+        max_tests=max_tests,
+        time_budget_seconds=time_budget_seconds,
+        shard_size=shard_size,
+    )
+    return {
+        "schema": LEGACY_DEEP_CONFIGURATION_SCHEMA,
+        "analysis_profile": current["analysis_profile"],
+        "content_executed": current["content_executed"],
+        "suite_selection": current["suite_selection"],
+        "test_selectors": current["test_selectors"],
+        "max_tests": current["max_tests"],
+        "time_budget_seconds": current["time_budget_seconds"],
+        "shard_size": current["shard_size"],
     }
 
 
 def deep_configuration_signature(payload: Mapping[str, object]) -> str:
     """Fingerprint one validated deep-configuration payload."""
 
-    expected_keys = {
+    common_keys = {
         "schema",
         "analysis_profile",
         "content_executed",
@@ -120,9 +232,24 @@ def deep_configuration_signature(payload: Mapping[str, object]) -> str:
         "time_budget_seconds",
         "shard_size",
     }
+    schema = payload.get("schema")
+    if schema == LEGACY_DEEP_CONFIGURATION_SCHEMA:
+        expected_keys = common_keys
+        prefix = "code-deep-v1:"
+    elif schema == DEEP_CONFIGURATION_SCHEMA:
+        expected_keys = common_keys | {
+            "mutation_target",
+            "mutation_symbol",
+            "mutation_max_mutants",
+            "mutation_timeout_seconds",
+            "mutation_time_budget_seconds",
+        }
+        prefix = "code-deep-v2:"
+    else:
+        raise ValueError("deep configuration schema is unsupported")
     if set(payload) != expected_keys:
         raise ValueError("deep configuration payload is malformed")
-    return "code-deep-v1:" + fingerprint_text(canonical_json(dict(payload))).xxh3_128
+    return prefix + fingerprint_text(canonical_json(dict(payload))).xxh3_128
 
 
 # region [01] Artifact and evidence vocabulary
@@ -392,6 +519,11 @@ class CodeRouteConfig:
     deep_max_tests: int = DEFAULT_DEEP_MAX_TESTS
     deep_time_budget_seconds: int = DEFAULT_DEEP_TIME_BUDGET_SECONDS
     deep_shard_size: int = DEFAULT_DEEP_SHARD_SIZE
+    deep_mutation_target: str | None = None
+    deep_mutation_symbol: str | None = None
+    deep_mutation_max_mutants: int = DEFAULT_DEEP_MUTATION_MAX_MUTANTS
+    deep_mutation_timeout_seconds: int = DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS
+    deep_mutation_time_budget_seconds: int = DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS
 
     def __post_init__(self) -> None:
         if self.max_file_bytes < 4096:
@@ -407,18 +539,25 @@ class CodeRouteConfig:
         if self.complexity_warning < 1 or self.function_lines_warning < 1:
             raise ValueError("code diagnostic thresholds must be positive")
         normalized_selectors = normalize_deep_test_selectors(self.deep_test_selectors)
-        deep_configuration_payload(
+        payload = deep_configuration_payload(
             analysis_profile=self.analysis_profile,
             test_selectors=normalized_selectors,
             max_tests=self.deep_max_tests,
             time_budget_seconds=self.deep_time_budget_seconds,
             shard_size=self.deep_shard_size,
+            mutation_target=self.deep_mutation_target,
+            mutation_symbol=self.deep_mutation_symbol,
+            mutation_max_mutants=self.deep_mutation_max_mutants,
+            mutation_timeout_seconds=self.deep_mutation_timeout_seconds,
+            mutation_time_budget_seconds=self.deep_mutation_time_budget_seconds,
         )
         object.__setattr__(
             self,
             "deep_test_selectors",
             normalized_selectors,
         )
+        object.__setattr__(self, "deep_mutation_target", payload["mutation_target"])
+        object.__setattr__(self, "deep_mutation_symbol", payload["mutation_symbol"])
 
     @property
     def processing_signature(self) -> str:
@@ -447,6 +586,11 @@ class CodeRouteConfig:
             max_tests=self.deep_max_tests,
             time_budget_seconds=self.deep_time_budget_seconds,
             shard_size=self.deep_shard_size,
+            mutation_target=self.deep_mutation_target,
+            mutation_symbol=self.deep_mutation_symbol,
+            mutation_max_mutants=self.deep_mutation_max_mutants,
+            mutation_timeout_seconds=self.deep_mutation_timeout_seconds,
+            mutation_time_budget_seconds=self.deep_mutation_time_budget_seconds,
         )
 
     @property
@@ -651,8 +795,12 @@ def analyzer_for_language(
 __all__ = [
     "DEEP_CONFIGURATION_SCHEMA",
     "DEFAULT_DEEP_MAX_TESTS",
+    "DEFAULT_DEEP_MUTATION_MAX_MUTANTS",
+    "DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS",
+    "DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS",
     "DEFAULT_DEEP_SHARD_SIZE",
     "DEFAULT_DEEP_TIME_BUDGET_SECONDS",
+    "LEGACY_DEEP_CONFIGURATION_SCHEMA",
     "AnalysisStatus",
     "ArtifactClassification",
     "ArtifactKind",
@@ -679,5 +827,7 @@ __all__ = [
     "analyzer_for_language",
     "deep_configuration_payload",
     "deep_configuration_signature",
+    "normalize_deep_mutation_symbol",
+    "normalize_deep_mutation_target",
     "normalize_deep_test_selectors",
 ]
