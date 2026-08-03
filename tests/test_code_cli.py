@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from _04_Nucleo_Operativo.cli_config import framework_config_from_args
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
 from _04_Nucleo_Operativo.code_schema import initialize_code_state
+from _04_Nucleo_Operativo.external_evidence_providers import provider_tool_versions
 
 # endregion [01]
 
@@ -107,20 +109,26 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert status["kind"] == "code-status"
     assert not status["exists"]
     assert status["self_analysis"] is None
+    assert status["architecture"]["status"] == "abstained"
+    assert status["architecture"]["reason"] == "code_state_missing"
+    assert status["architecture"]["summary"] is None
+    assert len(status["architecture"]["gates"]) == 3
     assert doctor["kind"] == "code-doctor"
     assert doctor["schema"] == "not-initialized"
-    assert set(doctor["external_evidence_providers"]) == {
-        "ruff-protected-basic",
-        "ruff-trusted-project",
-        "mypy-trusted-project",
-        "pyright-trusted-project",
-    }
+    assert set(doctor["external_evidence_providers"]) == set(provider_tool_versions())
     assert "node" in doctor["tools"]
     assert "pyright" in doctor["tools"]
     assert all(
         provider["authority"] == "advisory" and provider["mutation_authority"] is False
         for provider in doctor["external_evidence_providers"].values()
     )
+    human_status_args = _validated("--state-directory", str(tmp_path), "--code-status")
+    assert dispatch_direct(human_status_args) == 0
+    human_status = capsys.readouterr().out
+    assert "CODE_STATUS" in human_status and "exists=false" in human_status
+    assert "CODE_ARCHITECTURE status=abstained gate=abstained" in human_status
+    assert "CODE_ARCHITECTURE_SUMMARY status=not_evaluated" in human_status
+    assert human_status.count("CODE_ARCHITECTURE_GATE ") == 3
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
@@ -144,18 +152,19 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
-    assert payload["schema"] == "neocortex.code-review/v5"
+    assert payload["schema"] == "neocortex.code-review/v6"
     assert "neocortex.code-review/v3" in payload["compatible_schemas"]
     assert payload["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
         "neocortex.code-review/v4",
+        "neocortex.code-review/v5",
     ]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"
     assert payload["actionability_version"] == "python-maintenance-actionability-v1"
     assert payload["recommendation_status"] == "not_evaluated"
-    assert payload["planning_version"] == "python-maintenance-work-packages-v1"
+    assert payload["planning_version"] == "python-maintenance-work-packages-v2"
     assert payload["work_package_status"] == "not_evaluated"
     assert payload["work_packages"] == []
     assert not (tmp_path / "code.sqlite3").exists()
@@ -185,6 +194,314 @@ def test_code_publication_diff_abstains_without_initializing_state(
     assert payload["reason"].startswith("baseline_unavailable:FileNotFoundError:")
     assert not baseline.exists()
     assert not current.exists()
+
+
+def test_code_status_projects_bounded_architecture_summary_and_gates(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from _04_Nucleo_Operativo.code_architecture_analysis import (
+        ArchitectureContract,
+        ArchitectureGateEvaluation,
+        ArchitectureProviderStatus,
+        ArchitectureSummary,
+        CodeArchitectureAnalysis,
+    )
+
+    analysis = CodeArchitectureAnalysis(
+        database=str(tmp_path / "code.sqlite3"),
+        analysis_run_id=7,
+        status="ready",
+        reason=None,
+        gate="observed",
+        gates=(ArchitectureGateEvaluation("architecture_contracts", "failed", "violation"),),
+        providers=(
+            ArchitectureProviderStatus(
+                provider_id="grimp-architecture",
+                status="ready",
+                reason=None,
+                tool_name="grimp",
+                tool_version="3.5",
+                provider_schema="fixture/v1",
+                comparability_signature="fixture",
+                provider_gate="baseline",
+                execution="ran",
+                tool_run_id=1,
+                source_tool_run_id=None,
+                metrics=4,
+                relations=5,
+            ),
+        ),
+        summary=ArchitectureSummary(
+            modules=25,
+            import_edges=30,
+            consensus_edges=28,
+            graph_disagreements=2,
+            cyclic_sccs=1,
+            grimp_reported_internal_modules=25,
+            grimp_reported_import_edges=30,
+            grimp_reported_cyclic_sccs=1,
+            grimp_counts_consistent=True,
+        ),
+        modules=tuple(SimpleNamespace() for _ in range(25)),  # type: ignore[arg-type]
+        symbols=(),
+        imports=tuple(SimpleNamespace() for _ in range(30)),  # type: ignore[arg-type]
+        cycles=(SimpleNamespace(),),  # type: ignore[arg-type]
+        contracts=(
+            ArchitectureContract(
+                contract_id="layers",
+                status="failed",
+                evaluated=True,
+                violations=1,
+                importer_modules=("app",),
+                imported_modules=("core",),
+                import_chains=(("app", "core"),),
+                contract_schema="fixture/v1",
+            ),
+        ),
+        limitations=(),
+    )
+
+    architecture = cli_code._architecture_status_payload(analysis)
+
+    assert architecture["summary"] == {
+        "modules": 25,
+        "import_edges": 30,
+        "consensus_edges": 28,
+        "graph_disagreements": 2,
+        "cyclic_sccs": 1,
+        "grimp_reported_internal_modules": 25,
+        "grimp_reported_import_edges": 30,
+        "grimp_reported_cyclic_sccs": 1,
+        "grimp_counts_consistent": True,
+    }
+    assert architecture["counts"] == {
+        "modules": 25,
+        "symbols": 0,
+        "imports": 30,
+        "cycles": 1,
+        "contracts": 1,
+        "failed_contracts": 1,
+    }
+    assert "modules" not in architecture
+    snapshot = cli_code._CodeStatusSnapshot(
+        schema_version=4,
+        counts={},
+        latest_run=None,
+        external_evidence={"status": "ready"},
+        external_evidence_suite={"profile": "full", "status": "ready", "providers": []},
+        architecture=architecture,
+    )
+
+    cli_code._emit_code_status(
+        tmp_path / "code.sqlite3",
+        {},
+        snapshot,
+        None,
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "CODE_ARCHITECTURE status=ready gate=observed modules=25 imports=30" in output
+    assert "CODE_ARCHITECTURE_SUMMARY modules=25 import_edges=30 consensus_edges=28" in output
+    assert "CODE_ARCHITECTURE_PROVIDER id=grimp-architecture status=ready" in output
+    assert "CODE_ARCHITECTURE_GATE id=architecture_contracts status=failed" in output
+
+
+def test_code_review_human_surfaces_architecture_and_work_package_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from _04_Nucleo_Operativo import code_review
+
+    architecture = SimpleNamespace(
+        status="ready",
+        gate="observed",
+        reason=None,
+        summary=SimpleNamespace(
+            modules=4,
+            import_edges=5,
+            consensus_edges=4,
+            graph_disagreements=1,
+            cyclic_sccs=1,
+        ),
+        gates=(
+            SimpleNamespace(gate="architecture_contracts", status="failed", reason="violation"),
+        ),
+        contracts=(
+            SimpleNamespace(
+                status="failed",
+                contract_id="layers",
+                violations=1,
+                importer_modules=("app",),
+                imported_modules=("core",),
+            ),
+        ),
+    )
+    package = SimpleNamespace(
+        package_rank=1,
+        change_risk="medium",
+        members=(object(),),
+        members_truncated=False,
+        confidence="high",
+        primary_symbol="app.handler",
+        package_id="package-1",
+        primary_module="app",
+        import_chains=(("app", "core"),),
+        affected_architecture_contracts=("layers",),
+        acceptance_gates=(
+            "target_hotspot_removed",
+            "architecture_contracts_not_degraded",
+            "no_new_import_cycles",
+            "module_complexity_not_displaced",
+        ),
+    )
+    result = SimpleNamespace(
+        database=str(tmp_path / "code.sqlite3"),
+        status="ready",
+        reason=None,
+        snapshot=SimpleNamespace(freshness="current", current=True),
+        coverage=SimpleNamespace(
+            current_python_files=4,
+            complete_python_files=4,
+            candidate_hotspots=1,
+            probable_dead_suppressed=0,
+            resolved_call_edges=3,
+            call_edges=3,
+        ),
+        digest=SimpleNamespace(xxh3_128="digest"),
+        findings=(),
+        recommendations=(),
+        work_packages=(package,),
+        ranking="python-confirmed-hotspots-v2",
+        actionability_version="python-maintenance-actionability-v1",
+        planning_version="python-maintenance-work-packages-v2",
+        external_evidence=None,
+        external_evidence_suite=None,
+        architecture=architecture,
+        recommendation_status="abstained",
+        recommendation_reason="none",
+        work_package_status="ready",
+        work_package_reason=None,
+        limitations=(),
+    )
+    monkeypatch.setattr(code_review, "review_code_state", lambda *_args, **_kwargs: result)
+
+    exit_code = cli_code.run_code_review(
+        SimpleNamespace(state_directory=tmp_path, code_review_limit=10, code_json=False)
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "CODE_REVIEW_ARCHITECTURE status=ready gate=observed failed_contracts=1" in output
+    assert "CODE_REVIEW_ARCHITECTURE_SUMMARY modules=4 import_edges=5" in output
+    assert "CODE_REVIEW_ARCHITECTURE_GATE id=architecture_contracts status=failed" in output
+    assert 'CODE_REVIEW_ARCHITECTURE_CONTRACT status=failed id="layers"' in output
+    assert 'primary_module="app"' in output
+    assert 'import_chains=[["app", "core"]]' in output
+    assert 'affected_architecture_contracts=["layers"]' in output
+    assert "architecture_contracts_not_degraded" in output
+    assert "no_new_import_cycles" in output
+    assert "module_complexity_not_displaced" in output
+
+
+def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from _04_Nucleo_Operativo import code_publication_diff
+
+    modules = tuple(
+        SimpleNamespace(
+            module_id=f"module_{index:02d}",
+            cognitive_complexity_delta=1.0,
+            fan_in_delta=1,
+            fan_out_delta=0,
+            baseline_cycle_ids=(),
+            current_cycle_ids=(),
+            baseline_contract_ids=(),
+            current_contract_ids=(),
+        )
+        for index in range(21)
+    )
+    architecture = SimpleNamespace(
+        status="ready",
+        reason=None,
+        modules=modules,
+        added_failed_contracts=("layers",),
+        resolved_failed_contracts=("legacy",),
+        added_cycles=(("app", "core"),),
+        resolved_cycles=(("old", "cycle"),),
+        displaced_complexity=(
+            SimpleNamespace(
+                target_module="app",
+                target_decrease=2.0,
+                recipient_modules=("core",),
+                recipient_increase=3.0,
+                import_relationships=("current:app->core:both",),
+            ),
+        ),
+        architecture_contracts_not_degraded="failed",
+        no_new_import_cycles="failed",
+        module_complexity_not_displaced="failed",
+    )
+    result = SimpleNamespace(
+        baseline_database=str(tmp_path / "baseline" / "code.sqlite3"),
+        current_database=str(tmp_path / "current" / "code.sqlite3"),
+        status="ready",
+        reason=None,
+        baseline=SimpleNamespace(resolved_call_edges=2, call_edges=3),
+        current=SimpleNamespace(resolved_call_edges=3, call_edges=3),
+        calls=SimpleNamespace(
+            common_call_sites=3,
+            baseline_only_call_sites=0,
+            current_only_call_sites=0,
+            newly_resolved=1,
+            corrected=0,
+            lost=0,
+        ),
+        hotspots=SimpleNamespace(common=1, added=0, removed=0, changed_evidence=0),
+        probable_dead_delta=0,
+        external_evidence=SimpleNamespace(
+            status="ready",
+            common=1,
+            added=0,
+            resolved=0,
+            gate="passed",
+        ),
+        digest=SimpleNamespace(xxh3_128="digest"),
+        analysis_profile="full",
+        verdict="mixed",
+        providers=(),
+        architecture=architecture,
+        limitations=(),
+    )
+    monkeypatch.setattr(
+        code_publication_diff,
+        "compare_code_publications",
+        lambda *_args, **_kwargs: result,
+    )
+
+    exit_code = cli_code.run_code_publication_diff(
+        SimpleNamespace(
+            code_publication_diff=str(tmp_path / "baseline"),
+            state_directory=tmp_path / "current",
+            code_json=False,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "CODE_PUBLICATION_DIFF_ARCHITECTURE status=ready module_deltas=21" in output
+    assert "added_failed_contracts=1 resolved_failed_contracts=1" in output
+    assert "contracts_gate=failed cycles_gate=failed displacement_gate=failed" in output
+    assert 'added=["layers"] resolved=["legacy"]' in output
+    assert "CODE_PUBLICATION_DIFF_ARCHITECTURE_CYCLES" in output
+    assert output.count("CODE_PUBLICATION_DIFF_ARCHITECTURE_MODULE ") == 20
+    assert "module_examples_omitted=1" in output
+    assert 'CODE_PUBLICATION_DIFF_ARCHITECTURE_DISPLACEMENT target="app"' in output
 
 
 def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:

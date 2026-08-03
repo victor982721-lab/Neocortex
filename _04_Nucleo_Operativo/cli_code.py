@@ -9,7 +9,26 @@ import sqlite3
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import TYPE_CHECKING, TextIO
+
+if TYPE_CHECKING:
+    from .code_architecture_analysis import CodeArchitectureAnalysis
+    from .code_publication_diff import CodeArchitectureDelta, CodeModuleArchitectureDelta
+
+
+_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT = 20
+_CODE_ARCHITECTURE_PROVIDER_IDS = (
+    "complexipy-cognitive",
+    "grimp-architecture",
+    "ruff-analyze-imports",
+)
+_CODE_ARCHITECTURE_ACCEPTANCE_GATES = frozenset(
+    {
+        "architecture_contracts_not_degraded",
+        "module_complexity_not_displaced",
+        "no_new_import_cycles",
+    }
+)
 
 
 def _state_path(args: argparse.Namespace) -> Path:
@@ -59,6 +78,92 @@ class _CodeStatusSnapshot:
     latest_run: sqlite3.Row | None
     external_evidence: dict[str, object]
     external_evidence_suite: dict[str, object]
+    architecture: dict[str, object]
+
+
+def _architecture_abstained_payload(
+    database: str,
+    reason: str,
+    *,
+    analysis_run_id: int | None = None,
+) -> dict[str, object]:
+    return {
+        "schema": "neocortex.code-architecture-analysis/v1",
+        "status": "abstained",
+        "reason": reason,
+        "gate": "abstained",
+        "analysis_run_id": analysis_run_id,
+        "providers": [
+            {
+                "provider_id": provider_id,
+                "status": "abstained",
+                "reason": reason,
+                "tool_name": None,
+                "tool_version": None,
+                "execution": None,
+                "provider_gate": None,
+                "metrics": 0,
+                "relations": 0,
+            }
+            for provider_id in _CODE_ARCHITECTURE_PROVIDER_IDS
+        ],
+        "summary": None,
+        "counts": {
+            "modules": 0,
+            "symbols": 0,
+            "imports": 0,
+            "cycles": 0,
+            "contracts": 0,
+            "failed_contracts": 0,
+        },
+        "gates": [
+            {"gate": gate, "status": "not_evaluated", "reason": reason}
+            for gate in (
+                "import_graph_consensus",
+                "architecture_contracts",
+                "module_complexity_displacement",
+            )
+        ],
+        "database": database,
+    }
+
+
+def _architecture_status_payload(
+    analysis: CodeArchitectureAnalysis,
+) -> dict[str, object]:
+    failed_contracts = sum(item.status == "failed" for item in analysis.contracts)
+    return {
+        "schema": "neocortex.code-architecture-analysis/v1",
+        "status": analysis.status,
+        "reason": analysis.reason,
+        "gate": analysis.gate,
+        "analysis_run_id": analysis.analysis_run_id,
+        "providers": [
+            {
+                "provider_id": item.provider_id,
+                "status": item.status,
+                "reason": item.reason,
+                "tool_name": item.tool_name,
+                "tool_version": item.tool_version,
+                "execution": item.execution,
+                "provider_gate": item.provider_gate,
+                "metrics": item.metrics,
+                "relations": item.relations,
+            }
+            for item in analysis.providers
+        ],
+        "summary": None if analysis.summary is None else asdict(analysis.summary),
+        "counts": {
+            "modules": len(analysis.modules),
+            "symbols": len(analysis.symbols),
+            "imports": len(analysis.imports),
+            "cycles": len(analysis.cycles),
+            "contracts": len(analysis.contracts),
+            "failed_contracts": failed_contracts,
+        },
+        "gates": [asdict(item) for item in analysis.gates],
+        "database": analysis.database,
+    }
 
 
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
@@ -138,6 +243,7 @@ def _latest_code_run(connection: sqlite3.Connection) -> sqlite3.Row | None:
 
 
 def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
+    from .code_architecture_analysis import read_code_architecture_analysis
     from .code_external_evidence import read_external_evidence
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
     from .external_evidence_store import read_external_evidence_suite
@@ -168,7 +274,33 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
             -1 if latest is None else int(latest["analysis_run_id"]),
             enforce_current_runtime=True,
         ).as_payload()
-    return _CodeStatusSnapshot(version, counts, latest, external_evidence, suite)
+        if latest is None:
+            architecture = _architecture_abstained_payload(
+                str(path),
+                "code_run_missing",
+            )
+        elif latest["status"] != "completed":
+            architecture = _architecture_abstained_payload(
+                str(path),
+                f"code_run_not_completed:{latest['status']}",
+                analysis_run_id=int(latest["analysis_run_id"]),
+            )
+        else:
+            architecture = _architecture_status_payload(
+                read_code_architecture_analysis(
+                    connection,
+                    int(latest["analysis_run_id"]),
+                    database=str(path),
+                )
+            )
+    return _CodeStatusSnapshot(
+        version,
+        counts,
+        latest,
+        external_evidence,
+        suite,
+        architecture,
+    )
 
 
 def _read_self_analysis_payload(
@@ -205,6 +337,10 @@ def _emit_missing_code_status(
     *,
     json_output: bool,
 ) -> None:
+    architecture = _architecture_abstained_payload(
+        str(path),
+        "code_state_missing",
+    )
     payload = {
         "kind": "code-status",
         "database": str(path),
@@ -224,11 +360,62 @@ def _emit_missing_code_status(
             "type_consensus": {"status": "not_comparable"},
             "gates": [],
         },
+        "architecture": architecture,
     }
-    _emit(
-        payload if json_output else f"CODE_STATUS database={path} exists=false",
-        json_output=json_output,
+    if json_output:
+        _emit(payload, json_output=True)
+        return
+    _emit(f"CODE_STATUS database={path} exists=false", json_output=False)
+    _emit_code_status_architecture(architecture)
+
+
+def _emit_code_status_architecture(architecture: dict[str, object]) -> None:
+    counts = architecture.get("counts")
+    bounded_counts = counts if isinstance(counts, dict) else {}
+    _print_console_line(
+        f"CODE_ARCHITECTURE status={architecture.get('status')} "
+        f"gate={architecture.get('gate')} "
+        f"modules={bounded_counts.get('modules', 0)} "
+        f"imports={bounded_counts.get('imports', 0)} "
+        f"cycles={bounded_counts.get('cycles', 0)} "
+        f"contracts={bounded_counts.get('contracts', 0)} "
+        f"failed_contracts={bounded_counts.get('failed_contracts', 0)} "
+        f"reason={json.dumps(architecture.get('reason'), ensure_ascii=True)}"
     )
+    architecture_summary = architecture.get("summary")
+    if isinstance(architecture_summary, dict):
+        _print_console_line(
+            "CODE_ARCHITECTURE_SUMMARY "
+            f"modules={architecture_summary.get('modules', 0)} "
+            f"import_edges={architecture_summary.get('import_edges', 0)} "
+            f"consensus_edges={architecture_summary.get('consensus_edges', 0)} "
+            f"graph_disagreements={architecture_summary.get('graph_disagreements', 0)} "
+            f"cyclic_sccs={architecture_summary.get('cyclic_sccs', 0)}"
+        )
+    else:
+        _print_console_line("CODE_ARCHITECTURE_SUMMARY status=not_evaluated")
+    architecture_providers = architecture.get("providers")
+    if isinstance(architecture_providers, list):
+        for provider in architecture_providers:
+            if not isinstance(provider, dict):
+                continue
+            _print_console_line(
+                f"CODE_ARCHITECTURE_PROVIDER id={provider.get('provider_id')} "
+                f"status={provider.get('status')} execution={provider.get('execution')} "
+                f"metrics={provider.get('metrics', 0)} "
+                f"relations={provider.get('relations', 0)} "
+                f"gate={provider.get('provider_gate')}"
+            )
+    architecture_gates = architecture.get("gates")
+    if isinstance(architecture_gates, list):
+        for gate in architecture_gates:
+            if not isinstance(gate, dict):
+                continue
+            _print_console_line(
+                f"CODE_ARCHITECTURE_GATE id={gate.get('gate')} "
+                f"status={gate.get('status')} "
+                f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
+            )
 
 
 def _emit_code_status(
@@ -252,6 +439,7 @@ def _emit_code_status(
         "external_evidence": snapshot.external_evidence,
         "analysis_profile": snapshot.external_evidence_suite.get("profile"),
         "external_evidence_suite": snapshot.external_evidence_suite,
+        "architecture": snapshot.architecture,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -287,6 +475,122 @@ def _emit_code_status(
         f"execution={external.get('execution')} diagnostics="
         f"{external.get('diagnostics', 0)} gate={external.get('gate')}"
     )
+    _emit_code_status_architecture(snapshot.architecture)
+
+
+def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
+    failed_contracts = tuple(item for item in analysis.contracts if item.status == "failed")
+    _print_console_line(
+        f"CODE_REVIEW_ARCHITECTURE status={analysis.status} gate={analysis.gate} "
+        f"failed_contracts={len(failed_contracts)} "
+        f"reason={json.dumps(analysis.reason, ensure_ascii=True)}"
+    )
+    if analysis.summary is None:
+        _print_console_line("CODE_REVIEW_ARCHITECTURE_SUMMARY status=not_evaluated")
+    else:
+        summary = analysis.summary
+        _print_console_line(
+            f"CODE_REVIEW_ARCHITECTURE_SUMMARY modules={summary.modules} "
+            f"import_edges={summary.import_edges} consensus_edges={summary.consensus_edges} "
+            f"graph_disagreements={summary.graph_disagreements} "
+            f"cyclic_sccs={summary.cyclic_sccs}"
+        )
+    for gate in analysis.gates:
+        _print_console_line(
+            f"CODE_REVIEW_ARCHITECTURE_GATE id={gate.gate} status={gate.status} "
+            f"reason={json.dumps(gate.reason, ensure_ascii=True)}"
+        )
+    for contract in failed_contracts[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_REVIEW_ARCHITECTURE_CONTRACT status=failed "
+            f"id={json.dumps(contract.contract_id, ensure_ascii=True)} "
+            f"violations={contract.violations} "
+            f"importers={json.dumps(contract.importer_modules, ensure_ascii=True)} "
+            f"imported={json.dumps(contract.imported_modules, ensure_ascii=True)}"
+        )
+    if len(failed_contracts) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT:
+        _print_console_line(
+            "CODE_REVIEW_ARCHITECTURE_CONTRACTS "
+            f"shown={_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT} "
+            f"omitted={len(failed_contracts) - _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT}"
+        )
+
+
+def _module_architecture_changed(module: CodeModuleArchitectureDelta) -> bool:
+    return bool(
+        module.cognitive_complexity_delta
+        or module.fan_in_delta
+        or module.fan_out_delta
+        or module.baseline_cycle_ids != module.current_cycle_ids
+        or module.baseline_contract_ids != module.current_contract_ids
+    )
+
+
+def _emit_code_publication_architecture(architecture: CodeArchitectureDelta) -> None:
+    modules = architecture.modules
+    changed_modules = tuple(item for item in modules if _module_architecture_changed(item))
+    added_contracts = architecture.added_failed_contracts
+    resolved_contracts = architecture.resolved_failed_contracts
+    added_cycles = architecture.added_cycles
+    resolved_cycles = architecture.resolved_cycles
+    displacements = architecture.displaced_complexity
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_ARCHITECTURE status={architecture.status} "
+        f"module_deltas={len(modules)} changed_modules={len(changed_modules)} "
+        f"added_failed_contracts={len(added_contracts)} "
+        f"resolved_failed_contracts={len(resolved_contracts)} "
+        f"added_cycles={len(added_cycles)} resolved_cycles={len(resolved_cycles)} "
+        f"displacements={len(displacements)} "
+        f"contracts_gate={architecture.architecture_contracts_not_degraded} "
+        f"cycles_gate={architecture.no_new_import_cycles} "
+        f"displacement_gate={architecture.module_complexity_not_displaced} "
+        f"reason={json.dumps(architecture.reason, ensure_ascii=True)}"
+    )
+    _print_console_line(
+        "CODE_PUBLICATION_DIFF_ARCHITECTURE_CONTRACTS "
+        f"added={json.dumps(added_contracts[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT], ensure_ascii=True)} "
+        f"resolved={json.dumps(resolved_contracts[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT], ensure_ascii=True)} "
+        f"added_truncated={int(len(added_contracts) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
+        f"resolved_truncated={int(len(resolved_contracts) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)}"
+    )
+    _print_console_line(
+        "CODE_PUBLICATION_DIFF_ARCHITECTURE_CYCLES "
+        f"added={json.dumps(added_cycles[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT], ensure_ascii=True)} "
+        f"resolved={json.dumps(resolved_cycles[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT], ensure_ascii=True)} "
+        f"added_truncated={int(len(added_cycles) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
+        f"resolved_truncated={int(len(resolved_cycles) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)}"
+    )
+    for module in changed_modules[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_ARCHITECTURE_MODULE "
+            f"module={json.dumps(module.module_id, ensure_ascii=True)} "
+            f"cognitive_delta={module.cognitive_complexity_delta} "
+            f"fan_in_delta={module.fan_in_delta:+d} fan_out_delta={module.fan_out_delta:+d} "
+            f"baseline_cycles={json.dumps(module.baseline_cycle_ids, ensure_ascii=True)} "
+            f"current_cycles={json.dumps(module.current_cycle_ids, ensure_ascii=True)} "
+            f"baseline_contracts={json.dumps(module.baseline_contract_ids, ensure_ascii=True)} "
+            f"current_contracts={json.dumps(module.current_contract_ids, ensure_ascii=True)}"
+        )
+    for displacement in displacements[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT]:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_ARCHITECTURE_DISPLACEMENT "
+            f"target={json.dumps(displacement.target_module, ensure_ascii=True)} "
+            f"target_decrease={displacement.target_decrease} "
+            f"recipients={json.dumps(displacement.recipient_modules, ensure_ascii=True)} "
+            f"recipient_increase={displacement.recipient_increase} "
+            f"imports={json.dumps(displacement.import_relationships, ensure_ascii=True)}"
+        )
+    if (
+        len(changed_modules) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT
+        or len(displacements) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT
+    ):
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_ARCHITECTURE_EXAMPLES "
+            f"module_examples_omitted="
+            f"{max(0, len(changed_modules) - _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
+            f"displacement_examples_omitted="
+            f"{max(0, len(displacements) - _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)}"
+        )
 
 
 def run_code_status(args: argparse.Namespace) -> int:
@@ -375,6 +679,12 @@ def run_code_review(args: argparse.Namespace) -> int:
                 f"status={provider.status} findings={provider.findings} "
                 f"gate={provider.gate}"
             )
+    if result.architecture is None:
+        _print_console_line(
+            'CODE_REVIEW_ARCHITECTURE status=not_evaluated reason="architecture_result_missing"'
+        )
+    else:
+        _emit_code_review_architecture(result.architecture)
     if result.recommendation_status == "abstained":
         _print_console_line(
             f"CODE_REVIEW_RECOMMENDATION status=abstained reason={result.recommendation_reason}"
@@ -384,6 +694,13 @@ def run_code_review(args: argparse.Namespace) -> int:
             f"CODE_REVIEW_WORK_PACKAGE status=abstained reason={result.work_package_reason}"
         )
     for package in result.work_packages:
+        import_chains = package.import_chains[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT]
+        affected_contracts = package.affected_architecture_contracts[
+            :_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT
+        ]
+        architecture_gates = tuple(
+            gate for gate in package.acceptance_gates if gate in _CODE_ARCHITECTURE_ACCEPTANCE_GATES
+        )
         _print_console_line(
             "CODE_REVIEW_WORK_PACKAGE status=ready "
             f"package_rank={package.package_rank} risk={package.change_risk} "
@@ -392,6 +709,19 @@ def run_code_review(args: argparse.Namespace) -> int:
             f"confidence={package.confidence} "
             f"primary={json.dumps(package.primary_symbol, ensure_ascii=True)} "
             f"package_id={package.package_id}"
+        )
+        _print_console_line(
+            "CODE_REVIEW_WORK_PACKAGE_ARCHITECTURE status=ready "
+            f"package_rank={package.package_rank} package_id={package.package_id} "
+            f"primary_module={json.dumps(package.primary_module, ensure_ascii=True)} "
+            f"import_chains={json.dumps(import_chains, ensure_ascii=True)} "
+            f"import_chains_truncated="
+            f"{int(len(package.import_chains) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
+            f"affected_architecture_contracts="
+            f"{json.dumps(affected_contracts, ensure_ascii=True)} "
+            f"affected_contracts_truncated="
+            f"{int(len(package.affected_architecture_contracts) > _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT)} "
+            f"architecture_acceptance_gates={json.dumps(architecture_gates, ensure_ascii=True)}"
         )
     for recommendation in result.recommendations:
         _print_console_line(
@@ -452,6 +782,7 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         or result.hotspots is None
         or result.probable_dead_delta is None
         or result.external_evidence is None
+        or result.architecture is None
         or result.digest is None
     ):
         return _error(
@@ -495,6 +826,7 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
             f"status={provider.status} common={provider.common} "
             f"added={provider.added} resolved={provider.resolved} gate={provider.gate}"
         )
+    _emit_code_publication_architecture(result.architecture)
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0
