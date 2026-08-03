@@ -121,7 +121,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $venvPython = Join-Path $venv "Scripts\python.exe"
           & $venvPython -m pip install --disable-pip-version-check --no-cache-dir `
-            --constraint "$env:GITHUB_WORKSPACE\constraints.txt" $wheels[0].FullName
+            --constraint "$env:GITHUB_WORKSPACE\constraints.txt" $wheels[0].FullName "Pillow>=12.2,<13"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $scripts = Join-Path $venv "Scripts"
           "STANDARD_PYTHON=$venvPython" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

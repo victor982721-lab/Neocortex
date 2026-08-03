@@ -23,6 +23,12 @@ persistencia v4 y publication diff aprobó `36 passed`. La barrera previa del
 objetivo aprobó `8 passed` antes y después, y la integración afectada obtuvo
 `121 passed, 1 skipped`; Ruff/format y Mypy focal están limpios.
 
+El carril CI `standard` instala ahora Pillow 12.x bajo `constraints.txt`, que
+es la dependencia real de la ruta de imagen importada por
+`test_processing_provenance.py`. La regresión focal aprobó `10 passed`, el
+workflow conserva YAML válido y el carril no se amplió a los extras pesados de
+imagen o instalación completa.
+
 El wheel final tiene 1 591 588 bytes, 298 miembros, `ZipFile.testzip()` y
 `pip check` limpios, y SHA-256
 `FC86A4CC777ECED846EFC6B8BE8601442594A2183D178B9605CCC8097739B300`.
