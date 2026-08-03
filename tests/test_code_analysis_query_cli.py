@@ -232,7 +232,7 @@ def test_code_query_human_output_is_bounded_and_errors_are_non_mutating(
 
     assert cli_code.run_code_query(args) == 0
     output = capsys.readouterr().out.splitlines()
-    assert output[0] == "CODE_QUERY surface=review status=ready matched=3 returned=3 limit=2"
+    assert output[0] == "CODE_QUERY surface=review status=ready matched=3 returned=2 limit=2"
     assert sum(line.startswith("CODE_QUERY_MATCH ") for line in output) == 2
     assert "CODE_QUERY_LIMITATION bounded" in output
 

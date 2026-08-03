@@ -315,8 +315,8 @@ predeterminado es 50 y el rango válido es 1–500. Baseline es obligatorio para
 `diff` y se rechaza con `status` o `review`. Sin `--code-json`, la salida humana
 usa `CODE_QUERY`, `CODE_QUERY_FILTERS`, `CODE_QUERY_MATCH` y
 `CODE_QUERY_LIMITATION`; JSON conserva el envelope completo. Ambas vistas son
-advisory: no contienen `aggregate_score`, no estiman `defect_probability` y no
-autorizan cambios.
+advisory: fijan `aggregate_score` y `defect_probability` explícitamente en
+`null`, no estiman ninguno de los dos y no autorizan cambios.
 
 ### Ruta sobre un snapshot retenido
 

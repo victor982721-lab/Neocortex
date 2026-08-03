@@ -1222,11 +1222,12 @@ def _read_code_query_source(args: argparse.Namespace) -> dict[str, object]:
 def _emit_code_query_human(payload: dict[str, object], *, limit: int) -> None:
     raw_matches = payload.get("matches")
     matches = raw_matches if isinstance(raw_matches, list) else []
+    displayed_matches = matches[:limit]
     raw_counts = payload.get("counts")
     counts = raw_counts if isinstance(raw_counts, dict) else {}
     _print_console_line(
         f"CODE_QUERY surface={payload.get('surface')} status={payload.get('status')} "
-        f"matched={counts.get('matched', len(matches))} returned={len(matches)} "
+        f"matched={counts.get('matched', len(matches))} returned={len(displayed_matches)} "
         f"limit={limit}"
     )
     filters = payload.get("filters")
@@ -1235,7 +1236,7 @@ def _emit_code_query_human(payload: dict[str, object], *, limit: int) -> None:
             "CODE_QUERY_FILTERS "
             + json.dumps(filters, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
         )
-    for match in matches[:limit]:
+    for match in displayed_matches:
         _print_console_line(
             "CODE_QUERY_MATCH "
             + json.dumps(match, ensure_ascii=True, sort_keys=True, separators=(",", ":"))

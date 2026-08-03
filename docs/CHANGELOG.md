@@ -64,8 +64,8 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 - Historia Git local v1 publica commits, churn, recencia y relaciones de cambio
   sin consultar remotos. `neocortex.code-engineering-analytics/v1` correlaciona
   esa historia con arquitectura v2, Coverage y mutación focal mediante
-  dimensiones y gates explícitos, sin `aggregate_score` ni
-  `defect_probability`.
+  dimensiones y gates explícitos, con `aggregate_score=null` y
+  `defect_probability=null` en vez de una puntuación mágica.
 - Cosmic Ray `8.4.6` genera y ejecuta mutantes sólo sobre una copia staged
   verificada del objetivo y su selección de pruebas. Los argumentos nuevos
   `--deep-mutation-target`, `--deep-mutation-symbol`,

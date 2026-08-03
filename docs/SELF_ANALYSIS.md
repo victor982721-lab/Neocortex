@@ -617,9 +617,9 @@ filtros, matches y limitaciones mediante líneas `CODE_QUERY*`; `--code-json`
 entrega el envelope auditable.
 
 La consulta conserva categorías, gates, evidencia, deltas, estados y work
-packages como dimensiones separadas. No crea `aggregate_score`, no presenta
-ninguna métrica como `defect_probability` y no transforma consenso, cobertura,
-mutación, historia o centralidad en autoridad de cambio.
+packages como dimensiones separadas. Publica `aggregate_score=null` y
+`defect_probability=null`, no estima ninguno de los dos y no transforma
+consenso, cobertura, mutación, historia o centralidad en autoridad de cambio.
 
 ## Mini-root de laboratorio
 
