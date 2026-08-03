@@ -379,12 +379,17 @@ def _provider_evidence(
 ) -> tuple[dict[str, _ProviderEvidence], tuple[ArchitectureProviderStatus, ...]]:
     evidence = cast(
         dict[str, _ProviderEvidence],
-        read_external_provider_evidence(connection, analysis_run_id),
+        read_external_provider_evidence(
+            connection,
+            analysis_run_id,
+            provider_ids=CODE_ARCHITECTURE_REQUIRED_PROVIDERS,
+        ),
     )
     suite = read_external_evidence_suite(
         connection,
         analysis_run_id,
         enforce_current_runtime=False,
+        provider_ids=CODE_ARCHITECTURE_REQUIRED_PROVIDERS,
     )
     suite_statuses = cast(
         dict[str, _ProviderSuiteStatus],

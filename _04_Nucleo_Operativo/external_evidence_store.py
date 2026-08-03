@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Literal, cast
@@ -826,7 +826,13 @@ def _effective_provider_run_id(
 def _provider_status(
     connection: sqlite3.Connection,
     row: sqlite3.Row | Mapping[str, object],
-) -> tuple[ExternalProviderStatus, tuple[ExternalProviderFinding, ...]]:
+) -> tuple[
+    ExternalProviderStatus,
+    tuple[ExternalProviderFinding, ...],
+    int | None,
+    tuple[ExternalProviderMetric, ...],
+    tuple[ExternalProviderRelation, ...],
+]:
     tool_run_id = int(str(row["tool_run_id"]))
     try:
         limitations_value = json.loads(str(row["limitations_json"]))
@@ -871,6 +877,9 @@ def _provider_status(
                     content_executed=False,
                 ),
                 (),
+                None,
+                (),
+                (),
             )
         if tool_status not in {"completed", "skipped"}:
             reason = f"provider_{tool_status}"
@@ -893,6 +902,9 @@ def _provider_status(
                     limitations=limitations,
                     counters=counters,
                 ),
+                (),
+                None,
+                (),
                 (),
             )
         effective_run_id = _effective_provider_run_id(connection, row)
@@ -939,9 +951,15 @@ def _provider_status(
             metrics=len(metrics),
             relations=len(relations),
         )
-        return status, findings
+        return status, findings, effective_run_id, metrics, relations
     except (KeyError, TypeError, ValueError, sqlite3.DatabaseError):
-        return _abstained_provider(row, "external_provider_projection_invalid"), ()
+        return (
+            _abstained_provider(row, "external_provider_projection_invalid"),
+            (),
+            None,
+            (),
+            (),
+        )
 
 
 def _legacy_provider_status(status: ExternalEvidenceStatus) -> ExternalProviderStatus:
@@ -1105,21 +1123,63 @@ def _gate_evaluations(
     return tuple(gates)
 
 
+def _normalized_provider_filter(
+    provider_ids: Collection[str] | None,
+) -> tuple[str, ...] | None:
+    if provider_ids is None:
+        return None
+    if isinstance(provider_ids, (str, bytes)):
+        raise TypeError("external provider filter must be a collection of identities")
+    supplied = tuple(provider_ids)
+    if any(not isinstance(provider_id, str) for provider_id in supplied):
+        raise TypeError("external provider filter identities must be strings")
+    requested = tuple(sorted(set(supplied)))
+    if len(requested) > _PROVIDER_STATUS_LIMIT:
+        raise ValueError("external provider filter exceeds its provider bound")
+    if any(not provider_id or len(provider_id) > 256 for provider_id in requested):
+        raise ValueError("external provider filter contains an invalid identity")
+    return requested
+
+
+def _provider_run_rows(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    provider_ids: Collection[str] | None,
+) -> list[sqlite3.Row]:
+    requested = _normalized_provider_filter(provider_ids)
+    if requested == ():
+        return []
+    if requested is None:
+        return connection.execute(
+            """SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
+            r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
+            JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+            WHERE r.analysis_run_id=?
+            ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
+            (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
+        ).fetchall()
+    placeholders = ",".join("?" for _item in requested)
+    return connection.execute(
+        f"""SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
+        r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
+        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+        WHERE r.analysis_run_id=? AND c.provider_id IN ({placeholders})
+        ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
+        (analysis_run_id, *requested, _PROVIDER_STATUS_LIMIT + 1),
+    ).fetchall()
+
+
 def read_external_evidence_suite(
     connection: sqlite3.Connection,
     analysis_run_id: int,
     *,
     enforce_current_runtime: bool,
+    provider_ids: Collection[str] | None = None,
 ) -> ExternalEvidenceSuiteStatus:
     """Read every normalized provider while preserving the legacy Ruff fallback."""
 
-    rows = connection.execute(
-        """SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
-        r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
-        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
-        WHERE r.analysis_run_id=? ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
-        (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
-    ).fetchall()
+    requested = _normalized_provider_filter(provider_ids)
+    rows = _provider_run_rows(connection, analysis_run_id, requested)
     if len(rows) > _PROVIDER_STATUS_LIMIT:
         return ExternalEvidenceSuiteStatus(
             "protected",
@@ -1140,7 +1200,10 @@ def read_external_evidence_suite(
             if enforce_current_runtime and str(row["status"]) in {"completed", "skipped"}
             else None
         )
-        status, provider_findings = _provider_status(connection, row)
+        status, provider_findings, _effective_run_id, _metrics, _relations = _provider_status(
+            connection,
+            row,
+        )
         if runtime_reason is not None:
             status = replace(
                 status,
@@ -1151,7 +1214,9 @@ def read_external_evidence_suite(
             provider_findings = ()
         statuses.append(status)
         findings[provider_id] = provider_findings
-    if "ruff-protected-basic" not in latest:
+    if "ruff-protected-basic" not in latest and (
+        requested is None or "ruff-protected-basic" in requested
+    ):
         legacy, _ids, _row = read_external_evidence(
             connection,
             analysis_run_id,
@@ -1187,16 +1252,19 @@ def read_external_evidence_suite(
 def read_external_provider_evidence(
     connection: sqlite3.Connection,
     analysis_run_id: int,
+    *,
+    provider_ids: Collection[str] | None = None,
 ) -> dict[str, ExternalProviderEvidence]:
-    """Read latest provider evidence, resolving exact replays to their source."""
+    """Read latest provider evidence, resolving exact replays to their source.
 
-    rows = connection.execute(
-        """SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
-        r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
-        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
-        WHERE r.analysis_run_id=? ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
-        (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
-    ).fetchall()
+    ``provider_ids`` restricts the projection at the SQL boundary.  The
+    selected providers retain the same status, digest and exact-replay
+    validation as an unfiltered read; unrequested provider payloads are never
+    deserialized.  Omitting the filter preserves the historical all-provider
+    contract.
+    """
+
+    rows = _provider_run_rows(connection, analysis_run_id, provider_ids)
     if len(rows) > _PROVIDER_STATUS_LIMIT:
         raise ValueError("external provider evidence exceeds its provider bound")
     latest: dict[str, sqlite3.Row] = {}
@@ -1204,7 +1272,10 @@ def read_external_provider_evidence(
         latest.setdefault(str(row["provider_id"]), row)
     result: dict[str, ExternalProviderEvidence] = {}
     for provider_id, row in sorted(latest.items()):
-        status, findings = _provider_status(connection, row)
+        status, findings, effective_run_id, metrics, relations = _provider_status(
+            connection,
+            row,
+        )
         tool_run_id = int(row["tool_run_id"])
         if status.status != "ready":
             result[provider_id] = ExternalProviderEvidence(
@@ -1215,11 +1286,7 @@ def read_external_provider_evidence(
                 status.reason,
             )
             continue
-        try:
-            effective_run_id = _effective_provider_run_id(connection, row)
-            metrics = _provider_metrics(connection, effective_run_id)
-            relations = _provider_relations(connection, effective_run_id)
-        except (KeyError, TypeError, ValueError, sqlite3.DatabaseError):
+        if effective_run_id is None:
             result[provider_id] = ExternalProviderEvidence(
                 provider_id,
                 tool_run_id,

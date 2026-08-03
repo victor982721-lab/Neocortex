@@ -611,12 +611,33 @@ def read_code_engineering_analysis(
     analysis_run_id: int,
     *,
     database: str = "",
+    architecture: CodeArchitectureAnalysis | None = None,
+    coverage: CodeCoverageAnalysis | None = None,
 ) -> CodeEngineeringAnalytics:
-    """Read one already-published run without executing tools or changing state."""
+    """Read one already-published run without executing tools or changing state.
 
-    architecture = read_code_architecture_analysis(connection, analysis_run_id, database=database)
-    coverage = read_code_coverage_analysis(connection, analysis_run_id, database=database)
-    providers = read_external_provider_evidence(connection, analysis_run_id)
+    Status/review consumers may pass architecture and coverage projections they
+    already read from the same SQLite snapshot.  Omitting either projection
+    preserves the standalone reader contract.
+    """
+
+    if architecture is None:
+        architecture = read_code_architecture_analysis(
+            connection,
+            analysis_run_id,
+            database=database,
+        )
+    if coverage is None:
+        coverage = read_code_coverage_analysis(
+            connection,
+            analysis_run_id,
+            database=database,
+        )
+    providers = read_external_provider_evidence(
+        connection,
+        analysis_run_id,
+        provider_ids=(GIT_HISTORY_PROVIDER_ID, MUTATION_PROVIDER_ID),
+    )
     return analyze_code_engineering(
         architecture,
         coverage,

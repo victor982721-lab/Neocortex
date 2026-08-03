@@ -1059,6 +1059,7 @@ def read_code_coverage_analysis(
             connection,
             analysis_run_id,
             enforce_current_runtime=True,
+            provider_ids=(CODE_COVERAGE_PROVIDER_ID,),
         )
         suite_status = next(
             (item for item in suite.providers if item.provider_id == CODE_COVERAGE_PROVIDER_ID),
@@ -1078,9 +1079,11 @@ def read_code_coverage_analysis(
                 analysis_run_id=analysis_run_id,
                 evidence=None,
             )
-        evidence = read_external_provider_evidence(connection, analysis_run_id).get(
-            CODE_COVERAGE_PROVIDER_ID
-        )
+        evidence = read_external_provider_evidence(
+            connection,
+            analysis_run_id,
+            provider_ids=(CODE_COVERAGE_PROVIDER_ID,),
+        ).get(CODE_COVERAGE_PROVIDER_ID)
     except (KeyError, TypeError, ValueError, sqlite3.DatabaseError) as exc:
         return _abstained(
             f"coverage_evidence_unavailable:{type(exc).__name__}:{exc}",

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Collection
+
+import pytest
+
+from _04_Nucleo_Operativo import code_engineering_analytics as engineering_module
 from _04_Nucleo_Operativo.code_architecture_analysis import (
     ArchitectureModule,
     ArchitectureSummary,
@@ -17,6 +23,7 @@ from _04_Nucleo_Operativo.code_engineering_analytics import (
     MUTATION_PROVIDER_ID,
     analyze_code_engineering,
     engineering_profile_for_module,
+    read_code_engineering_analysis,
 )
 from _04_Nucleo_Operativo.external_evidence_models import (
     ExternalProviderEvidence,
@@ -286,3 +293,51 @@ def test_engineering_analysis_correlates_dimensions_without_score() -> None:
     assert first.digest == second.digest
     assert first.as_payload()["aggregate_score"] is None
     assert first.as_payload()["defect_probability"] is None
+
+
+def test_engineering_reader_reuses_projections_and_filters_provider_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    architecture = _architecture()
+    coverage = _coverage()
+    providers = _providers()
+    observed_provider_ids: tuple[str, ...] | None = None
+
+    def fail_duplicate_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("an already-read projection was loaded again")
+
+    def read_selected(
+        _connection: sqlite3.Connection,
+        _analysis_run_id: int,
+        *,
+        provider_ids: Collection[str] | None = None,
+    ) -> dict[str, ExternalProviderEvidence]:
+        nonlocal observed_provider_ids
+        assert provider_ids is not None
+        observed_provider_ids = tuple(provider_ids)
+        return providers
+
+    monkeypatch.setattr(engineering_module, "read_code_architecture_analysis", fail_duplicate_read)
+    monkeypatch.setattr(engineering_module, "read_code_coverage_analysis", fail_duplicate_read)
+    monkeypatch.setattr(engineering_module, "read_external_provider_evidence", read_selected)
+
+    with sqlite3.connect(":memory:") as connection:
+        result = read_code_engineering_analysis(
+            connection,
+            7,
+            database="fixture.sqlite3",
+            architecture=architecture,
+            coverage=coverage,
+        )
+
+    assert observed_provider_ids == (GIT_HISTORY_PROVIDER_ID, MUTATION_PROVIDER_ID)
+    assert (
+        result.digest
+        == analyze_code_engineering(
+            architecture,
+            coverage,
+            providers,
+            database="fixture.sqlite3",
+            analysis_run_id=7,
+        ).digest
+    )

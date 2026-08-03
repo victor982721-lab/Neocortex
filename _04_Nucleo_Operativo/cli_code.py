@@ -522,6 +522,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
             -1 if latest is None else int(latest["analysis_run_id"]),
             enforce_current_runtime=True,
         ).as_payload()
+        architecture_analysis: CodeArchitectureAnalysis | None = None
         if latest is None:
             architecture = _architecture_abstained_payload(
                 str(path),
@@ -534,13 +535,13 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 analysis_run_id=int(latest["analysis_run_id"]),
             )
         else:
-            architecture = _architecture_status_payload(
-                read_code_architecture_analysis(
-                    connection,
-                    int(latest["analysis_run_id"]),
-                    database=str(path),
-                )
+            architecture_analysis = read_code_architecture_analysis(
+                connection,
+                int(latest["analysis_run_id"]),
+                database=str(path),
             )
+            architecture = _architecture_status_payload(architecture_analysis)
+        coverage_analysis: CodeCoverageAnalysis | None = None
         if latest is None:
             test_coverage = _coverage_abstained_payload(
                 str(path),
@@ -553,13 +554,12 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 analysis_run_id=int(latest["analysis_run_id"]),
             )
         else:
-            test_coverage = _coverage_status_payload(
-                read_code_coverage_analysis(
-                    connection,
-                    int(latest["analysis_run_id"]),
-                    database=str(path),
-                )
+            coverage_analysis = read_code_coverage_analysis(
+                connection,
+                int(latest["analysis_run_id"]),
+                database=str(path),
             )
+            test_coverage = _coverage_status_payload(coverage_analysis)
         unused_analysis = bounded_code_unused_payload(
             read_code_unused_analysis(
                 connection,
@@ -595,6 +595,8 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                     connection,
                     int(latest["analysis_run_id"]),
                     database=str(path),
+                    architecture=architecture_analysis,
+                    coverage=coverage_analysis,
                 )
             )
     return _CodeStatusSnapshot(
