@@ -616,8 +616,12 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
 def _read_self_analysis_payload(
     args: argparse.Namespace,
     latest: sqlite3.Row | None,
+    *,
+    enabled: bool | None = None,
 ) -> dict[str, object] | None:
-    if not args.code_json or latest is None:
+    if enabled is None:
+        enabled = args.code_json
+    if not enabled or latest is None:
         return None
     from .self_analysis_status import (
         CodeRunStatusEvidence,
@@ -641,17 +645,12 @@ def _read_self_analysis_payload(
     return None if status is None else status.as_payload()
 
 
-def _emit_missing_code_status(
-    path: Path,
-    analyzers: object,
-    *,
-    json_output: bool,
-) -> None:
+def _missing_code_status_payload(path: Path, analyzers: object) -> dict[str, object]:
     architecture = _architecture_abstained_payload(
         str(path),
         "code_state_missing",
     )
-    payload = {
+    return {
         "kind": "code-status",
         "database": str(path),
         "exists": False,
@@ -676,6 +675,18 @@ def _emit_missing_code_status(
         "supply_chain": _supply_chain_abstained_payload(str(path), "code_state_missing"),
         "engineering_analytics": _engineering_abstained_payload(str(path), "code_state_missing"),
     }
+
+
+def _emit_missing_code_status(
+    path: Path,
+    analyzers: object,
+    *,
+    json_output: bool,
+) -> None:
+    payload = _missing_code_status_payload(path, analyzers)
+    architecture = payload["architecture"]
+    if not isinstance(architecture, dict):
+        raise AssertionError("missing Code status architecture must be a mapping")
     if json_output:
         _emit(payload, json_output=True)
         return
@@ -945,25 +956,8 @@ def _emit_code_status(
     *,
     json_output: bool,
 ) -> None:
+    payload = _code_status_payload(path, analyzers, snapshot, self_analysis)
     latest = snapshot.latest_run
-    payload = {
-        "kind": "code-status",
-        "database": str(path),
-        "exists": True,
-        "schema_version": snapshot.schema_version,
-        "counts": snapshot.counts,
-        "latest_run": None if latest is None else dict(latest),
-        "analyzers": analyzers,
-        "self_analysis": self_analysis,
-        "external_evidence": snapshot.external_evidence,
-        "analysis_profile": snapshot.external_evidence_suite.get("profile"),
-        "external_evidence_suite": snapshot.external_evidence_suite,
-        "architecture": snapshot.architecture,
-        "test_coverage": snapshot.test_coverage,
-        "unused_analysis": snapshot.unused_analysis,
-        "supply_chain": snapshot.supply_chain,
-        "engineering_analytics": snapshot.engineering_analytics,
-    }
     if json_output:
         _emit(payload, json_output=True)
         return
@@ -1007,6 +1001,33 @@ def _emit_code_status(
     _emit_code_unused("CODE_UNUSED", snapshot.unused_analysis)
     _emit_code_supply_chain("CODE_SUPPLY_CHAIN", snapshot.supply_chain)
     _emit_code_engineering(snapshot.engineering_analytics)
+
+
+def _code_status_payload(
+    path: Path,
+    analyzers: object,
+    snapshot: _CodeStatusSnapshot,
+    self_analysis: dict[str, object] | None,
+) -> dict[str, object]:
+    latest = snapshot.latest_run
+    return {
+        "kind": "code-status",
+        "database": str(path),
+        "exists": True,
+        "schema_version": snapshot.schema_version,
+        "counts": snapshot.counts,
+        "latest_run": None if latest is None else dict(latest),
+        "analyzers": analyzers,
+        "self_analysis": self_analysis,
+        "external_evidence": snapshot.external_evidence,
+        "analysis_profile": snapshot.external_evidence_suite.get("profile"),
+        "external_evidence_suite": snapshot.external_evidence_suite,
+        "architecture": snapshot.architecture,
+        "test_coverage": snapshot.test_coverage,
+        "unused_analysis": snapshot.unused_analysis,
+        "supply_chain": snapshot.supply_chain,
+        "engineering_analytics": snapshot.engineering_analytics,
+    }
 
 
 def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
@@ -1161,6 +1182,95 @@ def run_code_status(args: argparse.Namespace) -> int:
         json_output=args.code_json,
     )
     return 0
+
+
+def _read_code_query_source(args: argparse.Namespace) -> dict[str, object]:
+    surface = args.code_query
+    if surface == "status":
+        from .code_analyzers import builtin_analyzer_registry
+        from .self_analysis_status import require_sqlite_sidecars_absent
+
+        path = _state_path(args)
+        analyzers = builtin_analyzer_registry().status()
+        require_sqlite_sidecars_absent(path)
+        if not path.is_file():
+            return _missing_code_status_payload(path, analyzers)
+        snapshot = _read_code_status_snapshot(path)
+        self_analysis = _read_self_analysis_payload(
+            args,
+            snapshot.latest_run,
+            enabled=True,
+        )
+        return _code_status_payload(path, analyzers, snapshot, self_analysis)
+    if surface == "review":
+        from .code_review import review_code_state
+
+        return review_code_state(args.state_directory, limit=50).as_payload()
+    if surface == "diff":
+        from .code_publication_diff import compare_code_publications
+
+        baseline = getattr(args, "code_query_baseline", None)
+        if baseline is None:
+            raise ValueError("--code-query-baseline is required for --code-query diff")
+        return compare_code_publications(
+            Path(baseline),
+            args.state_directory,
+        ).as_payload()
+    raise ValueError(f"unsupported Code query surface: {surface!r}")
+
+
+def _emit_code_query_human(payload: dict[str, object], *, limit: int) -> None:
+    raw_matches = payload.get("matches")
+    matches = raw_matches if isinstance(raw_matches, list) else []
+    raw_counts = payload.get("counts")
+    counts = raw_counts if isinstance(raw_counts, dict) else {}
+    _print_console_line(
+        f"CODE_QUERY surface={payload.get('surface')} status={payload.get('status')} "
+        f"matched={counts.get('matched', len(matches))} returned={len(matches)} "
+        f"limit={limit}"
+    )
+    filters = payload.get("filters")
+    if isinstance(filters, dict):
+        _print_console_line(
+            "CODE_QUERY_FILTERS "
+            + json.dumps(filters, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+    for match in matches[:limit]:
+        _print_console_line(
+            "CODE_QUERY_MATCH "
+            + json.dumps(match, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        )
+    limitations = payload.get("limitations")
+    if isinstance(limitations, list):
+        for limitation in limitations[:limit]:
+            _print_console_line(f"CODE_QUERY_LIMITATION {limitation}")
+
+
+def run_code_query(args: argparse.Namespace) -> int:
+    """Filter one existing published Code surface without mutating its owner."""
+
+    try:
+        from .code_analysis_query import CodeAnalysisQuery, query_code_analysis
+
+        source = _read_code_query_source(args)
+        query = CodeAnalysisQuery(
+            surface=args.code_query,
+            providers=tuple(args.code_query_provider or ()),
+            categories=tuple(args.code_query_category or ()),
+            modules=tuple(args.code_query_module or ()),
+            statuses=tuple(args.code_query_status or ()),
+            deltas=tuple(args.code_query_delta or ()),
+            work_packages=tuple(args.code_query_work_package or ()),
+            limit=args.code_query_limit,
+        )
+        payload = query_code_analysis(source, query)
+    except (ImportError, OSError, sqlite3.Error, RuntimeError, TypeError, ValueError) as exc:
+        return _error("code-query", exc)
+    if args.code_json:
+        _emit(payload, json_output=True)
+    else:
+        _emit_code_query_human(payload, limit=args.code_query_limit)
+    return 0 if payload.get("status") == "ready" else 2
 
 
 def _emit_code_review_unused_result(result: CodeReviewResult) -> None:
@@ -1849,6 +1959,7 @@ __all__ = [
     "run_code_doctor",
     "run_code_projects",
     "run_code_publication_diff",
+    "run_code_query",
     "run_code_reconstruct",
     "run_code_review",
     "run_code_search",
