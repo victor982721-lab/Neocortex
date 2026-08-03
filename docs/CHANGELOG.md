@@ -28,24 +28,32 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   scan/journal, evidencia code, cuatro conteos cero y argv canónicos
   `analyze`/`status` como arrays acotados; si USN no está disponible registra el
   fallback completo sin checkpoint ni cursor ficticio.
-- Plataforma External Evidence v1 con perfiles `protected` y `trusted-static`.
-  El primero conserva Ruff basic aislado `E4,E7,E9,F`; el segundo añade Ruff con
-  la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright como proveedores
-  independientes. Todos usan inputs verificados, límites y salida estructurada,
-  no importan ni ejecutan contenido, no aplican fixes y publican sólo evidencia
-  advisory. Ruff trusted omite `I,PT,SIM,UP` para evitar que estilo,
-  convenciones de tests o modernización oculten la señal prioritaria;
-  `trusted-deep` queda reservado sin implementación.
-- Code schema 3 añade `external_run_contracts`, `external_run_inputs`,
-  `external_findings`, `external_run_replays` y `external_run_counters` mediante
-  migración aditiva desde v1/v2. El replay exacto verifica fingerprints, registra
-  sus counters, no inicia procesos y no duplica findings; la proyección Ruff v2
-  permanece legible para compatibilidad.
-- `--code-review` v5 y `--code-publication-diff` v3 exponen la suite, deltas y
-  gates por proveedor, además del consenso/discrepancia Mypy-Pyright y un
-  veredicto agregado con limitaciones. Status y code doctor informan perfil,
-  disponibilidad, versión, cobertura, ejecución y counters sin cambiar ranking
-  ni autorizar mutaciones.
+- Plataforma External Evidence v1 con perfiles `protected`, `trusted-static` y
+  `trusted-deep`. Protected conserva Ruff basic aislado `E4,E7,E9,F`;
+  trusted-static suma Ruff proyecto, Mypy, Pyright, Ruff Analyze, Grimp,
+  Complexipy, Vulture, Semgrep, Deptry, pip-audit e inventario instalado como
+  productores independientes. Trusted-deep añade Pytest/Coverage sólo para la
+  identidad física exacta del repositorio. Todos publican evidencia advisory y
+  carecen de autoridad de mutación; sólo el perfil profundo ejecuta contenido.
+- Code schema 3 añade contratos, inputs, findings, replays y counters externos;
+  schema 4 añade métricas y relaciones genéricas con migraciones compatibles y
+  consumidores reales. El replay exacto verifica fingerprints y no duplica
+  evidencia; el inventario instalado conserva como costo real la reverificación
+  de `RECORD`.
+- Ruff Analyze/Grimp publican grafo, contratos, SCC y ciclos; Complexipy,
+  complejidad cognitiva por símbolo y módulo. Vulture se correlaciona con
+  Pyright, grafo, contratos dinámicos y Coverage para explicar o abstenerse ante
+  código potencialmente no usado, sin autoridad de borrado.
+- Semgrep `1.172.0` ejecuta tres invariantes locales con autofix deshabilitado;
+  Deptry `0.25.1` analiza higiene de declaraciones; pip-audit `2.10.1` captura
+  snapshots fechados de PyPI; y el inventario instalado verifica constraints,
+  metadata de licencia e integridad `RECORD`. Seis gates mantienen separadas
+  las categorías de dependencias, vulnerabilidades, paquete y licencias, sin
+  score mágico ni fixes.
+- `--code-review` v9 y `--code-publication-diff` v7 exponen proveedores,
+  arquitectura, Coverage, consenso de uso y supply chain mediante deltas y
+  gates explicables. Status, work packages y code doctor consumen la misma
+  evidencia sin cambiar ranking ni autorizar mutaciones.
 - Inventario Dedup v9: la publicación generacional ya no depende de USN. Un
   checkpoint conserva cursor completo o tres nulos; la corrida normal usa full
   scan portable cuando USN falta y mantiene Code/rutas incrementales por caché.
@@ -128,10 +136,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 
 ### Corregido
 
-- La instalación base se limita a `mypy`, `rich`, `ruff` y `xxhash`; `documents`, `audio`,
-  `image`, `semantic` y `ui` poseen extras explícitos, y `full` conserva la
-  unión compatible del runtime integrado anterior. Pillow permanece declarado
-  en cada dominio que lo importa directamente.
+- La instalación base incorpora las herramientas del autoanálisis integrado:
+  Complexipy, Coverage, Deptry, Grimp, Mypy, Packaging, pip-audit, Pytest, Rich,
+  Ruff, Semgrep, Vulture y xxHash. `documents`, `audio`, `image`, `semantic` y
+  `ui` conservan extras explícitos, y `full` mantiene la unión compatible del
+  runtime integrado. Pillow permanece declarado en cada dominio que lo importa.
 - Knowledge status/search/context y los facades Semantic ya no cargan Pillow ni
   schemas de owners por imports eager al inspeccionar estado ausente ni al leer
   un owner `image` existente.

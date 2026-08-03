@@ -24,28 +24,41 @@ Las **17/17 dependencias directas** instaladas satisfacen tanto su specifier de 
 
 Las versiones siguientes son las instaladas en el entorno indicado, no una promesa para resoluciones futuras sin `constraints.txt`.
 
-### Addendum de declaración fuente 0.7.2
+### Addendum del runtime candidato 0.7.2 — Hito 5
 
-Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15, Mypy
-2.1, Grimp 3.15 y Complexipy 6.2 pasaron a la base como proveedores de evidencia
-externa; Ruff, Mypy y Complexipy declaran MIT, mientras Grimp declara
-BSD-2-Clause. El perfil `trusted-static`
-añade Pyright `1.1.411`, también MIT, como paquete npm aislado junto al runtime,
-ejecutado mediante Node. Pyright y Node no son dependencias Python ni se
-redistribuyen dentro del wheel de NeoCortex; cualquier bundle que los incluya
-debe inventariar por separado el paquete npm, Node y sus avisos transitivos.
+El snapshot jurídico histórico de 2026-07-25 no se reescribió. La aceptación de
+Hito 5 sí añadió un inventario técnico reproducible del runtime candidato:
+104 distribuciones, 101 con alguna metadata de licencia, 38 declaraciones
+ambiguas y 3 ausentes. Las 13 dependencias base requeridas estaban instaladas y
+compatibles. Se verificaron 296 hashes/tamaños `RECORD` y 5 909 535 bytes sin
+faltantes, rutas inseguras ni discrepancias. Estos conteos describen evidencia
+de metadata; no resuelven licencias ni sustituyen revisión jurídica.
 
-| Componente declarado por la fuente 0.7.2 | Entrega | Alcance operativo | Declaración |
+El wheel candidato de 1 540 150 bytes y 293 miembros aprobó integridad ZIP y
+`pip check`; su SHA-256 es
+`D0957627056E873FEA87C9D89B0FB874FBB807874D58ACE8938E8246158EFD97`.
+El wheel incluye las tres reglas Semgrep locales, pero no incorpora Pyright ni
+Node. Cualquier bundle que los incluya debe inventariarlos por separado.
+
+| Componente declarado por la fuente 0.7.2 | Entrega | Alcance operativo | Declaración observada |
 |---|---|---|---|
-| Ruff `0.15.17` | dependencia Python base, pin en `constraints.txt` | perfiles `protected` y `trusted-static` | MIT |
-| Mypy `2.1.0` | dependencia Python base, pin en `constraints.txt` | perfil `trusted-static` | MIT |
-| Grimp `3.15` | dependencia Python base, pin en `constraints.txt` | grafo de imports y contratos en `trusted-static` | BSD-2-Clause |
-| Complexipy `6.2.0` | dependencia Python base, pin en `constraints.txt` | complejidad cognitiva en `trusted-static` | MIT |
-| Pyright `1.1.411` | paquete npm aislado junto al runtime | perfil `trusted-static`, mediante Node | MIT |
-| Node | runtime externo | host de Pyright; no ejecuta scripts del proyecto | inventariar la distribución instalada antes de redistribuir |
+| Ruff `0.15.17` | dependencia Python base, pin | perfiles `protected` y `trusted-static` | MIT |
+| Mypy `2.1.0` | dependencia Python base, pin | tipos en `trusted-static` | MIT |
+| Grimp `3.15` | dependencia Python base, pin | grafo y contratos | BSD-2-Clause |
+| Complexipy `6.2.0` | dependencia Python base, pin | complejidad cognitiva | MIT |
+| Coverage `7.14.1` | dependencia Python base, pin | `trusted-deep` | Apache-2.0 |
+| Pytest `9.1.0` | dependencia Python base, pin | `trusted-deep` | MIT |
+| Vulture `2.16` | dependencia Python base, pin | consenso advisory de uso | MIT |
+| Semgrep `1.172.0` | dependencia Python base, pin | tres invariantes locales | LGPL-2.1-or-later |
+| Deptry `0.25.1` | dependencia Python base, pin | higiene de dependencias | MIT |
+| pip-audit `2.10.1` | dependencia Python base, pin | snapshot de vulnerabilidades | classifier Apache Software License |
+| Packaging `26.2` | dependencia Python base, pin | constraints y versiones | Apache-2.0 OR BSD-2-Clause |
+| Pyright `1.1.411` | paquete npm aislado junto al runtime | tipos mediante Node | MIT |
+| Node `24.18.1` | runtime externo | host de Pyright | inventariar antes de redistribuir |
 
-Un inventario de redistribución 0.7.2 debe volver a medir el cierre y sus
-artefactos antes de publicarlos.
+El proveedor `installed-package-inventory` expone metadata, ambigüedad e
+integridad como categorías separadas y sin conclusión jurídica. Debe
+regenerarse para cada resolución constrained que se pretenda promover.
 
 ### Revalidación PRE-REPORT de continuación
 

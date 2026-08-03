@@ -1,12 +1,80 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 4 aceptado desde wheel aislado; listo para publicación.
+> Actualizado: 2026-08-03, Hito 5 aceptado desde wheel aislado; listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
-> Su contenido sustituye por completo el handoff de release del 30–31 de julio.
-> El historial anterior permanece recuperable en Git; no debe ejecutarse como
-> plan vigente.
+> `Resultado actual` y `Próximos pasos` son la única guía vigente; los
+> checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
+
+El candidato `codex/neocortex-supply-chain-v1` cerró la aceptación instalada del
+**Hito 5**. `trusted-static` tiene doce proveedores: los ocho anteriores más
+`semgrep-neocortex-invariants`, `deptry-project-dependencies`,
+`pip-audit-known-vulnerabilities` e `installed-package-inventory`. Semgrep
+`1.172.0` usa tres invariantes locales versionadas y autofix deshabilitado;
+Deptry `0.25.1` separa higiene runtime/dev/opcional; pip-audit `2.10.1` conserva
+fuente, fecha y frescura del snapshot; el inventario instalado correlaciona
+`pyproject.toml`, constraints, wheel, versiones, licencias y `RECORD`.
+
+Status, `neocortex.code-review/v9`, `neocortex.code-publication-diff/v7` y work
+packages consumen la misma evidencia. Las categorías `dependency_hygiene`,
+`known_vulnerability`, `package_integrity` y `license_inventory` permanecen
+separadas. Seis gates explícitos sustituyen cualquier score agregado y toda la
+evidencia declara `authority=advisory`, `mutation_authority=false`; ninguna
+herramienta aplica fixes ni autoriza modificar paquetes o código.
+
+El wheel candidato está en
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito5-supply-chain-20260803-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 540 150 bytes, 293 miembros, integridad ZIP y `pip check` limpios, y
+SHA-256
+`D0957627056E873FEA87C9D89B0FB874FBB807874D58ACE8938E8246158EFD97`.
+El launcher estable no fue promovido.
+
+La corrida instalada final (`analysis_run_id=4`) sobre
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito5-supply-chain-20260803-rc1\pilot-state-rc1`
+inventarió 588 archivos, evaluó 575 candidatos Code, procesó 5 y reutilizó 570.
+Los doce proveedores quedaron `ready`, sin errores; la ruta externa registró
+154 279 ms. El replay (`analysis_run_id=5`) reutilizó 575/575 candidatos y once
+proveedores exactos; el inventario volvió a verificar como costo real 296
+hashes `RECORD` y 5 909 535 bytes. No consultó la red, terminó la ruta externa
+en 1.686 s y conservó cero errores.
+
+La evidencia aceptada es factual, no una publicación artificialmente verde:
+
+- Semgrep produjo cero findings del proyecto. Sus fixtures positivos y
+  negativos se prueban aparte y no contaminan el gate real.
+- Deptry conserva tres `DEP001` reales: `ctranslate2` en `audio_whisper.py`,
+  `radon` en `tests/test_release_windows_ntfs.py` y
+  `test_knowledge_contracts_characterization` importado por
+  `tests/test_knowledge_contracts_cl2_characterization.py`.
+- El snapshot pip-audit, vigente hasta `2026-08-04T15:58:08Z`, informa para
+  `mcp 1.23.3` los avisos `PYSEC-2026-3481`, `PYSEC-2026-3482` y
+  `PYSEC-2026-3483`, con fixes publicados `1.27.2`, `1.27.2` y `1.28.1`.
+  Semgrep `1.172.0`, última versión evaluada, fija `mcp==1.23.3`; no debe
+  forzarse una actualización incompatible. El gate queda fallido hasta que el
+  upstream de Semgrep permita una versión corregida.
+- El inventario contiene 104 distribuciones, 101 con metadata de licencia, 38
+  ambiguas y 3 sin declaración. Las 13/13 dependencias requeridas son
+  compatibles y `RECORD` quedó limpio.
+
+Pasaron los gates de invariantes Semgrep, frescura del snapshot, integridad del
+paquete e inventario de licencias. Fallaron de forma explicable declaración de
+dependencias (3) y ausencia de vulnerabilidades conocidas (3). Review está
+`ready`; mantiene como work package vigente
+`external_deep_coverage._normalize` y añade sus relaciones y gates de supply
+chain. El diff contra el estado Hito 4 está `ready`, pero el veredicto global es
+`incomparable`: el baseline no tenía los cuatro proveedores, y también difieren
+versiones y firmas. La dimensión supply chain sí declara baseline `abstained` y
+actual `ready`, sin inventar mejora.
+
+`code-doctor` confirmó schema válido, cero violaciones de foreign keys y todos
+los runtimes disponibles, incluidos Node/Pyright. No se procesó corpus personal
+ni se modificó estado durable vivo. Hito 6 debe tomar el work package vigente,
+los dos grupos de remediación Hito 5 como dependencias/gates y añadir mutación
+focal más historia Git y analítica del grafo. Después continúa Hito 7 con la
+integración final; Hito 5 no es el fin del programa.
+
+## Checkpoints anteriores
 
 El candidato de la rama `codex/neocortex-unused-consensus-v1` ya superó la
 aceptación instalada del **Hito 4**. Añade
@@ -1224,18 +1292,28 @@ ausentes y su candidate limit, no evidencia inventada.
   nueve proveedores `ready`; replay exacto 558/558 + 9/9; status, review v8,
   diff v6, calibración, holdout, capacidades, schema y foreign keys verificados.
   El consenso real se abstuvo de producir falsos candidatos de alta confianza.
+- Plataforma Hito 5: wheel de 293 miembros con integridad y dependencias
+  limpias; los doce proveedores quedaron `ready` y sin errores; replay 575/575,
+  once replays exactos más reverificación íntegra de `RECORD`; status, review
+  v9, diff v7, seis gates, capacidades, schema y foreign keys verificados. Los
+  seis findings reales permanecen visibles y no tienen autoridad de mutación.
 
 ## Próximos pasos, en orden
 
-1. **Publicar y fusionar el Hito 4.** Crear el PR desde el candidato aceptado,
+1. **Publicar y fusionar el Hito 5.** Crear el PR desde el candidato aceptado,
    fusionarlo y verificar `main == origin/main` antes de abrir el siguiente
-   corte.
-2. **Implementar y aceptar el Hito 5.** Integrar Semgrep, higiene de
-   dependencias, vulnerabilidades, integridad de paquete y licencia mediante un
-   corte vertical consumido por status, review, diff y work packages.
-3. **Continuar Hitos 6–7 en el orden autorizado.** Mutación focal, historia Git,
-   analítica del grafo y la integración final se abren sólo después de publicar
-   y fusionar su hito anterior.
+   corte. Los gates fallidos son findings publicados, no un fallo de la
+   plataforma ni motivo para ocultarlos.
+2. **Implementar y aceptar el Hito 6.** Ejecutar mutation testing sólo para el
+   work package vigente y contratos críticos; añadir historia Git local, SCC,
+   ciclos, blast radius, centralidad y owner crossings. Correlacionar esas
+   señales de forma explicable, nunca como probabilidad de defecto. Mantener los
+   tres `DEP001` y el pin vulnerable de `mcp` como dependencias/gates visibles;
+   no forzar una resolución incompatible con Semgrep.
+3. **Implementar y aceptar el Hito 7.** Unificar filtros, modelo
+   multidimensional, fixtures, pruebas adversariales/property, CI por carriles,
+   wheel instalado, baseline/replay/diff, documentación y cierre factual del
+   programa. Sólo entonces marcar el objetivo compuesto como completado.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
 autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni
