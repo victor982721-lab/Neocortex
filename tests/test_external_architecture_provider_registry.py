@@ -12,7 +12,9 @@ from _04_Nucleo_Operativo.code_external_evidence import ExternalEvidenceFile
 from _04_Nucleo_Operativo.external_evidence_models import ExternalProviderBaseline
 from _04_Nucleo_Operativo.external_evidence_providers import (
     RUFF_ANALYZE_PROVIDER_ID,
+    VULTURE_UNUSED_PROVIDER_ID,
     RuffAnalyzeImportsProvider,
+    VultureUnusedStaticProvider,
     providers_for_profile,
 )
 from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes
@@ -100,7 +102,83 @@ def test_architecture_provider_uses_only_production_domain_and_replays_without_p
     assert replay.counters["cache_hits"] == 1
 
 
-def test_trusted_static_registry_exposes_all_seven_providers(
+def test_vulture_provider_uses_exact_project_wide_input_and_replays(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "root"
+    scratch = tmp_path / "scratch"
+    package = root / "_04_Nucleo_Operativo"
+    package.mkdir(parents=True)
+    scratch.mkdir()
+    package_file = package / "sample.py"
+    root_file = root / "Orquestador.py"
+    package_file.write_text("VALUE = 1\n", encoding="utf-8")
+    root_file.write_text("VALUE = 2\n", encoding="utf-8")
+    files = (
+        _external_file(package_file, root, 1),
+        _external_file(root_file, root, 2),
+    )
+    monkeypatch.setattr(providers_module, "_package_version", lambda _name: "test-1")
+    provider = VultureUnusedStaticProvider(root)
+    observed_paths: list[tuple[str, ...]] = []
+    limitations = (
+        "vulture_confidence_below_100_is_heuristic",
+        "static_name_analysis_cannot_prove_runtime_unused",
+        "decorators_callbacks_registries_reexports_and_dynamic_access_require_correlation",
+        "advisory_only_no_mutation_authority",
+    )
+
+    def execute(_stage_root, staged, _environment):
+        observed_paths.append(tuple(sorted(item.relative_path for item in staged.values())))
+        return SimpleNamespace(
+            findings=(),
+            stdout_bytes=2,
+            stderr_bytes=0,
+            process_invocations=1,
+            limitations=limitations,
+        )
+
+    provider.executor = execute
+    publication = provider.run(root, files, baseline=None, scratch_root=scratch)
+
+    assert observed_paths == [("Orquestador.py", "_04_Nucleo_Operativo/sample.py")]
+    assert publication.status == "completed"
+    assert publication.descriptor.provider_id == VULTURE_UNUSED_PROVIDER_ID
+    assert publication.descriptor.scope == "current-inventory-python"
+    assert publication.descriptor.project_configuration_digest is None
+    assert publication.descriptor.loads_project_configuration is False
+    assert publication.limitations == limitations
+    assert tuple(item.relative_path for item in publication.inputs) == (
+        "_04_Nucleo_Operativo/sample.py",
+        "Orquestador.py",
+    )
+    assert publication.counters["process_invocations"] == 1
+
+    assert publication.result_digest is not None
+    baseline = ExternalProviderBaseline(
+        18,
+        publication.descriptor.provider_id,
+        publication.publication.tool_version,
+        publication.input_signature,
+        publication.descriptor.comparability_signature,
+        publication.result_digest,
+        (),
+        (),
+        (),
+    )
+    provider.executor = lambda *_args: pytest.fail("exact replay executed Vulture")
+    replay = provider.run(root, files, baseline=baseline, scratch_root=scratch)
+
+    assert replay.execution == "cache_replay"
+    assert replay.replay_source_tool_run_id == 18
+    assert replay.counters["process_invocations"] == 0
+    assert replay.counters["files_verified"] == 2
+    assert replay.counters["cache_hits"] == 1
+    assert replay.limitations == limitations
+
+
+def test_trusted_static_registry_exposes_all_eight_providers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -124,6 +202,7 @@ def test_trusted_static_registry_exposes_all_seven_providers(
         "ruff-trusted-project",
         "mypy-trusted-project",
         "pyright-trusted-project",
+        "vulture-unused-static",
         "ruff-analyze-imports",
         "grimp-architecture",
         "complexipy-cognitive",

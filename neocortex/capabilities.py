@@ -347,6 +347,14 @@ CAPABILITY_SPECS: Mapping[str, RuntimeCapabilitySpec] = MappingProxyType(
                     extra=None,
                 ),
                 _distribution(
+                    "vulture",
+                    "vulture",
+                    "vulture",
+                    required=False,
+                    missing_reason="code_vulture_provider_unavailable",
+                    extra=None,
+                ),
+                _distribution(
                     "grimp",
                     "grimp",
                     "grimp",

@@ -169,8 +169,8 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
             )
         }
     providers = {item.provider_id: item for item in suite.providers}
-    assert summary.external_tool_runs == 7
-    assert replay_summary.external_tool_runs == 7
+    assert summary.external_tool_runs == 8
+    assert replay_summary.external_tool_runs == 8
     assert tuple(row[0] for row in provider_rows) == (
         "complexipy-cognitive",
         "grimp-architecture",
@@ -179,11 +179,13 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
         "ruff-analyze-imports",
         "ruff-protected-basic",
         "ruff-trusted-project",
+        "vulture-unused-static",
     )
     assert providers["ruff-protected-basic"].status == "ready"
     assert providers["ruff-trusted-project"].status == "ready"
     assert providers["mypy-trusted-project"].status == "ready"
     assert providers["pyright-trusted-project"].status in {"ready", "abstained"}
+    assert providers["vulture-unused-static"].status == "ready"
     for provider_id in (
         "complexipy-cognitive",
         "grimp-architecture",
@@ -195,11 +197,13 @@ def test_trusted_static_runs_independent_provider_matrix(tmp_path: Path) -> None
     assert "external:ruff-protected-basic" in sources
     assert "external:ruff-trusted-project" in sources
     assert "external:mypy" in sources
+    assert "external:vulture-unused-static" in sources
     assert suite.type_consensus.status in {"both_report", "not_comparable"}
     for provider_id in (
         "ruff-protected-basic",
         "ruff-trusted-project",
         "mypy-trusted-project",
+        "vulture-unused-static",
     ):
         assert providers[provider_id].execution == "cache_replay"
         assert providers[provider_id].counters["process_invocations"] == 0

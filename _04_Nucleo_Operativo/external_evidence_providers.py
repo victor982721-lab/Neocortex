@@ -75,6 +75,12 @@ from .external_architecture_providers import (
     execute_grimp_architecture,
     execute_ruff_analyze_imports,
 )
+from .external_unused_vulture import (
+    VULTURE_UNUSED_PROVIDER_ID,
+    VULTURE_UNUSED_PROVIDER_SCHEMA,
+    VultureUnusedExecution,
+    execute_vulture_unused,
+)
 from .semantic_models import fingerprint_bytes
 
 RUFF_PROTECTED_PROVIDER_ID = "ruff-protected-basic"
@@ -94,9 +100,16 @@ _PYRIGHT_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _RUFF_MEMORY_BYTES = 512 * 1024 * 1024
 _GRIMP_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 _COMPLEXIPY_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+_VULTURE_MEMORY_BYTES = 512 * 1024 * 1024
 _DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
 _DEEP_COVERAGE_FINDING_BOUND = 2_000
+_VULTURE_LIMITATIONS = (
+    "vulture_confidence_below_100_is_heuristic",
+    "static_name_analysis_cannot_prove_runtime_unused",
+    "decorators_callbacks_registries_reexports_and_dynamic_access_require_correlation",
+    "advisory_only_no_mutation_authority",
+)
 
 
 def _unexpected_exit_message(
@@ -1363,6 +1376,7 @@ def provider_tool_versions() -> dict[str, str | None]:
         RUFF_ANALYZE_PROVIDER_ID: ruff_version,
         GRIMP_ARCHITECTURE_PROVIDER_ID: _package_version("grimp"),
         COMPLEXIPY_COGNITIVE_PROVIDER_ID: _package_version("complexipy"),
+        VULTURE_UNUSED_PROVIDER_ID: _package_version("vulture"),
         PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
     }
 
@@ -1541,6 +1555,131 @@ class PyrightTrustedProjectProvider(_TrustedStaticProvider):
             len(completed.stdout),
             len(completed.stderr),
             1,
+        )
+
+
+class VultureUnusedStaticProvider:
+    """Run advisory Vulture evidence over the exact project-wide Python input."""
+
+    executor: Callable[
+        [Path, Mapping[str, ExternalEvidenceFile], Mapping[str, str]],
+        VultureUnusedExecution,
+    ] = staticmethod(execute_vulture_unused)
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._version = _package_version("vulture")
+        version = self._version or "unavailable"
+        self.descriptor = _provider_descriptor(
+            provider_id=VULTURE_UNUSED_PROVIDER_ID,
+            provider_schema=VULTURE_UNUSED_PROVIDER_SCHEMA,
+            tool_name="vulture",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:vulture-unused-static",
+            configuration_payload={
+                "adapter": VULTURE_UNUSED_PROVIDER_SCHEMA,
+                "input": "exact-current-inventory-python",
+                "api": "Vulture.scavenge/get_unused_code",
+                "min_confidence": 0,
+                "sort_by_size": False,
+                "ignore_names": [],
+                "ignore_decorators": [],
+                "project_configuration": False,
+                "plugins": False,
+                "content_execution": False,
+                "network": False,
+                "autofix": False,
+                "cache": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=_environment_signature(
+                tool_name="vulture",
+                tool_version=version,
+            ),
+            root_identity=external_root_identity(root),
+            execution_strategy="isolated-python-worker-vulture-project-v1",
+            invalidation_strategy="project_wide",
+            memory=_VULTURE_MEMORY_BYTES,
+            loads_project_configuration=False,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        if baseline is not None and baseline.input_signature == external_input_signature(files):
+            return _exact_replay(
+                self.descriptor,
+                root,
+                files,
+                baseline,
+                limitations=_VULTURE_LIMITATIONS,
+            )
+        started_ns = time.time_ns()
+        if self._version is None:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version="unavailable",
+                status="unavailable",
+                reason="vulture_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-vulture-unused-", dir=staging_parent
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(files, stage_root / "source")
+                environment = _controlled_environment()
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = str(stage_root)
+                result = self.executor(stage_root, staged, environment)
+                if result.limitations != _VULTURE_LIMITATIONS:
+                    raise ValueError("Vulture adapter limitations disagree with provider contract")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        return _success(
+            self.descriptor,
+            root,
+            files,
+            result.findings,
+            baseline,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=result.stdout_bytes,
+            stderr_bytes=result.stderr_bytes,
+            process_invocations=result.process_invocations,
+            bytes_staged=sum(item.size for item in files),
+            limitations=result.limitations,
         )
 
 
@@ -2093,6 +2232,7 @@ def providers_for_profile(
             RuffTrustedProjectProvider(root),
             MypyTrustedProjectProvider(root),
             PyrightTrustedProjectProvider(root),
+            VultureUnusedStaticProvider(root),
             RuffAnalyzeImportsProvider(root),
             GrimpArchitectureProvider(root),
             ComplexipyCognitiveProvider(root),
@@ -2119,6 +2259,7 @@ __all__ = [
     "RUFF_ANALYZE_PROVIDER_ID",
     "RUFF_PROTECTED_PROVIDER_ID",
     "RUFF_TRUSTED_PROVIDER_ID",
+    "VULTURE_UNUSED_PROVIDER_ID",
     "ComplexipyCognitiveProvider",
     "GrimpArchitectureProvider",
     "MypyTrustedProjectProvider",
@@ -2127,6 +2268,7 @@ __all__ = [
     "RuffAnalyzeImportsProvider",
     "RuffProtectedBasicProvider",
     "RuffTrustedProjectProvider",
+    "VultureUnusedStaticProvider",
     "provider_tool_versions",
     "providers_for_profile",
 ]
