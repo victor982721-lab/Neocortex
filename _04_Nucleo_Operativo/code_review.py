@@ -24,6 +24,10 @@ from .code_unused_analysis import (
     CodeUnusedAnalysis,
     read_code_unused_analysis,
 )
+from .code_supply_chain_analysis import (
+    CodeSupplyChainAnalysis,
+    read_code_supply_chain_analysis,
+)
 from .code_review_actionability import (
     CODE_REVIEW_ACTIONABILITY,
     CodeReviewActionabilityInput,
@@ -132,6 +136,7 @@ class _ReviewRead:
     architecture: CodeArchitectureAnalysis
     test_coverage: CodeCoverageAnalysis
     unused_analysis: CodeUnusedAnalysis
+    supply_chain: CodeSupplyChainAnalysis
 
 
 _CANDIDATE_SQL = """
@@ -730,6 +735,11 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
             -1 if latest_run is None else latest_run.analysis_run_id,
             database=str(path),
         )
+        supply_chain = read_code_supply_chain_analysis(
+            connection,
+            -1 if latest_run is None else latest_run.analysis_run_id,
+            database=str(path),
+        )
     return _ReviewRead(
         latest_run=latest_run,
         coverage=CodeReviewCoverage(
@@ -751,6 +761,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         architecture=architecture,
         test_coverage=test_coverage,
         unused_analysis=unused_analysis,
+        supply_chain=supply_chain,
     )
 
 
@@ -778,6 +789,7 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         limitations=(),
         digest=None,
         unused_analysis=None,
+        supply_chain=None,
     )
 
 
@@ -846,6 +858,10 @@ def review_code_state(
             "unused_analysis_not_ready:"
             + (read.unused_analysis.reason or read.unused_analysis.status)
         )
+    if read.supply_chain.status != "ready":
+        limitations.append(
+            "supply_chain_not_ready:" + (read.supply_chain.reason or read.supply_chain.status)
+        )
     snapshot = CodeReviewSnapshot(
         analysis_run_id=read.latest_run.analysis_run_id,
         framework_run_id=read.latest_run.framework_run_id,
@@ -876,6 +892,7 @@ def review_code_state(
         architecture_root=snapshot.root,
         test_coverage=read.test_coverage,
         unused_analysis=read.unused_analysis,
+        supply_chain=read.supply_chain,
     )
     limitation_tuple = tuple(limitations)
     return CodeReviewResult(
@@ -899,6 +916,7 @@ def review_code_state(
         architecture=read.architecture,
         test_coverage=read.test_coverage,
         unused_analysis=read.unused_analysis,
+        supply_chain=read.supply_chain,
         limitations=limitation_tuple,
         digest=build_code_review_digest(
             snapshot,
@@ -918,6 +936,7 @@ def review_code_state(
             architecture=read.architecture,
             test_coverage=read.test_coverage,
             unused_analysis=read.unused_analysis,
+            supply_chain=read.supply_chain,
             limitations=limitation_tuple,
         ),
     )

@@ -28,6 +28,12 @@ from .code_external_evidence import (
     read_external_evidence,
 )
 from .code_unused_analysis import CodeUnusedAnalysis, read_code_unused_analysis
+from .code_supply_chain_analysis import (
+    CODE_SUPPLY_CHAIN_REQUIRED_PROVIDERS,
+    CodeSupplyChainAnalysis,
+    SupplyChainObservation,
+    read_code_supply_chain_analysis,
+)
 from .code_schema import (
     CODE_SCHEMA_VERSION,
     readonly_code_database,
@@ -44,13 +50,14 @@ from .external_evidence_store import (
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v6"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v7"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
     "neocortex.code-publication-diff/v3",
     "neocortex.code-publication-diff/v4",
     "neocortex.code-publication-diff/v5",
+    "neocortex.code-publication-diff/v6",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
@@ -231,6 +238,72 @@ class CodeUnusedAnalysisDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeSupplyChainCategoryDelta:
+    category: str
+    baseline: int
+    current: int
+    delta: int
+
+
+@dataclass(frozen=True, slots=True)
+class CodeSupplyChainProviderDelta:
+    provider_id: str
+    baseline_status: str
+    current_status: str
+    baseline_freshness: str
+    current_freshness: str
+    findings_delta: int
+    metrics_delta: int
+    relations_delta: int
+
+
+@dataclass(frozen=True, slots=True)
+class CodeSupplyChainGateDelta:
+    gate: str
+    provider_id: str
+    baseline_status: str
+    current_status: str
+    baseline_reason: str
+    current_reason: str
+    evidence_count_delta: int
+
+
+@dataclass(frozen=True, slots=True)
+class CodeSupplyChainObservationChange:
+    change: Literal["added", "resolved", "changed"]
+    observation_id: str
+    provider_id: str
+    category: str
+    evidence_kind: str
+    code: str
+    path: str | None
+    subject_key: str | None
+    target_key: str | None
+    baseline_value: float | None
+    current_value: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class CodeSupplyChainDelta:
+    status: Literal["ready", "not_evaluated"]
+    reason: str | None
+    baseline_status: str
+    current_status: str
+    categories: tuple[CodeSupplyChainCategoryDelta, ...]
+    providers: tuple[CodeSupplyChainProviderDelta, ...]
+    gates: tuple[CodeSupplyChainGateDelta, ...]
+    common_visible: int
+    added_visible: int | None
+    resolved_visible: int | None
+    changed_visible: int | None
+    baseline_observations_truncated: bool
+    current_observations_truncated: bool
+    examples: tuple[CodeSupplyChainObservationChange, ...]
+    authority: Literal["advisory"] = "advisory"
+    mutation_authority: Literal[False] = False
+
+
+@dataclass(frozen=True, slots=True)
 class CodePublicationDiffDigest:
     xxh3_128: str
     xxh3_64_guard: str
@@ -266,6 +339,7 @@ class CodePublicationDiffResult:
     limitations: tuple[str, ...]
     digest: CodePublicationDiffDigest | None
     unused_analysis: CodeUnusedAnalysisDelta | None = None
+    supply_chain: CodeSupplyChainDelta | None = None
 
     def as_payload(self) -> dict[str, object]:
         payload = asdict(self)
@@ -304,6 +378,7 @@ class _Publication:
     architecture: CodeArchitectureAnalysis
     test_coverage: CodeCoverageAnalysis
     unused_analysis: CodeUnusedAnalysis
+    supply_chain: CodeSupplyChainAnalysis
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -568,6 +643,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             int(latest["analysis_run_id"]),
             database=str(database),
         )
+        supply_chain = read_code_supply_chain_analysis(
+            connection,
+            int(latest["analysis_run_id"]),
+            database=str(database),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -593,6 +673,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         architecture,
         test_coverage,
         unused_analysis,
+        supply_chain,
     )
 
 
@@ -1223,6 +1304,159 @@ def _unused_delta(
     )
 
 
+_SUPPLY_CHAIN_CATEGORIES = (
+    "project_invariant",
+    "dependency_hygiene",
+    "known_vulnerability",
+    "package_integrity",
+    "license_inventory",
+)
+
+
+def _supply_chain_change(
+    change: Literal["added", "resolved", "changed"],
+    observation_id: str,
+    baseline: SupplyChainObservation | None,
+    current: SupplyChainObservation | None,
+) -> CodeSupplyChainObservationChange:
+    selected = current or baseline
+    if selected is None:
+        raise AssertionError("supply-chain observation change requires evidence")
+    return CodeSupplyChainObservationChange(
+        change=change,
+        observation_id=observation_id,
+        provider_id=selected.provider_id,
+        category=selected.category,
+        evidence_kind=selected.evidence_kind,
+        code=selected.code,
+        path=selected.path,
+        subject_key=selected.subject_key,
+        target_key=selected.target_key,
+        baseline_value=None if baseline is None else baseline.value,
+        current_value=None if current is None else current.value,
+    )
+
+
+def _supply_chain_delta(
+    baseline: CodeSupplyChainAnalysis,
+    current: CodeSupplyChainAnalysis,
+) -> CodeSupplyChainDelta:
+    category_deltas = tuple(
+        CodeSupplyChainCategoryDelta(
+            category,
+            int(getattr(baseline.counts, category)),
+            int(getattr(current.counts, category)),
+            int(getattr(current.counts, category)) - int(getattr(baseline.counts, category)),
+        )
+        for category in _SUPPLY_CHAIN_CATEGORIES
+    )
+    baseline_providers = {item.provider_id: item for item in baseline.providers}
+    current_providers = {item.provider_id: item for item in current.providers}
+    provider_deltas = []
+    for provider_id in CODE_SUPPLY_CHAIN_REQUIRED_PROVIDERS:
+        before = baseline_providers.get(provider_id)
+        after = current_providers.get(provider_id)
+        provider_deltas.append(
+            CodeSupplyChainProviderDelta(
+                provider_id=provider_id,
+                baseline_status="not_recorded" if before is None else before.status,
+                current_status="not_recorded" if after is None else after.status,
+                baseline_freshness="unknown" if before is None else before.freshness,
+                current_freshness="unknown" if after is None else after.freshness,
+                findings_delta=(0 if after is None else after.findings)
+                - (0 if before is None else before.findings),
+                metrics_delta=(0 if after is None else after.metrics)
+                - (0 if before is None else before.metrics),
+                relations_delta=(0 if after is None else after.relations)
+                - (0 if before is None else before.relations),
+            )
+        )
+    baseline_gates = {item.gate: item for item in baseline.gates}
+    current_gates = {item.gate: item for item in current.gates}
+    gate_deltas = []
+    for gate in sorted(set(baseline_gates) | set(current_gates)):
+        gate_before = baseline_gates.get(gate)
+        gate_after = current_gates.get(gate)
+        selected = gate_after or gate_before
+        if selected is None:
+            continue
+        gate_deltas.append(
+            CodeSupplyChainGateDelta(
+                gate=gate,
+                provider_id=selected.provider_id,
+                baseline_status=(
+                    "not_evaluated" if gate_before is None else gate_before.status
+                ),
+                current_status="not_evaluated" if gate_after is None else gate_after.status,
+                baseline_reason=(
+                    "gate_not_recorded" if gate_before is None else gate_before.reason
+                ),
+                current_reason="gate_not_recorded" if gate_after is None else gate_after.reason,
+                evidence_count_delta=(
+                    0 if gate_after is None else gate_after.evidence_count
+                )
+                - (0 if gate_before is None else gate_before.evidence_count),
+            )
+        )
+    before_observations = {item.observation_id: item for item in baseline.observations}
+    after_observations = {item.observation_id: item for item in current.observations}
+    common_ids = set(before_observations) & set(after_observations)
+    changed_ids = sorted(
+        observation_id
+        for observation_id in common_ids
+        if asdict(before_observations[observation_id]) != asdict(after_observations[observation_id])
+    )
+    added_ids = sorted(set(after_observations) - set(before_observations))
+    resolved_ids = sorted(set(before_observations) - set(after_observations))
+    examples = tuple(
+        [
+            *(
+                _supply_chain_change(
+                    "changed",
+                    observation_id,
+                    before_observations[observation_id],
+                    after_observations[observation_id],
+                )
+                for observation_id in changed_ids
+            ),
+            *(
+                _supply_chain_change(
+                    "added", observation_id, None, after_observations[observation_id]
+                )
+                for observation_id in added_ids
+            ),
+            *(
+                _supply_chain_change(
+                    "resolved", observation_id, before_observations[observation_id], None
+                )
+                for observation_id in resolved_ids
+            ),
+        ][:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT]
+    )
+    status: Literal["ready", "not_evaluated"] = (
+        "ready" if baseline.status == "ready" or current.status == "ready" else "not_evaluated"
+    )
+    reason = None
+    if baseline.status != current.status or status == "not_evaluated":
+        reason = f"supply_chain_availability:baseline={baseline.status}:current={current.status}"
+    return CodeSupplyChainDelta(
+        status=status,
+        reason=reason,
+        baseline_status=baseline.status,
+        current_status=current.status,
+        categories=category_deltas,
+        providers=tuple(provider_deltas),
+        gates=tuple(gate_deltas),
+        common_visible=len(common_ids) - len(changed_ids),
+        added_visible=len(added_ids),
+        resolved_visible=len(resolved_ids),
+        changed_visible=len(changed_ids),
+        baseline_observations_truncated=baseline.counts.observations_truncated,
+        current_observations_truncated=current.counts.observations_truncated,
+        examples=examples,
+    )
+
+
 def _digest_payload(
     baseline: CodePublicationSnapshot,
     current: CodePublicationSnapshot,
@@ -1234,6 +1468,7 @@ def _digest_payload(
     architecture: CodeArchitectureDelta,
     test_coverage: CoverageComparison,
     unused_analysis: CodeUnusedAnalysisDelta,
+    supply_chain: CodeSupplyChainDelta,
     verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
@@ -1267,6 +1502,7 @@ def _digest_payload(
             "architecture": asdict(architecture),
             "test_coverage": asdict(test_coverage),
             "unused_analysis": asdict(unused_analysis),
+            "supply_chain": asdict(supply_chain),
             "verdict": verdict,
             "limitations": list(limitations),
         }
@@ -1303,6 +1539,7 @@ def _abstained(
         limitations=(),
         digest=None,
         unused_analysis=None,
+        supply_chain=None,
     )
 
 
@@ -1344,14 +1581,20 @@ def compare_code_publications(
         baseline.unused_analysis,
         current.unused_analysis,
     )
+    supply_chain = _supply_chain_delta(
+        baseline.supply_chain,
+        current.supply_chain,
+    )
     verdict = _provider_verdict(providers)
     limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
-        "provider_verdict_excludes_architecture_test_coverage_and_unused_gates",
+        "provider_verdict_excludes_architecture_test_coverage_unused_and_supply_chain_gates",
         "unused_analysis_is_advisory_and_never_authorizes_deletion_or_mutation",
+        "supply_chain_delta_is_multidimensional_and_has_no_aggregate_score",
+        "supply_chain_evidence_is_advisory_and_never_authorizes_mutation",
     ]
     if any(item.status != "ready" for item in providers):
         limitations.append("provider_verdict_uses_only_comparable_providers")
@@ -1361,6 +1604,10 @@ def compare_code_publications(
         limitations.append("test_coverage_delta_not_comparable")
     if unused_analysis.status != "ready":
         limitations.append("unused_analysis_delta_not_comparable")
+    if supply_chain.status != "ready":
+        limitations.append("supply_chain_delta_not_comparable")
+    if supply_chain.baseline_observations_truncated or supply_chain.current_observations_truncated:
+        limitations.append("supply_chain_observation_deltas_are_visible_examples_only")
     if any(
         _legacy_ruff_contract_compatible(item.provider_id, item.baseline, item.current)
         for item in providers
@@ -1378,6 +1625,7 @@ def compare_code_publications(
         architecture,
         test_coverage,
         unused_analysis,
+        supply_chain,
         verdict,
         frozen_limitations,
     )
@@ -1400,6 +1648,7 @@ def compare_code_publications(
         limitations=frozen_limitations,
         digest=digest,
         unused_analysis=unused_analysis,
+        supply_chain=supply_chain,
     )
 
 
@@ -1417,6 +1666,11 @@ __all__ = [
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",
     "CodePublicationSnapshot",
+    "CodeSupplyChainCategoryDelta",
+    "CodeSupplyChainDelta",
+    "CodeSupplyChainGateDelta",
+    "CodeSupplyChainObservationChange",
+    "CodeSupplyChainProviderDelta",
     "CodeUnusedAnalysisDelta",
     "CodeUnusedCandidateExample",
     "CodeUnusedStateChange",

@@ -607,7 +607,7 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v8"
+    assert first.as_payload()["schema"] == "neocortex.code-review/v9"
     assert "neocortex.code-review/v6" in first.as_payload()["compatible_schemas"]
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
@@ -616,13 +616,19 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
         "neocortex.code-review/v5",
         "neocortex.code-review/v6",
         "neocortex.code-review/v7",
+        "neocortex.code-review/v8",
     ]
+    assert first.supply_chain is not None
+    assert first.supply_chain.status == "abstained"
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
     assert expanded.findings[:10] == first.findings
     assert expanded.work_packages == first.work_packages
     assert first.work_package_status == "ready"
     assert len(first.work_packages) == 1
+    assert len(first.work_packages[0].supply_chain_gates) == 6
+    assert "semgrep_invariants" in first.work_packages[0].acceptance_gates
+    assert first.work_packages[0].mutation_authority is False
     assert first.work_packages[0].members[0].role == "primary_change_target"
     assert max(Counter(finding.path for finding in first.findings).values()) == 2
     assert len({finding.path for finding in first.findings}) == 9

@@ -17,6 +17,7 @@ from .code_coverage_analysis import (
     project_work_package_coverage_scope,
 )
 from .code_unused_analysis import CodeUnusedAnalysis, UnusedConsensusCandidate
+from .code_supply_chain_analysis import CodeSupplyChainAnalysis, SupplyChainObservation
 from .code_review_actionability import classify_source_role
 from .code_review_models import (
     CodeReviewFinding,
@@ -35,6 +36,7 @@ CODE_REVIEW_PLANNING_FINDING_LIMIT = 50
 CODE_REVIEW_WORK_PACKAGE_LIMIT = 4
 CODE_REVIEW_WORK_PACKAGE_MEMBER_LIMIT = 5
 CODE_REVIEW_UNUSED_WORK_PACKAGE_LIMIT = 3
+CODE_REVIEW_SUPPLY_CHAIN_EVIDENCE_LIMIT = 20
 
 _ACCEPTANCE_GATES = (
     "characterization_fixture_exact",
@@ -77,6 +79,14 @@ _UNUSED_ACCEPTANCE_GATES = (
     "architecture_contracts_not_degraded",
     "no_new_import_cycles",
     "unused_coverage_status_honest",
+)
+_SUPPLY_CHAIN_ACCEPTANCE_GATES = (
+    "semgrep_invariants",
+    "dependency_declaration_integrity",
+    "vulnerability_snapshot_current",
+    "no_known_vulnerabilities",
+    "installed_package_integrity",
+    "license_inventory_available",
 )
 
 
@@ -409,6 +419,98 @@ def _annotate_unused_candidates(
     )
 
 
+def _path_matches_package(path: str, package: CodeReviewWorkPackage) -> bool:
+    candidate_path = _normalized_path(path)
+    package_paths = {_normalized_path(member.path) for member in package.members} | {
+        _normalized_path(candidate.relative_path) for candidate in package.unused_candidates
+    }
+    return any(
+        item == candidate_path
+        or item.endswith("/" + candidate_path)
+        or candidate_path.endswith("/" + item)
+        for item in package_paths
+    )
+
+
+def _key_matches_package(value: str | None, package: CodeReviewWorkPackage) -> bool:
+    if not value:
+        return False
+    normalized = value.replace("\\", "/").casefold()
+    terms = {
+        package.primary_symbol.casefold(),
+        package.primary_symbol.rsplit(".", 1)[-1].casefold(),
+        *(() if package.primary_module is None else (package.primary_module.casefold(),)),
+    }
+    return any(term and (normalized == term or term in normalized) for term in terms)
+
+
+def _supply_chain_observation_relevant(
+    observation: SupplyChainObservation,
+    package: CodeReviewWorkPackage,
+) -> bool:
+    return (
+        (observation.path is not None and _path_matches_package(observation.path, package))
+        or _key_matches_package(observation.subject_key, package)
+        or _key_matches_package(observation.target_key, package)
+        or observation.subject_kind == "project"
+        or observation.target_kind == "project"
+        or observation.gate_authority != "advisory"
+    )
+
+
+def _annotate_supply_chain(
+    package: CodeReviewWorkPackage,
+    analysis: CodeSupplyChainAnalysis | None,
+) -> CodeReviewWorkPackage:
+    gates = () if analysis is None else analysis.gates
+    observations = (
+        ()
+        if analysis is None
+        else tuple(
+            item
+            for item in analysis.observations
+            if _supply_chain_observation_relevant(item, package)
+        )[:CODE_REVIEW_SUPPLY_CHAIN_EVIDENCE_LIMIT]
+    )
+    relations = (
+        ()
+        if analysis is None
+        else tuple(
+            item
+            for item in analysis.observations
+            if item.evidence_kind == "relation"
+            and (
+                item.subject_kind in {"project", "module", "package", "dependency"}
+                or item.target_kind in {"project", "module", "package", "dependency"}
+            )
+        )[:CODE_REVIEW_SUPPLY_CHAIN_EVIDENCE_LIMIT]
+    )
+    status = "not_evaluated" if analysis is None else analysis.status
+    reason = "supply_chain_result_missing" if analysis is None else analysis.reason
+    limitations = [
+        *package.limitations,
+        "supply_chain_evidence_is_advisory_and_has_zero_mutation_authority",
+    ]
+    if status != "ready":
+        limitations.append("supply_chain_gates_require_ready_evidence:" + (reason or status))
+    return replace(
+        package,
+        supply_chain_observations=observations,
+        supply_chain_relations=relations,
+        supply_chain_gates=gates,
+        acceptance_gates=tuple(
+            dict.fromkeys((*package.acceptance_gates, *_SUPPLY_CHAIN_ACCEPTANCE_GATES))
+        ),
+        evidence=(
+            *package.evidence,
+            f"supply_chain:{status}",
+            f"supply_chain_observations:{len(observations)}",
+            f"supply_chain_relations:{len(relations)}",
+        ),
+        limitations=tuple(dict.fromkeys(limitations)),
+    )
+
+
 def _unused_package_id(candidate: UnusedConsensusCandidate) -> str:
     payload = canonical_json(
         {
@@ -457,6 +559,7 @@ def _unused_characterization_packages(
     architecture: CodeArchitectureAnalysis | None,
     test_coverage: CodeCoverageAnalysis | None,
     excluded_candidate_ids: frozenset[str],
+    supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
     precision_gates: dict[str, str] = {}
     if analysis is not None:
@@ -507,62 +610,65 @@ def _unused_characterization_packages(
             else project_work_package_coverage_scope(test_coverage, target)
         )
         packages.append(
-            CodeReviewWorkPackage(
-                package_rank=0,
-                package_id=_unused_package_id(candidate),
-                title=f"{target} unused-code characterization",
-                objective="characterize_high_consensus_unused_candidate_without_mutation",
-                primary_finding_id=candidate.candidate_id,
-                primary_hotspot_id=candidate.candidate_id,
-                primary_symbol=target,
-                primary_module=module_id,
-                change_risk="unknown",
-                members=(),
-                members_truncated=False,
-                consumer_module_examples=(),
-                import_chains=import_chains,
-                affected_architecture_contracts=affected_contracts,
-                test_coverage=coverage_projection,
-                test_coverage_scope=coverage_scope,
-                contracts_to_preserve=(
-                    "public_import_and_reexport_surface",
-                    "callbacks_registries_protocols_and_entry_points",
-                    "runtime_and_test_fixture_behavior",
-                ),
-                steps=_unused_package_steps(candidate),
-                recommended_validation=(
-                    "inspect_import_reexport_and___all___usage",
-                    "inspect_callbacks_registries_protocols_and_entry_points",
-                    "run_targeted_tests_and_public_import_smoke",
-                    "record_human_confirmation_before_any_separate_change",
-                ),
-                acceptance_gates=_UNUSED_ACCEPTANCE_GATES,
-                evidence=(
-                    f"unused_candidate:{candidate.candidate_id}:{candidate.state}",
-                    *(f"provider:{item}" for item in candidate.provider_ids),
-                    *(f"reason:{item}" for item in candidate.reasons),
-                    f"calibration_signature:{analysis.calibration_signature}",
-                    f"coverage_status:{analysis.coverage_status}",
-                    "architecture:"
-                    + (architecture.status if architecture is not None else "not_evaluated"),
-                ),
-                limitations=(
-                    "characterization_package_is_advice_not_change_authorization",
-                    "candidate_requires_explicit_human_confirmation",
-                    "dynamic_usage_may_remain_unobserved",
-                    "coverage_can_explain_usage_but_never_strengthens_missing_evidence",
-                    "package_has_zero_delete_or_mutation_authority",
-                    *(
-                        ()
-                        if architecture is not None and architecture.status == "ready"
-                        else ("architecture_gates_require_comparable_ready_evidence",)
+            _annotate_supply_chain(
+                CodeReviewWorkPackage(
+                    package_rank=0,
+                    package_id=_unused_package_id(candidate),
+                    title=f"{target} unused-code characterization",
+                    objective="characterize_high_consensus_unused_candidate_without_mutation",
+                    primary_finding_id=candidate.candidate_id,
+                    primary_hotspot_id=candidate.candidate_id,
+                    primary_symbol=target,
+                    primary_module=module_id,
+                    change_risk="unknown",
+                    members=(),
+                    members_truncated=False,
+                    consumer_module_examples=(),
+                    import_chains=import_chains,
+                    affected_architecture_contracts=affected_contracts,
+                    test_coverage=coverage_projection,
+                    test_coverage_scope=coverage_scope,
+                    contracts_to_preserve=(
+                        "public_import_and_reexport_surface",
+                        "callbacks_registries_protocols_and_entry_points",
+                        "runtime_and_test_fixture_behavior",
                     ),
+                    steps=_unused_package_steps(candidate),
+                    recommended_validation=(
+                        "inspect_import_reexport_and___all___usage",
+                        "inspect_callbacks_registries_protocols_and_entry_points",
+                        "run_targeted_tests_and_public_import_smoke",
+                        "record_human_confirmation_before_any_separate_change",
+                    ),
+                    acceptance_gates=_UNUSED_ACCEPTANCE_GATES,
+                    evidence=(
+                        f"unused_candidate:{candidate.candidate_id}:{candidate.state}",
+                        *(f"provider:{item}" for item in candidate.provider_ids),
+                        *(f"reason:{item}" for item in candidate.reasons),
+                        f"calibration_signature:{analysis.calibration_signature}",
+                        f"coverage_status:{analysis.coverage_status}",
+                        "architecture:"
+                        + (architecture.status if architecture is not None else "not_evaluated"),
+                    ),
+                    limitations=(
+                        "characterization_package_is_advice_not_change_authorization",
+                        "candidate_requires_explicit_human_confirmation",
+                        "dynamic_usage_may_remain_unobserved",
+                        "coverage_can_explain_usage_but_never_strengthens_missing_evidence",
+                        "package_has_zero_delete_or_mutation_authority",
+                        *(
+                            ()
+                            if architecture is not None and architecture.status == "ready"
+                            else ("architecture_gates_require_comparable_ready_evidence",)
+                        ),
+                    ),
+                    confidence="unused_high_consensus_advisory",
+                    package_kind="unused_characterization",
+                    unused_candidates=(candidate,),
+                    requires_human_confirmation=True,
+                    mutation_authority=False,
                 ),
-                confidence="unused_high_consensus_advisory",
-                package_kind="unused_characterization",
-                unused_candidates=(candidate,),
-                requires_human_confirmation=True,
-                mutation_authority=False,
+                supply_chain,
             )
         )
     return tuple(packages)
@@ -577,6 +683,7 @@ def build_code_review_work_packages(
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
     unused_analysis: CodeUnusedAnalysis | None = None,
+    supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
     """Build the single next coherent package; never batch independent roots."""
 
@@ -710,7 +817,12 @@ def build_code_review_work_packages(
         ),
         confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
     )
-    return (_annotate_unused_candidates(package, unused_analysis),)
+    return (
+        _annotate_supply_chain(
+            _annotate_unused_candidates(package, unused_analysis),
+            supply_chain,
+        ),
+    )
 
 
 def plan_code_review_work_packages(
@@ -722,6 +834,7 @@ def plan_code_review_work_packages(
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
     unused_analysis: CodeUnusedAnalysis | None = None,
+    supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[
     tuple[CodeReviewWorkPackage, ...],
     RecommendationStatus,
@@ -737,6 +850,7 @@ def plan_code_review_work_packages(
         architecture_root=architecture_root,
         test_coverage=test_coverage,
         unused_analysis=unused_analysis,
+        supply_chain=supply_chain,
     )
     annotated_candidate_ids = frozenset(
         candidate.candidate_id for package in packages for candidate in package.unused_candidates
@@ -746,6 +860,7 @@ def plan_code_review_work_packages(
         architecture=architecture,
         test_coverage=test_coverage,
         excluded_candidate_ids=annotated_candidate_ids,
+        supply_chain=supply_chain,
     )
     packages = tuple(
         replace(package, package_rank=rank)

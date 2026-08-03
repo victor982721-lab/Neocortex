@@ -11,6 +11,7 @@ from .code_external_evidence import (
     external_status_digest_payload,
 )
 from .code_unused_analysis import CodeUnusedAnalysis
+from .code_supply_chain_analysis import CodeSupplyChainAnalysis
 from .code_review_models import (
     CODE_REVIEW_SCHEMA,
     CodeReviewCoverage,
@@ -44,6 +45,7 @@ def build_code_review_digest(
     architecture: CodeArchitectureAnalysis,
     test_coverage: CodeCoverageAnalysis,
     unused_analysis: CodeUnusedAnalysis,
+    supply_chain: CodeSupplyChainAnalysis,
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     """Hash every decision-bearing field while excluding local database paths."""
@@ -73,6 +75,12 @@ def build_code_review_digest(
             "architecture": architecture.digest_payload(),
             "test_coverage": test_coverage.digest_payload(),
             "unused_analysis": unused_analysis.digest_payload(),
+            "supply_chain": {
+                "schema": supply_chain.as_payload()["schema"],
+                "status": supply_chain.status,
+                "reason": supply_chain.reason,
+                "digest": asdict(supply_chain.digest),
+            },
             "limitations": list(limitations),
         }
     )

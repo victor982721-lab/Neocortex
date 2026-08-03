@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .code_publication_diff import (
         CodeArchitectureDelta,
         CodeModuleArchitectureDelta,
+        CodeSupplyChainDelta,
         CodeUnusedAnalysisDelta,
     )
     from .code_review_models import CodeReviewResult
@@ -89,6 +90,7 @@ class _CodeStatusSnapshot:
     architecture: dict[str, object]
     test_coverage: dict[str, object]
     unused_analysis: dict[str, object] = field(default_factory=dict)
+    supply_chain: dict[str, object] = field(default_factory=dict)
 
 
 def _architecture_abstained_payload(
@@ -284,6 +286,59 @@ def _unused_abstained_payload(
     }
 
 
+def _supply_chain_abstained_payload(
+    database: str,
+    reason: str,
+    *,
+    analysis_run_id: int | None = None,
+) -> dict[str, object]:
+    gates = (
+        ("semgrep_invariants", "semgrep-neocortex-invariants"),
+        ("dependency_declaration_integrity", "deptry-project-dependencies"),
+        ("vulnerability_snapshot_current", "pip-audit-known-vulnerabilities"),
+        ("no_known_vulnerabilities", "pip-audit-known-vulnerabilities"),
+        ("installed_package_integrity", "installed-package-inventory"),
+        ("license_inventory_available", "installed-package-inventory"),
+    )
+    return {
+        "kind": "code-supply-chain-analysis",
+        "schema": "neocortex.code-supply-chain-analysis/v1",
+        "database": database,
+        "analysis_run_id": analysis_run_id,
+        "status": "abstained",
+        "reason": reason,
+        "providers": [],
+        "observations": [],
+        "counts": {
+            "findings": 0,
+            "metrics": 0,
+            "relations": 0,
+            "project_invariant": 0,
+            "dependency_hygiene": 0,
+            "known_vulnerability": 0,
+            "package_integrity": 0,
+            "license_inventory": 0,
+            "duplicate_ids": 0,
+            "observations": 0,
+            "observations_truncated": False,
+        },
+        "gates": [
+            {
+                "gate": gate,
+                "provider_id": provider,
+                "status": "not_evaluated",
+                "reason": reason,
+                "evidence_count": 0,
+            }
+            for gate, provider in gates
+        ],
+        "limitations": ["supply_chain_provider_evidence_was_not_interpreted"],
+        "digest": None,
+        "authority": "advisory",
+        "mutation_authority": False,
+    }
+
+
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
     active_embedding_links = int(
         connection.execute("SELECT COUNT(*) FROM embedding_links WHERE active=1").fetchone()[0]
@@ -367,6 +422,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
     from .code_review_models import bounded_code_unused_payload
     from .code_unused_analysis import read_code_unused_analysis
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
+    from .code_supply_chain_analysis import read_code_supply_chain_analysis
     from .external_evidence_store import read_external_evidence_suite
     from .self_analysis_status import quiescent_sqlite_database
 
@@ -440,6 +496,20 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 database=str(path),
             )
         )
+        if latest is None:
+            supply_chain = _supply_chain_abstained_payload(str(path), "code_run_missing")
+        elif latest["status"] != "completed":
+            supply_chain = _supply_chain_abstained_payload(
+                str(path),
+                f"code_run_not_completed:{latest['status']}",
+                analysis_run_id=int(latest["analysis_run_id"]),
+            )
+        else:
+            supply_chain = read_code_supply_chain_analysis(
+                connection,
+                int(latest["analysis_run_id"]),
+                database=str(path),
+            ).as_payload()
     return _CodeStatusSnapshot(
         version,
         counts,
@@ -449,6 +519,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
         architecture,
         test_coverage,
         unused_analysis,
+        supply_chain,
     )
 
 
@@ -512,6 +583,7 @@ def _emit_missing_code_status(
         "architecture": architecture,
         "test_coverage": _coverage_abstained_payload(str(path), "code_state_missing"),
         "unused_analysis": _unused_abstained_payload(str(path), "code_state_missing"),
+        "supply_chain": _supply_chain_abstained_payload(str(path), "code_state_missing"),
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -526,6 +598,47 @@ def _emit_missing_code_status(
         "CODE_UNUSED",
         _unused_abstained_payload(str(path), "code_state_missing"),
     )
+    _emit_code_supply_chain(
+        "CODE_SUPPLY_CHAIN",
+        _supply_chain_abstained_payload(str(path), "code_state_missing"),
+    )
+
+
+def _emit_code_supply_chain(prefix: str, payload: dict[str, object]) -> None:
+    counts = payload.get("counts")
+    bounded_counts = counts if isinstance(counts, dict) else {}
+    _print_console_line(
+        f"{prefix} status={payload.get('status')} "
+        f"observations={bounded_counts.get('observations', 0)} "
+        f"findings={bounded_counts.get('findings', 0)} "
+        f"metrics={bounded_counts.get('metrics', 0)} "
+        f"relations={bounded_counts.get('relations', 0)} "
+        f"truncated={int(bool(bounded_counts.get('observations_truncated')))} "
+        f"reason={json.dumps(payload.get('reason'), ensure_ascii=True)}"
+    )
+    providers = payload.get("providers")
+    if isinstance(providers, list):
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            _print_console_line(
+                f"{prefix}_PROVIDER id={provider.get('provider_id')} "
+                f"status={provider.get('status')} freshness={provider.get('freshness')} "
+                f"observed_date={provider.get('observed_date')} "
+                f"findings={provider.get('findings', 0)} "
+                f"metrics={provider.get('metrics', 0)} "
+                f"relations={provider.get('relations', 0)}"
+            )
+    gates = payload.get("gates")
+    if isinstance(gates, list):
+        for gate in gates:
+            if not isinstance(gate, dict):
+                continue
+            _print_console_line(
+                f"{prefix}_GATE id={gate.get('gate')} status={gate.get('status')} "
+                f"provider={gate.get('provider_id')} evidence={gate.get('evidence_count', 0)} "
+                f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
+            )
 
 
 def _emit_code_status_architecture(architecture: dict[str, object]) -> None:
@@ -733,6 +846,7 @@ def _emit_code_status(
         "architecture": snapshot.architecture,
         "test_coverage": snapshot.test_coverage,
         "unused_analysis": snapshot.unused_analysis,
+        "supply_chain": snapshot.supply_chain,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -775,6 +889,7 @@ def _emit_code_status(
     _emit_code_status_architecture(snapshot.architecture)
     _emit_code_coverage("CODE_COVERAGE", snapshot.test_coverage)
     _emit_code_unused("CODE_UNUSED", snapshot.unused_analysis)
+    _emit_code_supply_chain("CODE_SUPPLY_CHAIN", snapshot.supply_chain)
 
 
 def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
@@ -935,6 +1050,16 @@ def _emit_code_review_unused_result(result: CodeReviewResult) -> None:
     )
 
 
+def _emit_code_review_supply_chain_result(result: CodeReviewResult) -> None:
+    analysis = getattr(result, "supply_chain", None)
+    payload = (
+        _supply_chain_abstained_payload(result.database, "supply_chain_result_missing")
+        if analysis is None
+        else analysis.as_payload()
+    )
+    _emit_code_supply_chain("CODE_REVIEW_SUPPLY_CHAIN", payload)
+
+
 def _emit_code_review_ranked_evidence(result: CodeReviewResult) -> None:
     for recommendation in result.recommendations:
         _print_console_line(
@@ -1055,6 +1180,7 @@ def run_code_review(args: argparse.Namespace) -> int:
             bounded_code_coverage_payload(result.test_coverage),
         )
     _emit_code_review_unused_result(result)
+    _emit_code_review_supply_chain_result(result)
     if result.recommendation_status == "abstained":
         _print_console_line(
             f"CODE_REVIEW_RECOMMENDATION status=abstained reason={result.recommendation_reason}"
@@ -1068,6 +1194,18 @@ def run_code_review(args: argparse.Namespace) -> int:
         affected_contracts = package.affected_architecture_contracts[
             :_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT
         ]
+        package_supply_gates = getattr(package, "supply_chain_gates", ())
+        package_supply_observations = getattr(package, "supply_chain_observations", ())
+        package_supply_relations = getattr(package, "supply_chain_relations", ())
+        _print_console_line(
+            "CODE_REVIEW_WORK_PACKAGE_SUPPLY_CHAIN "
+            f"status={'ready' if package_supply_gates else 'not_evaluated'} "
+            f"package_rank={package.package_rank} package_id={package.package_id} "
+            f"observations={len(package_supply_observations)} "
+            f"relations={len(package_supply_relations)} "
+            f"gates={json.dumps([gate.gate for gate in package_supply_gates], ensure_ascii=True)} "
+            "mutation_authority=0"
+        )
         architecture_gates = tuple(
             gate for gate in package.acceptance_gates if gate in _CODE_ARCHITECTURE_ACCEPTANCE_GATES
         )
@@ -1198,6 +1336,46 @@ def _emit_code_publication_unused(analysis: CodeUnusedAnalysisDelta) -> None:
         )
 
 
+def _emit_code_publication_supply_chain(analysis: CodeSupplyChainDelta) -> None:
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_SUPPLY_CHAIN status={analysis.status} "
+        f"baseline_status={analysis.baseline_status} current_status={analysis.current_status} "
+        f"common_visible={analysis.common_visible} added_visible={analysis.added_visible} "
+        f"resolved_visible={analysis.resolved_visible} changed_visible={analysis.changed_visible} "
+        f"baseline_truncated={int(analysis.baseline_observations_truncated)} "
+        f"current_truncated={int(analysis.current_observations_truncated)} "
+        f"reason={json.dumps(analysis.reason, ensure_ascii=True)}"
+    )
+    for category in analysis.categories:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_SUPPLY_CHAIN_CATEGORY id={category.category} "
+            f"baseline={category.baseline} current={category.current} delta={category.delta:+d}"
+        )
+    for provider in analysis.providers:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_SUPPLY_CHAIN_PROVIDER id={provider.provider_id} "
+            f"baseline_status={provider.baseline_status} current_status={provider.current_status} "
+            f"baseline_freshness={provider.baseline_freshness} "
+            f"current_freshness={provider.current_freshness} "
+            f"findings_delta={provider.findings_delta:+d} "
+            f"metrics_delta={provider.metrics_delta:+d} "
+            f"relations_delta={provider.relations_delta:+d}"
+        )
+    for gate in analysis.gates:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_SUPPLY_CHAIN_GATE id={gate.gate} "
+            f"provider={gate.provider_id} baseline={gate.baseline_status} "
+            f"current={gate.current_status} evidence_delta={gate.evidence_count_delta:+d} "
+            f"reason={json.dumps(gate.current_reason, ensure_ascii=True)}"
+        )
+    for example in analysis.examples[:_CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT]:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_SUPPLY_CHAIN_OBSERVATION change={example.change} "
+            f"provider={example.provider_id} category={example.category} "
+            f"kind={example.evidence_kind} code={example.code} id={example.observation_id}"
+        )
+
+
 def run_code_publication_diff(args: argparse.Namespace) -> int:
     """Compare two completed Code publications without mutating either state."""
 
@@ -1303,6 +1481,14 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         )
     else:
         _emit_code_publication_unused(unused_delta)
+    supply_chain_delta = getattr(result, "supply_chain", None)
+    if supply_chain_delta is None:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_SUPPLY_CHAIN status=not_evaluated "
+            'reason="supply_chain_delta_missing"'
+        )
+    else:
+        _emit_code_publication_supply_chain(supply_chain_delta)
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0
