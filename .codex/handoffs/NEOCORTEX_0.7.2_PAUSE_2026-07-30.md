@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-02, Hito 2 listo para publicación.
+> Actualizado: 2026-08-03, Hito 2 listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > Su contenido sustituye por completo el handoff de release del 30–31 de julio.
 > El historial anterior permanece recuperable en Git; no debe ejecutarse como
@@ -22,8 +22,8 @@ Import Linter `2.13` fue viable, pero se rechazó porque duplicaba el grafo de
 Grimp sin ofrecer un contrato JSON equivalente. Ruff Analyze queda como oráculo
 diferencial: en la publicación final coincidió con Grimp en 1 040/1 040 imports,
 cero discrepancias y cuatro SCC conocidos. El dominio contiene 269 módulos; los
-seis contratos v1 fueron evaluados sin violaciones. Complexipy publicó 4 839
-métricas: 4 301 símbolos y agregados total/máximo para los 269 módulos.
+seis contratos v1 fueron evaluados sin violaciones. Complexipy publicó 4 842
+métricas: 4 304 símbolos y agregados total/máximo para los 269 módulos.
 
 El propio autoanálisis detectó antes de publicar que la primera proyección
 contaba identidades de símbolos como módulos: mostraba 632 frente a los 269 de
@@ -32,19 +32,32 @@ Grimp y fallaba `import_graph_consensus`. La corrección conserva la metadata
 La regresión focal y los cuatro consumidores públicos quedaron verdes antes de
 repetir únicamente la evidencia afectada.
 
+La prueba posterior sobre el commit exacto del handoff encontró una segunda
+regresión real: cambiar sólo un archivo no Python reconstruía el grafo y borraba
+correctamente sus diagnósticos derivados, pero el replay de proveedores
+registraba la caché sin rematerializar esas proyecciones. La evidencia
+normalizada seguía íntegra; status se abstenía para Ruff trusted, Mypy y Pyright
+porque sus diagnósticos derivados faltaban. El replay ahora valida primero el
+source normalizado, digest, contadores y versiones vigentes, reconstruye sólo
+la proyección diagnóstica y verifica el resultado antes de publicar el registro
+de replay. Las regresiones cubren finding presente, borrado de proyección, dos
+replays consecutivos y proveedor sin findings que elimina una proyección
+obsoleta, sin duplicar findings, métricas o relaciones.
+
 La aceptación final usó el wheel `0.7.2` instalado en un runtime aislado bajo
 `C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito2-architecture-20260803-rc2`.
 El checkout final produjo 534 archivos inventariados y 528 candidatos Code; la
-corrida incremental procesó los dos archivos corregidos, reutilizó 526 y volvió
-a ejecutar los siete proveedores sin errores. El replay final tardó 6.220 s,
-reutilizó 528/528 entradas Code y 7/7 proveedores, abrió cero procesos externos
-y revalidó honestamente 49 635 663 bytes de inputs externos; Code no releyó
+corrida incremental final (`analysis_run_id=7`) procesó los dos archivos
+corregidos, reutilizó 526 y volvió a ejecutar los siete proveedores sin errores.
+El replay exacto (`analysis_run_id=8`) empleó 6.207 s de la ruta Code, reutilizó
+528/528 entradas Code y 7/7 proveedores, abrió cero procesos externos y
+revalidó honestamente 49 685 085 bytes de inputs externos; Code no releyó
 bytes ni repitió análisis, persistencia o grafo.
 
 La publicación final conserva 0 findings Ruff protected, 157 Ruff trusted, 367
 Mypy y 761 Pyright. El consenso tipado registra 236 coincidencias, 94 sólo Mypy,
 391 sólo Pyright, cero contradicciones y cero incomparables. La ejecución full
-de proveedores del commit final empleó 25 procesos y 103.764 s agregados: diez
+de proveedores del commit final empleó 25 procesos y 102.820 s agregados: diez
 lotes por cada Ruff de archivos, y una invocación para Mypy, Pyright, Ruff
 Analyze, Grimp y Complexipy. El replay conserva sus costos reales de
 verificación y registra `process_invocations=0` en los siete proveedores.
