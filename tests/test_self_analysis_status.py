@@ -25,6 +25,10 @@ from _04_Nucleo_Operativo import self_analysis_status as status_module
 from _04_Nucleo_Operativo.cli_app import dispatch_direct
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
+from _04_Nucleo_Operativo.code_contracts import (
+    deep_configuration_payload,
+    deep_configuration_signature,
+)
 from _04_Nucleo_Operativo.code_state import CodeState
 from _04_Nucleo_Operativo.corpus_access import CorpusAccessPolicy
 from _04_Nucleo_Operativo.framework_state_writer import FrameworkState
@@ -189,6 +193,69 @@ def _set_unchanged_journal(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def _publish_trusted_deep_manifest(prepared: _PreparedStatus) -> dict[str, object]:
+    database = prepared.state / "framework.sqlite3"
+    connection = sqlite3.connect(database)
+    try:
+        row = connection.execute(
+            """SELECT details_json FROM run_events
+            WHERE run_id=? AND phase=? AND message=?""",
+            (
+                prepared.run_id,
+                SELF_ANALYSIS_MANIFEST_PHASE,
+                SELF_ANALYSIS_MANIFEST_MESSAGE,
+            ),
+        ).fetchone()
+        assert row is not None and isinstance(row[0], str)
+        manifest = json.loads(row[0])
+        selectors = ("tests/test_self_analysis_status.py",)
+        deep = deep_configuration_payload(
+            analysis_profile="trusted-deep",
+            test_selectors=selectors,
+            max_tests=120,
+            time_budget_seconds=240,
+            shard_size=12,
+        )
+        manifest["commands"]["analyze"].extend(
+            (
+                "--analysis-profile",
+                "trusted-deep",
+                "--deep-test-selector",
+                selectors[0],
+                "--deep-max-tests",
+                "120",
+                "--deep-time-budget-seconds",
+                "240",
+                "--deep-shard-size",
+                "12",
+            )
+        )
+        manifest["deep_analysis"] = {
+            **deep,
+            "configuration_signature": deep_configuration_signature(deep),
+        }
+        raw = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        connection.execute(
+            """UPDATE run_events SET details_json=?
+            WHERE run_id=? AND phase=? AND message=?""",
+            (
+                raw,
+                prepared.run_id,
+                SELF_ANALYSIS_MANIFEST_PHASE,
+                SELF_ANALYSIS_MANIFEST_MESSAGE,
+            ),
+        )
+        connection.commit()
+        return manifest
+    finally:
+        connection.close()
+
+
 def _prepare_unavailable_status(tmp_path: Path) -> _PreparedStatus:
     root = tmp_path / "corpus"
     state = tmp_path / "state"
@@ -348,6 +415,69 @@ def test_code_status_json_exposes_valid_current_manifest_read_only(
         "current": True,
     }
     assert _state_file_snapshot(prepared_status.state) == before
+
+
+def test_trusted_deep_manifest_is_valid_and_bound_to_recorded_argv(
+    prepared_status: _PreparedStatus,
+) -> None:
+    expected = _publish_trusted_deep_manifest(prepared_status)
+
+    result = read_self_analysis_status(
+        prepared_status.state,
+        prepared_status.evidence,
+        journal_probe=lambda _cursor: "unchanged",
+    )
+
+    assert result is not None
+    assert result.manifest_status == "valid"
+    assert result.manifest == expected
+    assert result.freshness.current
+
+
+@pytest.mark.parametrize("mutation", ("missing", "signature", "limits"))
+def test_trusted_deep_manifest_inconsistency_is_structured_invalid(
+    prepared_status: _PreparedStatus,
+    mutation: str,
+) -> None:
+    manifest = _publish_trusted_deep_manifest(prepared_status)
+    if mutation == "missing":
+        manifest.pop("deep_analysis")
+    elif mutation == "signature":
+        manifest["deep_analysis"]["configuration_signature"] = "code-deep-v1:bad"
+    else:
+        manifest["deep_analysis"]["max_tests"] = 121
+    raw = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    connection = sqlite3.connect(prepared_status.state / "framework.sqlite3")
+    try:
+        connection.execute(
+            """UPDATE run_events SET details_json=?
+            WHERE run_id=? AND phase=? AND message=?""",
+            (
+                raw,
+                prepared_status.run_id,
+                SELF_ANALYSIS_MANIFEST_PHASE,
+                SELF_ANALYSIS_MANIFEST_MESSAGE,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = read_self_analysis_status(
+        prepared_status.state,
+        prepared_status.evidence,
+        journal_probe=lambda _cursor: "unchanged",
+    )
+
+    assert result is not None
+    assert result.manifest_status == "invalid"
+    assert result.manifest is None
+    assert not result.freshness.current
 
 
 @pytest.mark.parametrize(
