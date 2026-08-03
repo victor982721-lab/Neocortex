@@ -25,6 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 BASE_DEPENDENCIES = (
     "rich>=15,<16",
+    "ruff>=0.15,<0.16",
     "xxhash>=3.8,<4",
 )
 
@@ -33,7 +34,6 @@ DEV_DEPENDENCIES = (
     "coverage>=7.14,<8",
     "mypy>=2.1,<3",
     "pytest>=9.1,<10",
-    "ruff>=0.15,<0.16",
     "vulture>=2.16,<3",
 )
 
@@ -154,9 +154,7 @@ def _inspect_with(
         module_finder=lambda name: object() if name in available_modules else None,
         distribution_version=_version_reader(available_modules),
         executable_finder=(
-            lambda name: f"C:/fixture/{name}.exe"
-            if name in executables
-            else None
+            lambda name: f"C:/fixture/{name}.exe" if name in executables else None
         ),
     )
 
@@ -170,8 +168,7 @@ def test_every_builtin_route_has_one_static_capability_declaration() -> None:
 
 def test_missing_optional_runtimes_are_explicitly_unavailable_or_degraded() -> None:
     statuses = {
-        status.capability: status
-        for status in _inspect_with({"rich", "xxhash"})
+        status.capability: status for status in _inspect_with({"rich", "xxhash"})
     }
 
     assert statuses["docx"].state is CapabilityState.AVAILABLE
@@ -208,9 +205,7 @@ def test_optional_route_components_produce_stable_degradation_reasons() -> None:
     image = inspect_runtime_capability(
         "image",
         module_finder=(
-            lambda name: object()
-            if name in {"rich", "xxhash", "PIL"}
-            else None
+            lambda name: object() if name in {"rich", "xxhash", "PIL"} else None
         ),
         distribution_version=_version_reader({"rich", "xxhash", "PIL"}),
         executable_finder=lambda _name: None,

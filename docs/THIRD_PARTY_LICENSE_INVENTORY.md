@@ -24,6 +24,13 @@ Las **17/17 dependencias directas** instaladas satisfacen tanto su specifier de 
 
 Las versiones siguientes son las instaladas en el entorno indicado, no una promesa para resoluciones futuras sin `constraints.txt`.
 
+### Addendum de declaración fuente 0.7.2
+
+Este snapshot histórico no se recalculó. En la fuente 0.7.2, Ruff 0.15 pasó de
+la dependencia de desarrollo a la base como proveedor de External Code Evidence
+v1; conserva la declaración MIT observada aquí. Un inventario de redistribución
+0.7.2 debe volver a medir el cierre y sus artefactos antes de publicarlos.
+
 ### Revalidación PRE-REPORT de continuación
 
 La revalidación del **2026-07-25 16:55 -06:00** confirmó sin red ni cambios globales:

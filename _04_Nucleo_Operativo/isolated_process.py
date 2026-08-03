@@ -399,10 +399,12 @@ class WindowsKillOnCloseJob:
 
     __slots__ = ("_assigned", "_handle")
 
-    def __init__(self) -> None:
+    def __init__(self, memory_limit_bytes: int | None = None) -> None:
         if os.name != "nt":
             raise RuntimeError("Windows Job Objects are unavailable on this platform")
-        self._handle = _create_kill_on_close_job(None)
+        if memory_limit_bytes is not None and memory_limit_bytes < 1:
+            raise ValueError("Windows Job memory limit must be positive")
+        self._handle = _create_kill_on_close_job(memory_limit_bytes)
         self._assigned = False
 
     @staticmethod

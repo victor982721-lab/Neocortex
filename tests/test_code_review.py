@@ -24,6 +24,14 @@ from _04_Nucleo_Operativo.code_contracts import (
     SourceRange,
     SymbolRecord,
 )
+from _04_Nucleo_Operativo.code_external_evidence import (
+    EXTERNAL_EVIDENCE_SCHEMA,
+    RUFF_CONFIGURATION_SIGNATURE,
+    ExternalEvidencePublication,
+    RuffEvidenceProvider,
+    _configuration_payload,
+    external_input_signature,
+)
 from _04_Nucleo_Operativo.code_review import review_code_state
 from _04_Nucleo_Operativo.code_review_actionability import (
     CodeReviewActionabilityInput,
@@ -37,7 +45,11 @@ from _04_Nucleo_Operativo.code_schema import (
 from _04_Nucleo_Operativo.code_state import CodeState
 from _04_Nucleo_Operativo.self_analysis_freshness import SelfAnalysisFreshness
 from _04_Nucleo_Operativo.self_analysis_status import SelfAnalysisStatus
-from _04_Nucleo_Operativo.semantic_models import fingerprint_bytes, fingerprint_text
+from _04_Nucleo_Operativo.semantic_models import (
+    canonical_json,
+    fingerprint_bytes,
+    fingerprint_text,
+)
 
 
 PROCESSING_SIGNATURE = "code-review-fixture-v1"
@@ -424,7 +436,54 @@ def _store_hotspot_file(
     )
 
 
-def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
+def _external_publication(state: CodeState, root: Path) -> ExternalEvidencePublication:
+    version = RuffEvidenceProvider().tool_version()
+    assert version is not None
+    files = state.external_evidence_files(root)
+    result_digest = (
+        "external-result-v1:xxh3_128:"
+        + fingerprint_text(canonical_json({"diagnostics": []})).xxh3_128
+    )
+    return ExternalEvidencePublication(
+        "ruff",
+        version,
+        RUFF_CONFIGURATION_SIGNATURE,
+        "completed",
+        1,
+        2,
+        {
+            "schema": EXTERNAL_EVIDENCE_SCHEMA,
+            "root": str(root),
+            "execution": "full",
+            "configuration": _configuration_payload(),
+            "input": {
+                "signature": external_input_signature(files),
+                "eligible_files": len(files),
+                "total_bytes": sum(item.size for item in files),
+                "version_ids": [item.version_id for item in files],
+            },
+            "result": {
+                "digest": result_digest,
+                "diagnostics": 0,
+                "diagnostic_ids": [],
+                "records": [],
+                "comparable": False,
+                "baseline_tool_run_id": None,
+                "added": None,
+                "resolved": None,
+            },
+            "mutation_authority": False,
+            "content_executed": False,
+        },
+    )
+
+
+def _build_state(
+    state_directory: Path,
+    *,
+    hotspots: bool = True,
+    external_evidence: bool = False,
+) -> Path:
     state_directory.mkdir(parents=True)
     database = state_directory / "code.sqlite3"
     with CodeState(database) as state:
@@ -525,6 +584,11 @@ def _build_state(state_directory: Path, *, hotspots: bool = True) -> Path:
             },
             partial=False,
             graph_current=True,
+            external_evidence=(
+                _external_publication(state, state_directory)
+                if external_evidence
+                else None
+            ),
         )
         checkpoint_code_wal(state.connection)
     remove_checkpointed_code_sidecars(database)
@@ -581,8 +645,12 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v3"
-    assert first.as_payload()["compatible_schemas"] == ["neocortex.code-review/v2"]
+    assert first.as_payload()["schema"] == "neocortex.code-review/v4"
+    assert "neocortex.code-review/v3" in first.as_payload()["compatible_schemas"]
+    assert first.as_payload()["compatible_schemas"] == [
+        "neocortex.code-review/v2",
+        "neocortex.code-review/v3",
+    ]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
     assert expanded.findings[:10] == first.findings
@@ -634,6 +702,30 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
     assert [finding.finding_id for finding in reinterpreted.findings] != [
         finding.finding_id for finding in first.findings
     ]
+
+
+def test_review_exposes_advisory_ruff_evidence_and_package_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_directory = tmp_path / "state"
+    _build_state(state_directory, external_evidence=True)
+    monkeypatch.setattr(
+        code_review_module,
+        "read_self_analysis_status",
+        lambda _state, _run: _status(state_directory),
+    )
+
+    result = review_code_state(state_directory)
+    payload = result.as_payload()
+
+    assert result.status == "ready"
+    assert result.external_evidence.status == "ready"
+    assert result.external_evidence.gate == "baseline"
+    assert payload["external_evidence"]["authority"] == "advisory"
+    assert payload["external_evidence"]["mutation_authority"] is False
+    assert "ruff_external_evidence_baseline_only" in result.limitations
+    assert "no_added_ruff_diagnostics" in result.work_packages[0].acceptance_gates
 
 
 def test_work_package_planning_uses_the_fixed_pool_not_the_output_limit(

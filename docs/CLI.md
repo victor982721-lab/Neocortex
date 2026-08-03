@@ -130,6 +130,11 @@ La corrida usa el inventario como entrada directa de code, no crea candidatos
 MIME y sólo completa si candidatos, acciones y organización conservan conteos
 exactos de cero. Su manifest guarda policy/firma, identidades, frescura y los
 argv canónicos `analyze`/`status` como arrays, no como texto de shell.
+Dentro del mismo preset, Ruff observa los Python vigentes publicados por Code
+con fingerprint exacto, incluidos los parseos internos parciales, y excluye los
+generados o vendorizados. Usa perfil aislado `E4,E7,E9,F`, sin configuración del
+proyecto, caché ni fixes. Versiona y publica evidencia advisory; no cambia el
+código ni ejecuta sus módulos.
 
 Si USN no está disponible, el preset hace un full scan portable sin checkpoint
 y publica `journal.status=unavailable`; code puede reutilizar caché, pero el
@@ -144,9 +149,10 @@ Cada propietario exige un snapshot SQLite immutable y sidecar-free. Cualquier
 cualquiera de ellas, causa abstención total con código `2` sin tocar el estado.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v3` conserva los campos y significados v2 —hasta
-10 hotspots brutos por defecto y tres recomendaciones `act_now`— y declara
-`compatible_schemas=["neocortex.code-review/v2"]`. Añade un `work_package`
+envelope `neocortex.code-review/v4` conserva los campos y significados v2/v3
+—hasta 10 hotspots brutos por defecto y tres recomendaciones `act_now`— y
+declara ambas compatibilidades. Añade `external_evidence` Ruff y el gate
+`no_added_ruff_diagnostics` sin modificar el ranking, además de un `work_package`
 determinista con una sola recomendación raíz, guards alcanzados por llamadas
 confirmadas a uno o dos saltos, riesgo agregado, contratos, pasos y gates. El
 pool del planificador siempre es el top 50, independientemente de la vista; no
@@ -161,9 +167,11 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v1` informa calls comunes y
+envelope `neocortex.code-publication-diff/v2`, compatible con v1, informa calls comunes y
 exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
-delta meramente descriptivo de `probable_dead`; nunca aplica cambios.
+delta meramente descriptivo de `probable_dead`. Cuando ambas publicaciones
+contienen la misma versión/configuración Ruff también informa diagnósticos
+añadidos/resueltos; en otro caso el gate queda `not_evaluated`. Nunca aplica cambios.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 

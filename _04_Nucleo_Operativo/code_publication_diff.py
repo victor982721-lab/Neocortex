@@ -9,6 +9,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal
 
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    external_status_digest_payload,
+    read_external_evidence,
+)
 from .code_schema import (
     CODE_SCHEMA_VERSION,
     readonly_code_database,
@@ -18,7 +23,8 @@ from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v1"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v2"
+CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = ("neocortex.code-publication-diff/v1",)
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 CODE_PUBLICATION_DIFF_MAX_CALLS = 250_000
 CODE_PUBLICATION_DIFF_MAX_HOTSPOTS = 20_000
@@ -83,6 +89,22 @@ class CodeHotspotDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeExternalEvidenceDelta:
+    """Comparable Ruff evidence and its non-mutating acceptance gate."""
+
+    status: Literal["ready", "not_evaluated"]
+    reason: str | None
+    baseline: ExternalEvidenceStatus
+    current: ExternalEvidenceStatus
+    common: int
+    added: int | None
+    resolved: int | None
+    added_examples: tuple[str, ...]
+    resolved_examples: tuple[str, ...]
+    gate: Literal["passed", "failed", "not_evaluated"]
+
+
+@dataclass(frozen=True, slots=True)
 class CodePublicationDiffDigest:
     xxh3_128: str
     xxh3_64_guard: str
@@ -100,6 +122,7 @@ class CodePublicationDiffResult:
     calls: CodeCallResolutionDelta | None
     hotspots: CodeHotspotDelta | None
     probable_dead_delta: int | None
+    external_evidence: CodeExternalEvidenceDelta | None
     limitations: tuple[str, ...]
     digest: CodePublicationDiffDigest | None
 
@@ -107,6 +130,7 @@ class CodePublicationDiffResult:
         return {
             "kind": "code-publication-diff",
             "schema": CODE_PUBLICATION_DIFF_SCHEMA,
+            "compatible_schemas": list(CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS),
             **asdict(self),
         }
 
@@ -126,6 +150,8 @@ class _Publication:
     snapshot: CodePublicationSnapshot
     calls: dict[tuple[object, ...], _CallSite]
     hotspots: dict[tuple[str, str], tuple[str, ...]]
+    external_evidence: ExternalEvidenceStatus
+    external_diagnostic_ids: frozenset[str]
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -321,7 +347,7 @@ def _read_publication(state_directory: Path) -> _Publication:
                 f"code state schema {schema_version} is unsupported for diff"
             )
         latest = connection.execute(
-            """SELECT processing_signature,status FROM analysis_runs
+            """SELECT analysis_run_id,processing_signature,status FROM analysis_runs
             ORDER BY analysis_run_id DESC LIMIT 1"""
         ).fetchone()
         if latest is None:
@@ -369,6 +395,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             root,
             total_hotspot_diagnostics,
         )
+        external_evidence, external_ids, _external_row = read_external_evidence(
+            connection,
+            int(latest["analysis_run_id"]),
+            enforce_current_runtime=False,
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -383,7 +414,13 @@ def _read_publication(state_directory: Path) -> _Publication:
         long_function=long_function,
         probable_dead=probable_dead,
     )
-    return _Publication(snapshot, calls, hotspots)
+    return _Publication(
+        snapshot,
+        calls,
+        hotspots,
+        external_evidence,
+        external_ids,
+    )
 
 
 def _call_delta(
@@ -467,12 +504,74 @@ def _hotspot_delta(baseline: _Publication, current: _Publication) -> CodeHotspot
     )
 
 
+def _external_delta(
+    baseline: _Publication,
+    current: _Publication,
+) -> CodeExternalEvidenceDelta:
+    before = baseline.external_evidence
+    after = current.external_evidence
+    comparable = (
+        before.status == "ready"
+        and after.status == "ready"
+        and before.tool_version == after.tool_version
+        and before.configuration_signature == after.configuration_signature
+    )
+    if not comparable:
+        reasons = []
+        if before.status != "ready":
+            reasons.append(f"baseline_{before.status}:{before.reason}")
+        if after.status != "ready":
+            reasons.append(f"current_{after.status}:{after.reason}")
+        if (
+            before.status == "ready"
+            and after.status == "ready"
+            and before.tool_version != after.tool_version
+        ):
+            reasons.append("tool_version_changed")
+        if (
+            before.status == "ready"
+            and after.status == "ready"
+            and before.configuration_signature != after.configuration_signature
+        ):
+            reasons.append("configuration_changed")
+        return CodeExternalEvidenceDelta(
+            "not_evaluated",
+            ";".join(reasons) or "external_evidence_not_comparable",
+            before,
+            after,
+            0,
+            None,
+            None,
+            (),
+            (),
+            "not_evaluated",
+        )
+    common = baseline.external_diagnostic_ids & current.external_diagnostic_ids
+    added = sorted(current.external_diagnostic_ids - baseline.external_diagnostic_ids)
+    resolved = sorted(
+        baseline.external_diagnostic_ids - current.external_diagnostic_ids
+    )
+    return CodeExternalEvidenceDelta(
+        "ready",
+        None,
+        before,
+        after,
+        len(common),
+        len(added),
+        len(resolved),
+        tuple(added[:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT]),
+        tuple(resolved[:CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT]),
+        "passed" if not added else "failed",
+    )
+
+
 def _digest_payload(
     baseline: CodePublicationSnapshot,
     current: CodePublicationSnapshot,
     calls: CodeCallResolutionDelta,
     hotspots: CodeHotspotDelta,
     probable_dead_delta: int,
+    external_evidence: CodeExternalEvidenceDelta,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
     def snapshot(value: CodePublicationSnapshot) -> dict[str, object]:
@@ -489,6 +588,18 @@ def _digest_payload(
             "calls": asdict(calls),
             "hotspots": asdict(hotspots),
             "probable_dead_delta": probable_dead_delta,
+            "external_evidence": {
+                "status": external_evidence.status,
+                "reason": external_evidence.reason,
+                "baseline": external_status_digest_payload(external_evidence.baseline),
+                "current": external_status_digest_payload(external_evidence.current),
+                "common": external_evidence.common,
+                "added": external_evidence.added,
+                "resolved": external_evidence.resolved,
+                "added_examples": list(external_evidence.added_examples),
+                "resolved_examples": list(external_evidence.resolved_examples),
+                "gate": external_evidence.gate,
+            },
             "limitations": list(limitations),
         }
     )
@@ -515,6 +626,7 @@ def _abstained(
         calls=None,
         hotspots=None,
         probable_dead_delta=None,
+        external_evidence=None,
         limitations=(),
         digest=None,
     )
@@ -549,6 +661,7 @@ def compare_code_publications(
     probable_dead_delta = (
         current.snapshot.probable_dead - baseline.snapshot.probable_dead
     )
+    external_evidence = _external_delta(baseline, current)
     limitations = (
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
@@ -561,6 +674,7 @@ def compare_code_publications(
         calls,
         hotspots,
         probable_dead_delta,
+        external_evidence,
         limitations,
     )
     return CodePublicationDiffResult(
@@ -573,6 +687,7 @@ def compare_code_publications(
         calls=calls,
         hotspots=hotspots,
         probable_dead_delta=probable_dead_delta,
+        external_evidence=external_evidence,
         limitations=limitations,
         digest=digest,
     )
@@ -580,9 +695,11 @@ def compare_code_publications(
 
 __all__ = [
     "CODE_PUBLICATION_DIFF_SCHEMA",
+    "CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS",
     "CodeCallResolutionChange",
     "CodeCallResolutionDelta",
     "CodeHotspotDelta",
+    "CodeExternalEvidenceDelta",
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",
     "CodePublicationSnapshot",

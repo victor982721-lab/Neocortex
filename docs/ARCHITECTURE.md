@@ -413,7 +413,15 @@ optimización durable, no un requisito de corrección ni una identidad ficticia
 del fallback.
 
 Code consume directamente el scan publicado con cero `route_candidates`. La
-finalización adquiere una transacción propia y exige exactamente una ruta code
+finalización del recorrido protegido incorpora después evidencia Ruff v1 sobre
+las versiones Python vigentes con fingerprint exacto ya publicado, incluidas
+las parciales. El proveedor usa el intérprete
+del runtime, configuración aislada, archivos explícitos y límites de proceso;
+su fila `external_tool_runs`, la proyección `external:ruff` y el fence de Code
+se confirman atómicamente. Ruff no participa en el processing signature AST y
+un replay exacto no duplica diagnósticos.
+
+La finalización adquiere una transacción propia y exige exactamente una ruta code
 completada, identidad vigente y ceros en candidatos, `file_actions`,
 `run_actions` y organización. El cambio del run a `completed` y el único
 manifest `neocortex.self-analysis-manifest/v2` se confirman juntos. Framework
@@ -749,6 +757,8 @@ Herramientas externas posibles:
 - Tesseract para OCR;
 - FFprobe/FFmpeg para audio y vídeo;
 - qpdf opcional para recuperación estructural PDF;
+- Ruff como evidencia advisory integrada exclusivamente al autoanálisis
+  protegido, sin fixes ni configuración del corpus;
 - FastEmbed y Faster-Whisper para inferencia local.
 
 No se observó `shell=True` en el motor auditado. La presencia de límites no
@@ -758,8 +768,8 @@ equivale a sandbox completo; véase [SECURITY.md](SECURITY.md).
 
 El paquete se construye con setuptools y exige Python `>=3.13,<3.14`. Incluye
 los seis paquetes de producción, `neocortex`, el shim `Orquestador.py` y assets
-de la GUI. La base exacta es `rich` + `xxhash`; `documents`, `audio`, `image`,
-`semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
+de la GUI. La base exacta es `rich` + `ruff` + `xxhash`; `documents`, `audio`,
+`image`, `semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
 `neocortex.capabilities` inspecciona esa disponibilidad de forma estática; no
 certifica inferencia, caché de modelos ni compatibilidad resuelta.
 

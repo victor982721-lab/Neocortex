@@ -99,6 +99,30 @@ resoluciones nuevas, corregidas o perdidas. La siguiente raíz pasa a
 `semantic_generation_repository._clone_published_members` únicamente como
 guarda contractual alcanzable a dos saltos.
 
+El corte rc22 integra la primera evidencia externa prudente al autoanálisis:
+Ruff `E4,E7,E9,F`, y sólo Ruff. El proveedor analiza copias verificadas en un
+staging separado de la raíz, con configuración aislada, límites de archivos,
+bytes, tiempo, memoria, salida y diagnósticos; no carga configuración del
+repositorio ni aplica fixes. La publicación conserva herramienta, versión,
+firma, cobertura, digests, registros canónicos y decisión comparable en las
+tablas Code existentes. Status expone el subestado externo de forma cerrada ante
+evidencia ausente, parcial, alterada o incompatible; review y publication-diff
+conservan su estado interno `ready`, pero dejan únicamente el subestado/gate
+externo en `not_evaluated`. El AST interno útil conserva su propio estado. El
+replay exacto no vuelve a ejecutar Ruff.
+Mypy y Vulture permanecen deliberadamente fuera de este corte hasta tener un
+contrato y una calibración separados.
+
+El launcher candidato rc22 final autoanalizó el repositorio completo después de
+cerrar las regresiones adversariales. La publicación procesó 524 candidatos, de
+los cuales 473 eran Python elegibles para Ruff; publicó 15 245 símbolos, 82 985
+referencias, 203 diagnósticos internos y cero errores. Ruff cubrió 473/473 con
+cero hallazgos bajo el perfil fijo. El replay reutilizó 524/524 entradas Code y
+la evidencia Ruff exacta. El diff inicial→replay añadió/resolvió cero
+diagnósticos externos, cambió cero hotspots y perdió/corrigió cero resoluciones.
+La revisión v4 queda `ready` y su siguiente paquete real pasa a
+`bounded_subprocess.run_bounded_capture`; `semantic_image_index` queda segundo.
+
 La mejora es visible mediante el launcher del wheel. Una consulta positiva
 conservó 10 resultados útiles; una consulta fuera de dominio descartó sus 30
 candidatos y terminó con `abstained=1`, cero hits. El watcher rc5 ejecutó tres
@@ -113,10 +137,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada al iniciar rc21: `main` en
-  `82b91477c3b2978e1a24a7074379d209f5bc2b82`, idéntico a `origin/main`.
-- El checkout fuente es `0.7.2`. rc21 se desarrolla en
-  `codex/rc21-knowledge-exact-lookup-package`; el identificador final del PR queda en
+- Base publicada al iniciar rc22: `main` en
+  `fcb8528d0870aeb17e2ac075df9ba1e37d2fcd80`, idéntico a `origin/main`.
+- El checkout fuente es `0.7.2`. rc22 se desarrolla en
+  `codex/external-code-evidence-ruff-v1`; el identificador final del PR queda en
   la historia de Git/GitHub después de publicarlo. La
   igualdad final entre `main` y `origin/main` se verifica después del merge
   porque el commit no puede autorreferenciar su propio hash desde este handoff.
@@ -278,6 +302,24 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato focal `rc22` — evidencia externa Ruff
+
+Wheel:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc22-final-external-ruff-evidence\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+
+- SHA-256
+  `695FF83E01FBA4923D5FB200807EF1CC27749EABE9166A58B323E24013C07B2F`;
+- 1 356 996 bytes, 275 miembros, `ZipFile.testzip()` limpio,
+  `Neocortex 0.7.2`, perfil full nuevo con 54 distribuciones y `pip check`
+  limpio;
+- Ruff 0.15.17 se resuelve desde el mismo runtime instalado, no desde PATH;
+  `--code-doctor --code-json` lo declara disponible con procedencia
+  `runtime-distribution`;
+- los módulos empaquetados de supervisor, proveedor y repositorio Code son
+  byte-idénticos a la fuente final. El launcher completó publicación, replay y
+  diff usando exclusivamente estado aislado. Este runtime no se promovió al
+  launcher estable.
 
 ### Candidato focal `rc21` — cierre de `lookup_exact`
 
@@ -666,6 +708,37 @@ Publicación del refactor exacto rc21:
   dejaron cero sidecars. `current=false` permanece como
   `freshness=publication_only` por `journal_status=unavailable`.
 
+Publicación de evidencia externa rc22:
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-20260802-rc22-final-external-ruff-evidence\full-repository-release-state`.
+
+- un piloto previo de 30 archivos justificó ampliar la corrida; la evidencia
+  de release siguiente se repitió desde cero después del último hardening;
+- publicación completa: 534 archivos inventariados, 46 directorios excluidos,
+  524 candidatos, 9 180 861 bytes, 15 245 símbolos, 82 985 referencias, 203
+  diagnósticos internos, un proyecto y cero errores en 27.448 s;
+- Ruff 0.15.17 cubrió 473/473 Python en 7.306 s, sin hallazgos bajo el perfil
+  fijo `E4,E7,E9,F`; esto demuestra la barrera seleccionada, no ausencia de
+  cualquier posible defecto;
+- replay completo: 0 procesados/524 hits, cero bytes y cero ms en lectura,
+  análisis y persistencia; grafo 1 ms, evidencia Ruff reutilizada en 112 ms y
+  pared total 4.164 s;
+- dos lecturas consecutivas del review v4 por defecto sobre el replay fueron
+  byte-idénticas: digest `212d50c187a82fe2ef43487a1906751e`, 188 hotspots,
+  473/473 Python, 60 277 calls y 19 045 resueltas. El digest distinto observado
+  al adquirir por primera vez la línea base Ruff es esperado porque el gate
+  cambia de `baseline` a `passed`. Su primer paquete es
+  `bounded_subprocess.run_bounded_capture`, seguido por
+  `semantic_image_index.index_image_embeddings`;
+- el diff
+  inicial→replay conservó 188 hotspots comunes, cero exclusivos/cambiados y
+  60 277 calls comunes: 19 045 resueltas sin cambio, 41 232 aún no resueltas y
+  cero resoluciones nuevas, corregidas o perdidas;
+- status/review/diff conservaron idénticos los SHA-256 de las seis bases
+  iniciales/finales y dejaron cero sidecars. El estado histórico rc21 sigue
+  legible y byte-inmutable: declara Ruff `not_recorded`; su diff hacia rc22
+  conserva el estado interno `ready`, añade diez hotspots y cambia evidencia de
+  uno, y deja el gate externo `not_evaluated` sin inventar comparabilidad.
+
 Las publicaciones rc6, rc11 y
 `graph-resolver-v4-20260801-rc1\full-state` se conservan como baselines
 históricos; no se mutaron. La línea base anterior de 58 imports relativos no
@@ -840,6 +913,22 @@ ausentes y su candidate limit, no evidencia inventada.
   Ruff/format y Mypy limpios. Wheel rc21, procedencia, piloto 30, publicación,
   diff formal read-only y replay 522/522 quedaron verificados; ningún helper
   alcanzó el umbral de hotspot.
+- Evidencia externa Ruff rc22: barrera focal final `111 passed`; incluye
+  staging disjunto, orden Unicode, casing de Windows, stdin sin temporal,
+  abstención por proyección acotada y reparación de proyección alterada. Ruff
+  limpio, formato limpio en 21 archivos y Mypy 2.1 sin errores en 14 módulos
+  fuente. Wheel, perfil full, procedencia, `pip check`, publicación 524,
+  cobertura Ruff 473/473, replay exacto y diff formal read-only quedaron
+  verificados.
+- La ampliación rc22 alcanzó `2372 passed`, `4 deselected` y `78 subtests` antes
+  de detenerse en la barrera que exige activar explícitamente el laboratorio
+  NTFS. La continuación por archivos obtuvo bloques de `764`, `16` y `145`
+  aprobados y reprodujo sólo dos fallos preexistentes, en los contratos/política
+  de conexión SQLite de Code; ambos archivos y sus implementaciones están
+  intactos respecto de `fcb8528d`. Una de las cuatro exclusiones, la competencia
+  de destino, se validó aparte en 11.512 s; la prueba estructuralmente costosa de
+  grupo grande quedó excluida. Esta evidencia no se presenta como suite completa
+  verde.
 - Refactor Knowledge: línea base y dos repeticiones de `84 passed`; la barrera
   amplia final obtuvo `770 passed`, `2 deselected` después de reproducir por
   separado los dos límites estructurales preexistentes de 907/910 líneas frente
@@ -862,24 +951,29 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Caracterizar el siguiente paquete.** Evaluar
+1. **Cerrar el paquete que rc22 coloca primero.** Caracterizar antes de editar
+   `bounded_subprocess.run_bounded_capture`; preservar firma, timeout, límites
+   de salida, cleanup de descendientes, memoria, cwd, entorno y stdin. El
+   paquete es de riesgo medio y sólo autoriza esa raíz, no sus consumidores.
+2. **Mantener Semantic Image como paquete siguiente.** Evaluar
    `semantic_image_index.index_image_embeddings` y usar
    `semantic_generation_repository._clone_published_members` sólo como guarda
    contractual. Fijar antes de editar orden de fases, cancelación, completitud,
    atomicidad transaccional, reintento/reanudación y trabajo acotado.
-2. **Demostrar el siguiente cambio contra rc21.** Usar el work-package planner,
+3. **Demostrar cada cambio contra rc22.** Usar el work-package planner,
    repetir autoanálisis y `--code-publication-diff`; exigir retirar el objetivo
-   sin añadir/cambiar hotspots, cero pérdidas/correcciones de resolución y replay
-   100 % cache hit.
-3. **Extender paquetes sólo con evidencia.** Aplicar el planner a otros dominios
+   sin añadir/cambiar hotspots, cero pérdidas/correcciones de resolución, gate
+   Ruff comparable sin diagnósticos nuevos y replay 100 % cache hit.
+4. **Extender paquetes sólo con evidencia.** Aplicar el planner a otros dominios
    únicamente cuando relaciones de producción confirmadas cambien de verdad la
    unidad de trabajo; no agrupar por nombre, prefijo o intuición arquitectónica.
-4. **No ampliar Publication Diff todavía.** v1 respondió también la decisión
-   rc20 con identidad del paquete, añadidos/retirados, evidencia y resolución.
-   Evolucionar sólo cuando una comparación real no permita decidir.
-5. **Fortalecer dead-code sin habilitar borrado.** Enseñar al grafo evidencia de
-   callbacks, registries y contratos que ya explican los 37 falsos positivos;
-   repetir la misma muestra y mantener la señal suprimida hasta pasar el gate.
+5. **Caracterizar Mypy por separado.** Sólo después del siguiente paquete útil,
+   fijar configuración, plugins, formato estructurado, semántica project-wide y
+   límites antes de decidir si merece otro proveedor. No mezclarlo con Ruff.
+6. **Aplazar Vulture y cualquier borrado.** Su confidence no es probabilidad
+   calibrada y su CLI no ofrece JSON. Antes de integrarlo debe pasar la misma
+   muestra etiquetada, explicar callbacks/registries/contratos y permanecer
+   advisory sin autorización de borrar.
 
 Imagen, calibración Semantic, soak del watcher y promoción del launcher siguen
 pendientes, pero quedan detrás del objetivo vigente de mejorar el autoanálisis.

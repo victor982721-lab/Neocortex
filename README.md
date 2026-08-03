@@ -219,7 +219,13 @@ Neocortex --state-directory $MiniState --code-review
 ```
 
 El primer comando escribe inventario y estado de código; no es una consulta de
-sólo lectura. El status sí es estrictamente read-only: cualquier `-wal`, `-shm`
+sólo lectura. En esa frontera protegida también ejecuta Ruff con una política
+fija y aislada sobre los archivos Python ya publicados: no carga configuración
+del proyecto, no importa el código, no aplica fixes ni crea caché en la raíz.
+Su evidencia es consultiva y aparece en status, review y publication diff; una
+indisponibilidad o límite alcanzado obliga a abstener el gate externo, no a
+inventar una publicación limpia. El status sí es estrictamente read-only:
+cualquier `-wal`, `-shm`
 o `-journal` junto a `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`,
 incluso vacío o desacoplado, causa abstención total con código `2` sin tocar el
 estado. Consulte [Autoanálisis protegido](docs/SELF_ANALYSIS.md) antes de usar
@@ -232,8 +238,10 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v3 conserva el ranking bruto y hasta tres recomendaciones
-`act_now` de v2, y añade un único `work_package` como siguiente cambio coherente.
+explicable. El envelope v4 conserva las capas v2/v3, el ranking bruto y hasta
+tres recomendaciones `act_now`, y añade la evidencia Ruff junto al gate
+`no_added_ruff_diagnostics` sin alterar ranking ni actionability. Mantiene un
+único `work_package` como siguiente cambio coherente.
 Ese paquete mantiene una sola recomendación raíz, enlaza como `contract_guard`
 los hotspots alcanzables por llamadas estáticas confirmadas a uno o dos saltos,
 y enumera contratos, orden, validación y gates de publicación. El horizonte de
@@ -246,10 +254,11 @@ resolución de llamadas. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` compara dos publicaciones Code completadas sin
+`--code-publication-diff` v2 compara dos publicaciones Code completadas sin
 escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
-hotspots añadidos o retirados y el delta no calibrado de `probable_dead`. Exige
-bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
+hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
+diagnósticos Ruff añadidos/resueltos cuando versión y configuración coinciden.
+Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
 

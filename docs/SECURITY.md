@@ -70,7 +70,12 @@ una raíz y un estado explícitos cuyos árboles sean disjuntos, captura y vuelv
 a verificar sus identidades, fuerza `analyze_only` y sólo admite la ruta
 `code` desde el inventario. Rechaza `--apply`, route-only/resume, rutas MIME,
 catálogo, organización y generated/vendored. El contenido se analiza como
-evidencia no confiable y no se ejecuta.
+evidencia no confiable y no se ejecuta. La única herramienta externa integrada
+en esta frontera es el adaptador Ruff v1: recibe exclusivamente el manifest de
+archivos Python ya publicados y abre copias temporales cuyos bytes ya fueron
+verificados, usa configuración aislada, entorno/cwd controlados, `--no-cache` y
+ninguna capacidad de fix. Sus resultados son
+advisory y nunca autorizan mutaciones.
 
 La finalización no confía únicamente en la CLI: Framework v20 impide enlazar
 acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y code v2
@@ -233,8 +238,15 @@ un fixture no confidencial y aislado.
 
 La ruta `code` analiza texto/AST/estructura y no ejecuta el código observado. El
 analizador Rust vigente es léxico; Cargo y Clippy no se ejecutan como parte del
-contrato actual. No añada ejecución de linters, compiladores, plugins o scripts
-del corpus sin una política explícita de confianza, timeout, recursos y
+contrato actual. Ruff sólo participa en `--self-analysis` bajo el perfil fijo
+`external-ruff-v1`: no descubre archivos, no carga configuración del corpus, no
+importa módulos y no aplica fixes. Ruff sólo abre copias temporales verificadas;
+el flujo integrado las crea bajo el directorio de estado explícito y disjunto,
+nunca bajo la raíz observada aunque `TEMP/TMP` apunten allí. NeoCortex gestiona
+y cierra los handles de cada lectura y, después del proceso, vuelve a abrir y
+comprobar los inputs originales publicados.
+Ningún otro linter, compilador, plugin o script del corpus puede incorporarse
+sin una política explícita de confianza, timeout, recursos, publicación y
 proveniencia.
 
 ## Herramientas externas
@@ -246,6 +258,9 @@ NeoCortex puede localizar o usar Tesseract, FFprobe/FFmpeg y qpdf.
 - Registre versión y origen del ejecutable.
 - qpdf es un fallback opcional; su ausencia no debe provocar la ejecución de un
   binario alternativo no confiable.
+- Ruff es una dependencia del runtime de NeoCortex y se invoca con el mismo
+  intérprete (`python -I -m ruff`), nunca mediante un ejecutable encontrado en
+  `PATH` ni una configuración aportada por la raíz analizada.
 - No interpole rutas o consultas de usuario dentro de comandos de shell propios.
 
 Los temporales de recuperación deben permanecer en el directorio temporal del
@@ -257,7 +272,8 @@ hijo suspendido y lo asignan por su handle exacto a un Job Object con
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` antes de reanudarlo. Timeout, desborde de
 stdout/stderr, cancelación o excepción terminan el Job, esperan al proceso
 directo y cierran pipes y handles. Esta contención cubre los descendientes de
-esas fronteras; no autoriza matar procesos por nombre ni debe atribuirse a un
+esas fronteras; Ruff añade además un límite de memoria del Job, cwd y entorno
+explícitos. Esto no autoriza matar procesos por nombre ni debe atribuirse a un
 callsite que no use esos supervisores.
 
 ## Modelos y red

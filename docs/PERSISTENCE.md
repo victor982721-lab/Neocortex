@@ -352,6 +352,20 @@ runtime. Cualquier discrepancia —o una base existente todavía sin fence— fu
 una finalización completa; los estados cacheados `partial` y `error` siguen
 contabilizándose en el nuevo summary.
 
+El schema 2 existente también recibe External Code Evidence v1 sin migración.
+Cada autoanálisis protegido inserta una fila terminal Ruff en
+`external_tool_runs`, ligada al `analysis_run_id`, con versión, firma de
+configuración, tiempos y provenance acotado. Una ejecución completa reemplaza
+únicamente la proyección vigente `diagnostics.source='external:ruff'`; un fallo
+o timeout la retira para que ningún lector confunda evidencia vieja con estado
+actual. El detalle histórico permanece en el provenance bounded de la corrida.
+La fila, la proyección y la finalización del run se confirman en una misma
+transacción. Un input exacto puede reutilizar una de las últimas 128 filas
+`completed` sólo si su configuración, raíz, firma de inputs y proyección vigente
+coinciden; entonces registra un run `skipped/cache_replay` y conserva una sola
+proyección de diagnósticos. Fuera de esa ventana o ante cualquier discrepancia,
+Ruff vuelve a ejecutarse de forma acotada.
+
 No se añadieron generación, staging ni CAS de head. La transacción global no
 admite cancelación dentro de una sentencia SQLite; los empates de resolución se
 conservan ambiguos y la firma del registro de analizadores sigue siendo global,

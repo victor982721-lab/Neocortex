@@ -31,6 +31,7 @@ _ACCEPTANCE_GATES = (
     "no_changed_hotspot_evidence",
     "no_corrected_or_lost_call_resolutions",
     "full_cache_hit_replay",
+    "no_added_ruff_diagnostics",
 )
 _RISK_ORDER = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
 
