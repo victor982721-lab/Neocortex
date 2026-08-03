@@ -22,8 +22,14 @@ from _04_Nucleo_Operativo.code_contracts import (
     ReferenceRecord,
     SymbolRecord,
 )
+from _04_Nucleo_Operativo.code_engineering_analytics import (
+    CodeEngineeringAnalytics,
+    EngineeringGate,
+)
 from _04_Nucleo_Operativo.code_publication_diff import (
     _architecture_delta,
+    _architecture_module_deltas,
+    _engineering_delta,
     _unused_delta,
     compare_code_publications,
 )
@@ -357,6 +363,7 @@ def test_migrated_legacy_ruff_compares_with_current_protected_contract(
     } == {
         "complexipy-cognitive",
         "deptry-project-dependencies",
+        "git-history-local",
         "grimp-architecture",
         "installed-package-inventory",
         "mypy-trusted-project",
@@ -471,9 +478,15 @@ def test_publication_diff_of_the_same_state_is_stable_and_empty(
     assert result.supply_chain.status == "not_evaluated"
     assert len(result.supply_chain.gates) == 6
     assert result.supply_chain.mutation_authority is False
+    assert result.engineering_analytics is not None
+    assert result.engineering_analytics.status == "not_comparable"
+    assert result.engineering_analytics.baseline_mutation_score is None
+    assert result.engineering_analytics.current_mutation_score is None
     payload = result.as_payload()
-    assert payload["schema"] == "neocortex.code-publication-diff/v7"
+    assert payload["schema"] == "neocortex.code-publication-diff/v8"
+    assert "neocortex.code-publication-diff/v7" in payload["compatible_schemas"]
     assert "neocortex.code-publication-diff/v5" in payload["compatible_schemas"]
+    assert isinstance(payload["engineering_analytics"], dict)
     coverage_payload = payload["test_coverage"]
     assert isinstance(coverage_payload, dict)
     assert coverage_payload["schema"] == "neocortex.code-coverage-analysis/v1"
@@ -625,3 +638,112 @@ def test_architecture_delta_never_passes_when_provider_evidence_is_missing() -> 
     assert delta.architecture_contracts_not_degraded == "not_evaluated"
     assert delta.no_new_import_cycles == "not_evaluated"
     assert delta.module_complexity_not_displaced == "not_evaluated"
+
+
+def test_architecture_v2_graph_deltas_preserve_truncation_honesty() -> None:
+    baseline = ArchitectureModule(
+        "pkg.module",
+        1,
+        2,
+        4.0,
+        4.0,
+        1,
+        (),
+        (),
+        None,
+        None,
+        None,
+        None,
+        owner_id="pkg",
+        dependency_reach=4,
+        blast_radius=7,
+        directed_degree_centrality=0.25,
+        cross_owner_fan_in=1,
+        cross_owner_fan_out=2,
+    )
+    current = replace(
+        baseline,
+        dependency_reach=9,
+        dependency_reach_truncated=True,
+        blast_radius=10,
+        directed_degree_centrality=0.5,
+        cross_owner_fan_in=3,
+        cross_owner_fan_out=1,
+    )
+
+    delta = _architecture_module_deltas(
+        {baseline.module_id: baseline}, {current.module_id: current}
+    )[0]
+
+    assert delta.dependency_reach_status == "not_comparable"
+    assert delta.dependency_reach_delta is None
+    assert delta.dependency_reach_reason == "dependency_reach_truncated_lower_bound"
+    assert delta.blast_radius_status == "comparable"
+    assert delta.blast_radius_delta == 3
+    assert delta.directed_degree_centrality_delta == 0.25
+    assert delta.cross_owner_fan_in_delta == 2
+    assert delta.cross_owner_fan_out_delta == -1
+    assert delta.graph_metrics_status == "not_comparable"
+
+
+def _engineering_analysis(
+    status: str,
+    *,
+    scope: str | None,
+    score: float | None,
+    gate_status: str,
+) -> CodeEngineeringAnalytics:
+    return CodeEngineeringAnalytics(
+        database="fixture.sqlite3",
+        analysis_run_id=1,
+        status=status,  # type: ignore[arg-type]
+        reason=None if status == "ready" else "one_or_more_engineering_dimensions_not_ready",
+        providers=(),
+        modules=(),
+        gates=(
+            EngineeringGate(
+                "mutation_measurement_complete",
+                gate_status,  # type: ignore[arg-type]
+                None if gate_status == "passed" else "mutation_provider_not_ready",
+            ),
+        ),
+        mutation_scope_signature=scope,
+        mutation_score=score,
+        limitations=(),
+        digest="fixture",
+    )
+
+
+def test_engineering_delta_requires_ready_matching_measurement_scope() -> None:
+    h5 = _engineering_analysis("partial", scope=None, score=None, gate_status="not_evaluated")
+    current = _engineering_analysis("ready", scope="scope-v1", score=0.8, gate_status="passed")
+
+    delta = _engineering_delta(h5, current)
+
+    assert delta.status == "not_comparable"
+    assert delta.reason == "engineering_analytics_not_ready:baseline=partial:current=ready"
+    assert delta.baseline_mutation_score is None
+    assert delta.current_mutation_score is None
+    assert delta.mutation_score_delta is None
+    assert [item.gate for item in delta.gates] == [
+        "mutation_measurement_complete",
+        "mutation_score_not_degraded",
+    ]
+    assert delta.gates[1].status == "not_evaluated"
+    assert delta.aggregate_score is None
+    assert delta.defect_probability is None
+
+
+def test_engineering_delta_uses_exact_non_degradation_gate() -> None:
+    baseline = _engineering_analysis("ready", scope="scope-v1", score=0.8, gate_status="passed")
+    current = _engineering_analysis("ready", scope="scope-v1", score=0.79, gate_status="passed")
+
+    delta = _engineering_delta(baseline, current)
+
+    assert delta.status == "comparable"
+    assert delta.baseline_mutation_score == 0.8
+    assert delta.current_mutation_score == 0.79
+    assert delta.mutation_score_delta == -0.010000000000000009
+    assert delta.gates[0].status == "passed"
+    assert delta.gates[1].status == "failed"
+    assert delta.gates[1].reason == "mutation_score_decreased"

@@ -133,23 +133,27 @@ exactos de cero. Su manifest guarda policy/firma, identidades, frescura y los
 argv canónicos `analyze`/`status` como arrays, no como texto de shell.
 `--analysis-profile protected` es el valor predeterminado: Ruff observa los
 Python vigentes publicados por Code con fingerprint exacto y usa la política
-aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade once
+aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade doce
 proveedores: Ruff proyecto, Mypy, Pyright, Ruff Analyze, Grimp, Complexipy,
-Vulture, Semgrep, Deptry, pip-audit e inventario del entorno instalado. Ruff
+Vulture, Semgrep, Deptry, pip-audit, inventario del entorno instalado e historial
+Git local. Ruff
 trusted usa `E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`. Ruff Analyze actúa
 como oráculo diferencial del grafo; Grimp produce imports, fan-in/fan-out, SCC,
 ciclos y contratos; Complexipy produce complejidad cognitiva por símbolo y
 módulo. Semgrep ejecuta tres invariantes locales versionadas con autofix
 deshabilitado; Deptry contrasta imports con `pyproject.toml`; pip-audit captura
 un snapshot fechado de vulnerabilidades de PyPI; el inventario verifica
-versiones, constraints, metadata de licencia y `RECORD` del wheel instalado.
-La suite completa suma doce proveedores. No importa módulos del proyecto ni
+versiones, constraints, metadata de licencia y `RECORD` del wheel instalado;
+Git correlaciona historia local por módulo. La suite completa suma 13
+proveedores. No importa módulos del proyecto ni
 aplica fixes, y toda su evidencia es advisory. La única excepción offline es
 pip-audit, que declara el acceso de red de su snapshot; su replay exacto no
-consulta la red. `vulture-unused-static` publica sólo candidatos heurísticos
+consulta la red. El inventario instalado se recalcula en cada corrida.
+`vulture-unused-static` publica sólo candidatos heurísticos
 `unused_code` y tampoco posee autoridad de fix, borrado o mutación.
 
-`trusted-deep` añade Pytest + Coverage a los doce proveedores estáticos. Nunca
+`trusted-deep` añade Pytest + Coverage y Cosmic Ray a los 13 proveedores
+estáticos, para un total de 15. Nunca
 es el perfil predeterminado y sólo acepta la identidad física exacta de
 `C:\Users\Victor\Neocortex\Repository`; cualquier otra raíz se rechaza antes de
 crear un run. Este perfil sí ejecuta código declarado del proyecto, pruebas y
@@ -164,6 +168,14 @@ Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-d
 Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
   --deep-test-selector tests/test_bounded_subprocess.py `
   --deep-max-tests 3000 --deep-time-budget-seconds 600 --deep-shard-size 20
+
+# Mutación focal del módulo/símbolo del work package.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
+  --deep-test-selector tests/test_external_deep_coverage.py `
+  --deep-mutation-target _04_Nucleo_Operativo/external_deep_coverage.py `
+  --deep-mutation-symbol external_deep_coverage._normalize `
+  --deep-mutation-max-mutants 20 --deep-mutation-timeout-seconds 30 `
+  --deep-mutation-time-budget-seconds 600
 ```
 
 `--deep-test-selector` acepta sólo una ruta relativa bajo `tests/` o un node id
@@ -172,6 +184,13 @@ de Pytest y puede repetirse. `--deep-max-tests` admite 1–5000 (3000 por defect
 selección vacía se publica como `full`; una o más selecciones, como `selected`.
 El manifest declara `content_executed=true`, la selección y la firma de estos
 controles.
+`--deep-mutation-target` acepta un `.py` relativo a la raíz y exige al menos un
+`--deep-test-selector`; `--deep-mutation-symbol` es opcional y no puede existir
+sin target. Los límites de mutación son 1–100 mutantes (20 por defecto), 1–120
+segundos por mutante (30) y 10–900 segundos totales (600). Estas cinco opciones
+no pueden repetirse. Cosmic Ray modifica únicamente la copia staged, ejecuta
+las pruebas seleccionadas —que pueden usar red— y publica evidencia advisory
+con cero autoridad sobre el repositorio original.
 
 Si USN no está disponible, el preset hace un full scan portable sin checkpoint
 y publica `journal.status=unavailable`; code puede reutilizar caché, pero el
@@ -187,7 +206,7 @@ cualquiera de ellas, causa abstención total con código `2` sin tocar el estado
 La salida añade `analysis_profile` y `external_evidence_suite`: lista cada
 proveedor, versión, ejecución, cobertura, findings, comparabilidad, gate y
 counters; `type_consensus` conserva por separado coincidencias y discrepancias
-Mypy/Pyright. `architecture_analysis` muestra consenso del grafo, módulos,
+Mypy/Pyright. `architecture_analysis` v2 muestra consenso del grafo, módulos,
 imports, SCC, contratos, complejidad y limitaciones. Un proveedor ausente o una
 publicación no comparable queda `not_evaluated`, no `passed`. En review, el
 work package expone `architecture_contracts_not_degraded`,
@@ -196,6 +215,9 @@ edición. Para `trusted-deep`, `test_coverage` añade selección y completitud,
 resultados de pruebas, totales de líneas/ramas, relaciones test→símbolo, ejemplos
 faltantes, versiones, firmas y limitaciones. Coverage usa contextos dinámicos
 por node id y fase Pytest; mide sólo el proceso principal, no subprocesses.
+`engineering_analytics` v1 correlaciona por módulo complejidad, cobertura,
+mutación, historia y grafo sin emitir score agregado ni probabilidad de defecto;
+expone gates de baseline, completitud y score de mutación.
 
 En `trusted-static` y `trusted-deep`, `unused_analysis` correlaciona Vulture con
 Pyright, grafo, imports, reexports, `__all__`, callbacks, registries, fixtures,
@@ -217,7 +239,7 @@ review y work packages consumen la misma evidencia; la ausencia o caducidad de
 un proveedor obliga a abstener sólo la dimensión afectada.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v9` conserva compatibilidad con v2-v8 y
+envelope `neocortex.code-review/v10` conserva compatibilidad con v2-v9 y
 la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
 recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
 ranking, además de un `work_package`
@@ -233,7 +255,10 @@ paquete de mantenimiento y puede entregar, de forma independiente, hasta tres
 paquetes `unused_characterization`. Sólo los crea para
 `probable_unused_high_consensus` cuando pasan los gates de precisión de
 calibración y holdout; exigen revisión dinámica, pruebas y confirmación humana,
-y declaran `mutation_authority=false`. El pool del
+y declaran `mutation_authority=false`. El work package enlaza además el perfil
+y los gates de `engineering_analytics`; en la validación H6 su objetivo fue
+`_04_Nucleo_Operativo.external_deep_coverage` /
+`external_deep_coverage._normalize`. El pool del
 planificador siempre es el top 50, independientemente de la vista; no
 agrupa por nombre o directorio y los guards exigen caracterización antes de
 cualquier cambio. `--code-review-limit N --code-json` permite inspeccionar entre
@@ -246,7 +271,7 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v7`, compatible con v1-v6, informa
+envelope `neocortex.code-publication-diff/v8`, compatible con v1-v7, informa
 calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
@@ -262,7 +287,8 @@ nuevo, pero sigue siendo observacional y jamás autoriza borrar o modificar.
 `supply_chain` compara por proveedor, categoría, gate, observación y relación;
 si el baseline no contiene los cuatro proveedores nuevos o difieren versiones,
 frescura o firmas, publica la dimensión como `not_evaluated` o baseline/current
-sin inventar mejora o regresión.
+sin inventar mejora o regresión. `engineering_analytics` compara sus cinco
+dimensiones y sólo calcula delta de mutation score con alcance comparable.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -354,8 +380,9 @@ audio, código y estado semántico.
 `pyright-trusted-project`, `vulture-unused-static`, `ruff-analyze-imports`,
 `grimp-architecture`, `complexipy-cognitive`, `semgrep-neocortex-invariants`,
 `deptry-project-dependencies`, `pip-audit-known-vulnerabilities` e
-`installed-package-inventory`, además de `pytest-coverage-trusted-deep`, con
-disponibilidad, versión y autoridad advisory.
+`installed-package-inventory`, `git-history-local`, además de
+`pytest-coverage-trusted-deep` y `cosmic-ray-focal-mutation`, con disponibilidad,
+versión y autoridad advisory.
 La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
 por sí sola al proveedor protected.
 

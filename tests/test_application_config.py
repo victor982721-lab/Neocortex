@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -43,13 +42,18 @@ from _04_Nucleo_Operativo.route_registry import (
 def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
     assert ApplicationConfig is FrameworkConfig
     application_fields = fields(ApplicationConfig)
-    assert len(application_fields) == 125
+    assert len(application_fields) == 130
     assert {item.name for item in application_fields} >= {
         "analysis_profile",
         "deep_test_selectors",
         "deep_max_tests",
         "deep_time_budget_seconds",
         "deep_shard_size",
+        "deep_mutation_target",
+        "deep_mutation_symbol",
+        "deep_mutation_max_mutants",
+        "deep_mutation_timeout_seconds",
+        "deep_mutation_time_budget_seconds",
     }
     base = Path("synthetic-application-config")
 
@@ -66,28 +70,23 @@ def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
 
     assert type(canonical) is FrameworkConfig
     assert original.root == base / "requested-root"
-    assert canonical.framework_database == (
-        base / "canonical-state" / "framework.sqlite3"
-    )
+    assert canonical.framework_database == (base / "canonical-state" / "framework.sqlite3")
     assert canonical.code_database == base / "canonical-state" / "code.sqlite3"
 
 
 def test_application_facade_reexports_the_runtime_projections() -> None:
     assert (
-        code_route_config_from_application
-        is runtime_projections.code_route_config_from_application
+        code_route_config_from_application is runtime_projections.code_route_config_from_application
     )
     assert (
-        docx_route_config_from_application
-        is runtime_projections.docx_route_config_from_application
+        docx_route_config_from_application is runtime_projections.docx_route_config_from_application
     )
     assert (
         global_resource_limits_from_application
         is runtime_projections.global_resource_limits_from_application
     )
     assert (
-        pdf_route_config_from_application
-        is runtime_projections.pdf_route_config_from_application
+        pdf_route_config_from_application is runtime_projections.pdf_route_config_from_application
     )
 
 
@@ -158,8 +157,7 @@ def test_route_registry_preserves_the_legacy_code_projection_name() -> None:
     config = ApplicationConfig(state_directory=Path("legacy-code-state"))
 
     with patch(
-        "_04_Nucleo_Operativo.application_config_projections."
-        "code_route_config_from_application",
+        "_04_Nucleo_Operativo.application_config_projections.code_route_config_from_application",
         wraps=code_route_config_from_application,
     ) as projection:
         legacy = code_route_config_from_framework(config)
@@ -188,9 +186,7 @@ def test_default_pdf_and_docx_projections_use_current_canonical_paths() -> None:
     )
 
     assert requested.pdf_database == Path("requested-document-state") / "pdf.sqlite3"
-    assert requested.docx_database == (
-        Path("requested-document-state") / "docx.sqlite3"
-    )
+    assert requested.docx_database == (Path("requested-document-state") / "docx.sqlite3")
     assert pdf == expected_pdf
     assert docx == expected_docx
     assert pdf.processing_signature == expected_pdf.processing_signature
@@ -331,14 +327,12 @@ def test_route_registry_delegates_pdf_and_docx_projections() -> None:
     config = ApplicationConfig(state_directory=Path("legacy-document-state"))
 
     with patch(
-        "_04_Nucleo_Operativo.application_config_projections."
-        "pdf_route_config_from_application",
+        "_04_Nucleo_Operativo.application_config_projections.pdf_route_config_from_application",
         wraps=pdf_route_config_from_application,
     ) as pdf_projection:
         legacy_pdf = pdf_route_config_from_framework(config)
     with patch(
-        "_04_Nucleo_Operativo.application_config_projections."
-        "docx_route_config_from_application",
+        "_04_Nucleo_Operativo.application_config_projections.docx_route_config_from_application",
         wraps=docx_route_config_from_application,
     ) as docx_projection:
         legacy_docx = docx_route_config_from_framework(config)
@@ -350,9 +344,7 @@ def test_route_registry_delegates_pdf_and_docx_projections() -> None:
 
 
 def test_default_application_values_project_to_existing_resource_defaults() -> None:
-    assert global_resource_limits_from_application(
-        ApplicationConfig()
-    ) == GlobalResourceLimits()
+    assert global_resource_limits_from_application(ApplicationConfig()) == GlobalResourceLimits()
 
 
 def test_resource_projection_preserves_every_explicit_application_value() -> None:
@@ -396,9 +388,7 @@ def test_cli_values_reach_the_resource_domain_without_unit_drift() -> None:
     )
     validate_arguments(args)
 
-    limits = global_resource_limits_from_application(
-        framework_config_from_args(args)
-    )
+    limits = global_resource_limits_from_application(framework_config_from_args(args))
 
     assert limits == GlobalResourceLimits(
         memory_budget_bytes=384 * 1024 * 1024,
@@ -421,13 +411,10 @@ def test_orchestrator_consumes_the_domain_projection() -> None:
 
     with (
         patch(
-            "_04_Nucleo_Operativo.orchestrator."
-            "global_resource_limits_from_application",
+            "_04_Nucleo_Operativo.orchestrator.global_resource_limits_from_application",
             return_value=projected,
         ) as projection,
-        patch(
-            "_04_Nucleo_Operativo.orchestrator.GlobalResourceCoordinator"
-        ) as coordinator,
+        patch("_04_Nucleo_Operativo.orchestrator.GlobalResourceCoordinator") as coordinator,
     ):
         result = orchestrator._resource_coordinator()
 
@@ -438,4 +425,6 @@ def test_orchestrator_consumes_the_domain_projection() -> None:
         cancellation=orchestrator._cancellation,
     )
     assert result is coordinator.return_value
+
+
 # endregion [02]

@@ -36,6 +36,11 @@ def _deep_framework_config(root: Path, state: Path) -> FrameworkConfig:
         deep_max_tests=120,
         deep_time_budget_seconds=240,
         deep_shard_size=12,
+        deep_mutation_target=r"_04_Nucleo_Operativo\external_deep_coverage.py",
+        deep_mutation_symbol="external_deep_coverage._normalize",
+        deep_mutation_max_mutants=17,
+        deep_mutation_timeout_seconds=11,
+        deep_mutation_time_budget_seconds=123,
     )
 
 
@@ -47,7 +52,7 @@ def test_deep_projection_declares_execution_with_separate_signature(tmp_path: Pa
     assert projected.analysis_profile == "trusted-deep"
     assert projected.deep_test_selectors == config.deep_test_selectors
     assert projected.deep_configuration_payload == {
-        "schema": "neocortex.code-deep-configuration/v1",
+        "schema": "neocortex.code-deep-configuration/v2",
         "analysis_profile": "trusted-deep",
         "content_executed": True,
         "suite_selection": "selected",
@@ -55,8 +60,13 @@ def test_deep_projection_declares_execution_with_separate_signature(tmp_path: Pa
         "max_tests": 120,
         "time_budget_seconds": 240,
         "shard_size": 12,
+        "mutation_target": "_04_Nucleo_Operativo/external_deep_coverage.py",
+        "mutation_symbol": "external_deep_coverage._normalize",
+        "mutation_max_mutants": 17,
+        "mutation_timeout_seconds": 11,
+        "mutation_time_budget_seconds": 123,
     }
-    assert projected.deep_configuration_signature.startswith("code-deep-v1:")
+    assert projected.deep_configuration_signature.startswith("code-deep-v2:")
 
 
 def test_suite_controls_do_not_invalidate_ordinary_code_ast_signature(tmp_path: Path) -> None:
@@ -100,6 +110,15 @@ def test_trusted_deep_command_and_manifest_are_exact(tmp_path: Path) -> None:
     assert analyze[analyze.index("--deep-max-tests") + 1] == "120"
     assert analyze[analyze.index("--deep-time-budget-seconds") + 1] == "240"
     assert analyze[analyze.index("--deep-shard-size") + 1] == "12"
+    assert analyze[analyze.index("--deep-mutation-target") + 1] == (
+        "_04_Nucleo_Operativo/external_deep_coverage.py"
+    )
+    assert analyze[analyze.index("--deep-mutation-symbol") + 1] == (
+        "external_deep_coverage._normalize"
+    )
+    assert analyze[analyze.index("--deep-mutation-max-mutants") + 1] == "17"
+    assert analyze[analyze.index("--deep-mutation-timeout-seconds") + 1] == "11"
+    assert analyze[analyze.index("--deep-mutation-time-budget-seconds") + 1] == "123"
 
     manifest, _payload = build_self_analysis_completion_manifest(
         run={"run_id": 1},
@@ -151,9 +170,60 @@ def test_deep_full_suite_is_declared_without_selectors(tmp_path: Path) -> None:
     config = replace(
         _deep_framework_config(tmp_path / "root", tmp_path / "state"),
         deep_test_selectors=(),
+        deep_mutation_target=None,
+        deep_mutation_symbol=None,
+        deep_mutation_max_mutants=20,
+        deep_mutation_timeout_seconds=30,
+        deep_mutation_time_budget_seconds=600,
     )
 
     projected = code_route_config_from_application(config)
 
     assert projected.deep_configuration_payload["suite_selection"] == "full"
     assert projected.deep_configuration_payload["content_executed"] is True
+    assert projected.deep_configuration_payload["mutation_target"] is None
+
+
+def test_historical_deep_command_reconstructs_exact_v1_manifest(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    state = tmp_path / "state"
+    root.mkdir()
+    commands = self_analysis_commands(_deep_framework_config(root, state), root, state)
+    mutation_options = {
+        "--deep-mutation-target",
+        "--deep-mutation-symbol",
+        "--deep-mutation-max-mutants",
+        "--deep-mutation-timeout-seconds",
+        "--deep-mutation-time-budget-seconds",
+    }
+    historical: list[str] = []
+    index = 0
+    analyze = commands["analyze"]
+    while index < len(analyze):
+        if analyze[index] in mutation_options:
+            index += 2
+            continue
+        historical.append(analyze[index])
+        index += 1
+    commands["analyze"] = historical
+
+    manifest, _payload = build_self_analysis_completion_manifest(
+        run={"run_id": 1},
+        inventory={"scan_id": 2},
+        inventory_policy=InventoryExclusionPolicy.compile((state,)),
+        code_processing_signature="code-v2:fixture",
+        code_summary={"processed": 1},
+        safety_counts={
+            "route_candidates": 0,
+            "file_actions": 0,
+            "run_actions": 0,
+            "organization_events": 0,
+        },
+        commands=commands,
+    )
+
+    deep = manifest["deep_analysis"]
+    assert isinstance(deep, dict)
+    assert deep["schema"] == "neocortex.code-deep-configuration/v1"
+    assert deep["configuration_signature"].startswith("code-deep-v1:")
+    assert "mutation_target" not in deep

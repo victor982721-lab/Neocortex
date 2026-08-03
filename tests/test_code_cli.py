@@ -182,6 +182,7 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert not status["exists"]
     assert status["self_analysis"] is None
     assert status["architecture"]["status"] == "abstained"
+    assert status["architecture"]["schema"] == "neocortex.code-architecture-analysis/v2"
     assert status["architecture"]["reason"] == "code_state_missing"
     assert status["architecture"]["summary"] is None
     assert len(status["architecture"]["gates"]) == 3
@@ -192,6 +193,10 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert status["supply_chain"]["status"] == "abstained"
     assert status["supply_chain"]["mutation_authority"] is False
     assert len(status["supply_chain"]["gates"]) == 6
+    assert status["engineering_analytics"]["status"] == "abstained"
+    assert status["engineering_analytics"]["reason"] == "code_state_missing"
+    assert status["engineering_analytics"]["aggregate_score"] is None
+    assert status["engineering_analytics"]["defect_probability"] is None
     assert doctor["kind"] == "code-doctor"
     assert doctor["schema"] == "not-initialized"
     assert set(doctor["external_evidence_providers"]) == set(provider_tool_versions())
@@ -212,6 +217,7 @@ def test_code_status_and_doctor_do_not_initialize_absent_state(
     assert "CODE_UNUSED status=abstained total=0" in human_status
     assert "CODE_SUPPLY_CHAIN status=abstained" in human_status
     assert human_status.count("CODE_SUPPLY_CHAIN_GATE ") == 6
+    assert "CODE_ENGINEERING status=abstained" in human_status
     assert not (tmp_path / "code.sqlite3").exists()
     assert not (tmp_path / "framework.sqlite3").exists()
     assert not (tmp_path / "dedup.sqlite3").exists()
@@ -235,7 +241,7 @@ def test_code_review_abstains_without_initializing_absent_state(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["kind"] == "code-review"
-    assert payload["schema"] == "neocortex.code-review/v9"
+    assert payload["schema"] == "neocortex.code-review/v10"
     assert "neocortex.code-review/v3" in payload["compatible_schemas"]
     assert payload["compatible_schemas"] == [
         "neocortex.code-review/v2",
@@ -245,6 +251,7 @@ def test_code_review_abstains_without_initializing_absent_state(
         "neocortex.code-review/v6",
         "neocortex.code-review/v7",
         "neocortex.code-review/v8",
+        "neocortex.code-review/v9",
     ]
     assert payload["status"] == "abstained"
     assert payload["reason"] == "code_state_missing"

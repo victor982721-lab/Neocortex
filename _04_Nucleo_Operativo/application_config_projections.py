@@ -129,6 +129,11 @@ def code_route_config_from_application(
         deep_max_tests=getattr(config, "deep_max_tests", 3000),
         deep_time_budget_seconds=getattr(config, "deep_time_budget_seconds", 600),
         deep_shard_size=getattr(config, "deep_shard_size", 20),
+        deep_mutation_target=getattr(config, "deep_mutation_target", None),
+        deep_mutation_symbol=getattr(config, "deep_mutation_symbol", None),
+        deep_mutation_max_mutants=getattr(config, "deep_mutation_max_mutants", 20),
+        deep_mutation_timeout_seconds=getattr(config, "deep_mutation_timeout_seconds", 30),
+        deep_mutation_time_budget_seconds=getattr(config, "deep_mutation_time_budget_seconds", 600),
         selection=config.selection,
     )
 

@@ -60,6 +60,33 @@ El proveedor `installed-package-inventory` expone metadata, ambigüedad e
 integridad como categorías separadas y sin conclusión jurídica. Debe
 regenerarse para cada resolución constrained que se pretenda promover.
 
+### Addendum del runtime candidato 0.7.2 — Hito 6
+
+El candidato Hito 6 se validó con Python 3.13.14 desde el wheel
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito6-mutation-history-20260803-rc3\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+El artefacto tiene 1 580 823 bytes, 297 miembros, SHA-256
+`7CA6C693847869DF5D18139F9C2F2D22D7F890991077A06A2A86A96D9B54CA11`,
+integridad ZIP y `pip check` limpios. Los 23 módulos de producción comparados
+fueron byte-idénticos entre fuente, wheel e instalación.
+
+Cosmic Ray `8.4.6` quedó instalado como dependencia Python del autoanálisis
+profundo. Su metadata instalada declara el repositorio
+`https://github.com/sixty-north/cosmic-ray`, autoría de Sixty North AS,
+classifier MIT y un `licenses/LICENCE.txt` con el texto MIT. La metadata y el
+archivo empaquetado son evidencia de procedencia y declaración observada; este
+inventario no emite una conclusión jurídica.
+
+| Componente observado en el candidato Hito 6 | Entrega | Alcance operativo | Declaración observada |
+|---|---|---|---|
+| Cosmic Ray `8.4.6` | dependencia Python base, pin | mutación focal en `trusted-deep` sobre copia staged | MIT; metadata y `licenses/LICENCE.txt` instalados |
+| Pyright `1.1.411` | paquete npm aislado junto al runtime | tipos en perfiles trusted | MIT |
+| Node `24.18.1` | runtime externo | host de Pyright | inventariar antes de redistribuir |
+
+`installed-package-inventory` se recalcula en cada corrida, sin subprocesos,
+para verificar el wheel instalado efectivo; no se reutiliza por caché como si
+la resolución del entorno fuese inmutable. Cualquier redistribución debe volver
+a generar el inventario completo de esa resolución constrained.
+
 ### Revalidación PRE-REPORT de continuación
 
 La revalidación del **2026-07-25 16:55 -06:00** confirmó sin red ni cambios globales:

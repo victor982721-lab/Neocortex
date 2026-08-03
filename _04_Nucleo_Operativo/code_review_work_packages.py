@@ -16,6 +16,10 @@ from .code_coverage_analysis import (
     project_work_package_coverage,
     project_work_package_coverage_scope,
 )
+from .code_engineering_analytics import (
+    CodeEngineeringAnalytics,
+    engineering_profile_for_module,
+)
 from .code_unused_analysis import CodeUnusedAnalysis, UnusedConsensusCandidate
 from .code_supply_chain_analysis import CodeSupplyChainAnalysis, SupplyChainObservation
 from .code_review_actionability import classify_source_role
@@ -419,6 +423,67 @@ def _annotate_unused_candidates(
     )
 
 
+def _annotate_engineering(
+    package: CodeReviewWorkPackage,
+    analysis: CodeEngineeringAnalytics | None,
+) -> CodeReviewWorkPackage:
+    profile = (
+        None
+        if analysis is None or package.primary_module is None
+        else engineering_profile_for_module(analysis, package.primary_module)
+    )
+    gates = () if analysis is None else analysis.gates
+    evidence = (
+        ("engineering:not_evaluated",)
+        if analysis is None
+        else (
+            f"engineering:{analysis.status}",
+            *(
+                ("engineering_profile:not_recorded",)
+                if profile is None
+                else (
+                    f"engineering_profile:{profile.module_id}",
+                    *(
+                        f"engineering_dimension:{dimension.dimension}:{dimension.status}"
+                        for dimension in (
+                            profile.complexity,
+                            profile.coverage,
+                            profile.mutation,
+                            profile.history,
+                            profile.graph,
+                        )
+                    ),
+                )
+            ),
+            *(f"engineering_gate:{gate.gate}:{gate.status}" for gate in gates),
+        )
+    )
+    limitations: tuple[str, ...] = ()
+    if analysis is None:
+        limitations = ("engineering_analytics_not_evaluated",)
+    else:
+        limitations = (
+            *analysis.limitations,
+            *(
+                ()
+                if analysis.status == "ready"
+                else ("engineering_analytics_not_ready:" + (analysis.reason or analysis.status),)
+            ),
+            *(
+                ()
+                if profile is not None
+                else ("engineering_profile_not_recorded_for_primary_module",)
+            ),
+        )
+    return replace(
+        package,
+        engineering_profile=profile,
+        engineering_gates=gates,
+        evidence=tuple(dict.fromkeys((*package.evidence, *evidence))),
+        limitations=tuple(dict.fromkeys((*package.limitations, *limitations))),
+    )
+
+
 def _path_matches_package(path: str, package: CodeReviewWorkPackage) -> bool:
     candidate_path = _normalized_path(path)
     package_paths = {_normalized_path(member.path) for member in package.members} | {
@@ -558,6 +623,7 @@ def _unused_characterization_packages(
     *,
     architecture: CodeArchitectureAnalysis | None,
     test_coverage: CodeCoverageAnalysis | None,
+    engineering_analytics: CodeEngineeringAnalytics | None,
     excluded_candidate_ids: frozenset[str],
     supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
@@ -611,62 +677,67 @@ def _unused_characterization_packages(
         )
         packages.append(
             _annotate_supply_chain(
-                CodeReviewWorkPackage(
-                    package_rank=0,
-                    package_id=_unused_package_id(candidate),
-                    title=f"{target} unused-code characterization",
-                    objective="characterize_high_consensus_unused_candidate_without_mutation",
-                    primary_finding_id=candidate.candidate_id,
-                    primary_hotspot_id=candidate.candidate_id,
-                    primary_symbol=target,
-                    primary_module=module_id,
-                    change_risk="unknown",
-                    members=(),
-                    members_truncated=False,
-                    consumer_module_examples=(),
-                    import_chains=import_chains,
-                    affected_architecture_contracts=affected_contracts,
-                    test_coverage=coverage_projection,
-                    test_coverage_scope=coverage_scope,
-                    contracts_to_preserve=(
-                        "public_import_and_reexport_surface",
-                        "callbacks_registries_protocols_and_entry_points",
-                        "runtime_and_test_fixture_behavior",
-                    ),
-                    steps=_unused_package_steps(candidate),
-                    recommended_validation=(
-                        "inspect_import_reexport_and___all___usage",
-                        "inspect_callbacks_registries_protocols_and_entry_points",
-                        "run_targeted_tests_and_public_import_smoke",
-                        "record_human_confirmation_before_any_separate_change",
-                    ),
-                    acceptance_gates=_UNUSED_ACCEPTANCE_GATES,
-                    evidence=(
-                        f"unused_candidate:{candidate.candidate_id}:{candidate.state}",
-                        *(f"provider:{item}" for item in candidate.provider_ids),
-                        *(f"reason:{item}" for item in candidate.reasons),
-                        f"calibration_signature:{analysis.calibration_signature}",
-                        f"coverage_status:{analysis.coverage_status}",
-                        "architecture:"
-                        + (architecture.status if architecture is not None else "not_evaluated"),
-                    ),
-                    limitations=(
-                        "characterization_package_is_advice_not_change_authorization",
-                        "candidate_requires_explicit_human_confirmation",
-                        "dynamic_usage_may_remain_unobserved",
-                        "coverage_can_explain_usage_but_never_strengthens_missing_evidence",
-                        "package_has_zero_delete_or_mutation_authority",
-                        *(
-                            ()
-                            if architecture is not None and architecture.status == "ready"
-                            else ("architecture_gates_require_comparable_ready_evidence",)
+                _annotate_engineering(
+                    CodeReviewWorkPackage(
+                        package_rank=0,
+                        package_id=_unused_package_id(candidate),
+                        title=f"{target} unused-code characterization",
+                        objective="characterize_high_consensus_unused_candidate_without_mutation",
+                        primary_finding_id=candidate.candidate_id,
+                        primary_hotspot_id=candidate.candidate_id,
+                        primary_symbol=target,
+                        primary_module=module_id,
+                        change_risk="unknown",
+                        members=(),
+                        members_truncated=False,
+                        consumer_module_examples=(),
+                        import_chains=import_chains,
+                        affected_architecture_contracts=affected_contracts,
+                        test_coverage=coverage_projection,
+                        test_coverage_scope=coverage_scope,
+                        contracts_to_preserve=(
+                            "public_import_and_reexport_surface",
+                            "callbacks_registries_protocols_and_entry_points",
+                            "runtime_and_test_fixture_behavior",
                         ),
+                        steps=_unused_package_steps(candidate),
+                        recommended_validation=(
+                            "inspect_import_reexport_and___all___usage",
+                            "inspect_callbacks_registries_protocols_and_entry_points",
+                            "run_targeted_tests_and_public_import_smoke",
+                            "record_human_confirmation_before_any_separate_change",
+                        ),
+                        acceptance_gates=_UNUSED_ACCEPTANCE_GATES,
+                        evidence=(
+                            f"unused_candidate:{candidate.candidate_id}:{candidate.state}",
+                            *(f"provider:{item}" for item in candidate.provider_ids),
+                            *(f"reason:{item}" for item in candidate.reasons),
+                            f"calibration_signature:{analysis.calibration_signature}",
+                            f"coverage_status:{analysis.coverage_status}",
+                            "architecture:"
+                            + (
+                                architecture.status if architecture is not None else "not_evaluated"
+                            ),
+                        ),
+                        limitations=(
+                            "characterization_package_is_advice_not_change_authorization",
+                            "candidate_requires_explicit_human_confirmation",
+                            "dynamic_usage_may_remain_unobserved",
+                            "coverage_can_explain_usage_but_never_strengthens_missing_evidence",
+                            "package_has_zero_delete_or_mutation_authority",
+                            *(
+                                ()
+                                if architecture is not None and architecture.status == "ready"
+                                else ("architecture_gates_require_comparable_ready_evidence",)
+                            ),
+                        ),
+                        confidence="unused_high_consensus_advisory",
+                        package_kind="unused_characterization",
+                        unused_candidates=(candidate,),
+                        requires_human_confirmation=True,
+                        mutation_authority=False,
                     ),
-                    confidence="unused_high_consensus_advisory",
-                    package_kind="unused_characterization",
-                    unused_candidates=(candidate,),
-                    requires_human_confirmation=True,
-                    mutation_authority=False,
+                    engineering_analytics,
                 ),
                 supply_chain,
             )
@@ -682,6 +753,7 @@ def build_code_review_work_packages(
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
+    engineering_analytics: CodeEngineeringAnalytics | None = None,
     unused_analysis: CodeUnusedAnalysis | None = None,
     supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[CodeReviewWorkPackage, ...]:
@@ -819,7 +891,10 @@ def build_code_review_work_packages(
     )
     return (
         _annotate_supply_chain(
-            _annotate_unused_candidates(package, unused_analysis),
+            _annotate_engineering(
+                _annotate_unused_candidates(package, unused_analysis),
+                engineering_analytics,
+            ),
             supply_chain,
         ),
     )
@@ -833,6 +908,7 @@ def plan_code_review_work_packages(
     architecture: CodeArchitectureAnalysis | None = None,
     architecture_root: str | None = None,
     test_coverage: CodeCoverageAnalysis | None = None,
+    engineering_analytics: CodeEngineeringAnalytics | None = None,
     unused_analysis: CodeUnusedAnalysis | None = None,
     supply_chain: CodeSupplyChainAnalysis | None = None,
 ) -> tuple[
@@ -849,6 +925,7 @@ def plan_code_review_work_packages(
         architecture=architecture,
         architecture_root=architecture_root,
         test_coverage=test_coverage,
+        engineering_analytics=engineering_analytics,
         unused_analysis=unused_analysis,
         supply_chain=supply_chain,
     )
@@ -859,6 +936,7 @@ def plan_code_review_work_packages(
         unused_analysis,
         architecture=architecture,
         test_coverage=test_coverage,
+        engineering_analytics=engineering_analytics,
         excluded_candidate_ids=annotated_candidate_ids,
         supply_chain=supply_chain,
     )

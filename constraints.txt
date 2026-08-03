@@ -2,6 +2,7 @@
 # Transitive packages remain resolver-managed by their owning direct dependency.
 build==1.5.0
 complexipy==6.2.0
+cosmic-ray==8.4.6
 coverage==7.14.1
 deptry==0.25.1
 fastembed==0.8.0

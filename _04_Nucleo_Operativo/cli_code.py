@@ -14,8 +14,10 @@ from typing import TYPE_CHECKING, TextIO
 if TYPE_CHECKING:
     from .code_architecture_analysis import CodeArchitectureAnalysis
     from .code_coverage_analysis import CodeCoverageAnalysis
+    from .code_engineering_analytics import CodeEngineeringAnalytics
     from .code_publication_diff import (
         CodeArchitectureDelta,
+        CodeEngineeringAnalyticsDelta,
         CodeModuleArchitectureDelta,
         CodeSupplyChainDelta,
         CodeUnusedAnalysisDelta,
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
 _CODE_CLI_ARCHITECTURE_EXAMPLE_LIMIT = 20
 _CODE_CLI_COVERAGE_EXAMPLE_LIMIT = 20
 _CODE_CLI_UNUSED_EXAMPLE_LIMIT = 20
+_CODE_CLI_ENGINEERING_MODULE_LIMIT = 20
 _CODE_ARCHITECTURE_PROVIDER_IDS = (
     "complexipy-cognitive",
     "grimp-architecture",
@@ -91,6 +94,7 @@ class _CodeStatusSnapshot:
     test_coverage: dict[str, object]
     unused_analysis: dict[str, object] = field(default_factory=dict)
     supply_chain: dict[str, object] = field(default_factory=dict)
+    engineering_analytics: dict[str, object] = field(default_factory=dict)
 
 
 def _architecture_abstained_payload(
@@ -100,7 +104,7 @@ def _architecture_abstained_payload(
     analysis_run_id: int | None = None,
 ) -> dict[str, object]:
     return {
-        "schema": "neocortex.code-architecture-analysis/v1",
+        "schema": "neocortex.code-architecture-analysis/v2",
         "status": "abstained",
         "reason": reason,
         "gate": "abstained",
@@ -145,7 +149,7 @@ def _architecture_status_payload(
 ) -> dict[str, object]:
     failed_contracts = sum(item.status == "failed" for item in analysis.contracts)
     return {
-        "schema": "neocortex.code-architecture-analysis/v1",
+        "schema": "neocortex.code-architecture-analysis/v2",
         "status": analysis.status,
         "reason": analysis.reason,
         "gate": analysis.gate,
@@ -252,6 +256,72 @@ def _coverage_abstained_payload(
             for gate in ("tests_passed", "coverage_available")
         ],
         "limitations": ["trusted_deep_evidence_not_ready"],
+    }
+
+
+def _engineering_abstained_payload(
+    database: str,
+    reason: str,
+    *,
+    analysis_run_id: int | None = None,
+) -> dict[str, object]:
+    return {
+        "kind": "code-engineering-analytics",
+        "schema": "neocortex.code-engineering-analytics/v1",
+        "database": database,
+        "analysis_run_id": analysis_run_id,
+        "status": "abstained",
+        "reason": reason,
+        "providers": [],
+        "modules": [],
+        "counts": {"modules": 0, "module_examples": 0},
+        "modules_truncated": False,
+        "gates": [
+            {"gate": gate, "status": "not_evaluated", "reason": reason}
+            for gate in (
+                "mutation_test_baseline",
+                "mutation_measurement_complete",
+                "mutation_score_recorded",
+            )
+        ],
+        "mutation_scope_signature": None,
+        "mutation_score": None,
+        "limitations": [
+            "engineering_dimensions_are_not_aggregated",
+            "no_dimension_is_a_defect_probability",
+        ],
+        "digest": None,
+        "authority": "advisory",
+        "mutation_authority": False,
+        "aggregate_score": None,
+        "defect_probability": None,
+    }
+
+
+def _engineering_status_payload(
+    analysis: CodeEngineeringAnalytics,
+) -> dict[str, object]:
+    modules = analysis.modules[:_CODE_CLI_ENGINEERING_MODULE_LIMIT]
+    return {
+        "kind": "code-engineering-analytics",
+        "schema": "neocortex.code-engineering-analytics/v1",
+        "database": analysis.database,
+        "analysis_run_id": analysis.analysis_run_id,
+        "status": analysis.status,
+        "reason": analysis.reason,
+        "providers": [asdict(item) for item in analysis.providers],
+        "modules": [asdict(item) for item in modules],
+        "counts": {"modules": len(analysis.modules), "module_examples": len(modules)},
+        "modules_truncated": len(analysis.modules) > len(modules),
+        "gates": [asdict(item) for item in analysis.gates],
+        "mutation_scope_signature": analysis.mutation_scope_signature,
+        "mutation_score": analysis.mutation_score,
+        "limitations": list(analysis.limitations),
+        "digest": analysis.digest,
+        "authority": analysis.authority,
+        "mutation_authority": analysis.mutation_authority,
+        "aggregate_score": None,
+        "defect_probability": None,
     }
 
 
@@ -418,6 +488,7 @@ def _latest_code_run(connection: sqlite3.Connection) -> sqlite3.Row | None:
 def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
     from .code_architecture_analysis import read_code_architecture_analysis
     from .code_coverage_analysis import read_code_coverage_analysis
+    from .code_engineering_analytics import read_code_engineering_analysis
     from .code_external_evidence import read_external_evidence
     from .code_review_models import bounded_code_unused_payload
     from .code_unused_analysis import read_code_unused_analysis
@@ -451,6 +522,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
             -1 if latest is None else int(latest["analysis_run_id"]),
             enforce_current_runtime=True,
         ).as_payload()
+        architecture_analysis: CodeArchitectureAnalysis | None = None
         if latest is None:
             architecture = _architecture_abstained_payload(
                 str(path),
@@ -463,13 +535,13 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 analysis_run_id=int(latest["analysis_run_id"]),
             )
         else:
-            architecture = _architecture_status_payload(
-                read_code_architecture_analysis(
-                    connection,
-                    int(latest["analysis_run_id"]),
-                    database=str(path),
-                )
+            architecture_analysis = read_code_architecture_analysis(
+                connection,
+                int(latest["analysis_run_id"]),
+                database=str(path),
             )
+            architecture = _architecture_status_payload(architecture_analysis)
+        coverage_analysis: CodeCoverageAnalysis | None = None
         if latest is None:
             test_coverage = _coverage_abstained_payload(
                 str(path),
@@ -482,13 +554,12 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 analysis_run_id=int(latest["analysis_run_id"]),
             )
         else:
-            test_coverage = _coverage_status_payload(
-                read_code_coverage_analysis(
-                    connection,
-                    int(latest["analysis_run_id"]),
-                    database=str(path),
-                )
+            coverage_analysis = read_code_coverage_analysis(
+                connection,
+                int(latest["analysis_run_id"]),
+                database=str(path),
             )
+            test_coverage = _coverage_status_payload(coverage_analysis)
         unused_analysis = bounded_code_unused_payload(
             read_code_unused_analysis(
                 connection,
@@ -510,6 +581,24 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 int(latest["analysis_run_id"]),
                 database=str(path),
             ).as_payload()
+        if latest is None:
+            engineering_analytics = _engineering_abstained_payload(str(path), "code_run_missing")
+        elif latest["status"] != "completed":
+            engineering_analytics = _engineering_abstained_payload(
+                str(path),
+                f"code_run_not_completed:{latest['status']}",
+                analysis_run_id=int(latest["analysis_run_id"]),
+            )
+        else:
+            engineering_analytics = _engineering_status_payload(
+                read_code_engineering_analysis(
+                    connection,
+                    int(latest["analysis_run_id"]),
+                    database=str(path),
+                    architecture=architecture_analysis,
+                    coverage=coverage_analysis,
+                )
+            )
     return _CodeStatusSnapshot(
         version,
         counts,
@@ -520,6 +609,7 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
         test_coverage,
         unused_analysis,
         supply_chain,
+        engineering_analytics,
     )
 
 
@@ -584,6 +674,7 @@ def _emit_missing_code_status(
         "test_coverage": _coverage_abstained_payload(str(path), "code_state_missing"),
         "unused_analysis": _unused_abstained_payload(str(path), "code_state_missing"),
         "supply_chain": _supply_chain_abstained_payload(str(path), "code_state_missing"),
+        "engineering_analytics": _engineering_abstained_payload(str(path), "code_state_missing"),
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -602,6 +693,7 @@ def _emit_missing_code_status(
         "CODE_SUPPLY_CHAIN",
         _supply_chain_abstained_payload(str(path), "code_state_missing"),
     )
+    _emit_code_engineering(_engineering_abstained_payload(str(path), "code_state_missing"))
 
 
 def _emit_code_supply_chain(prefix: str, payload: dict[str, object]) -> None:
@@ -639,6 +731,29 @@ def _emit_code_supply_chain(prefix: str, payload: dict[str, object]) -> None:
                 f"provider={gate.get('provider_id')} evidence={gate.get('evidence_count', 0)} "
                 f"reason={json.dumps(gate.get('reason'), ensure_ascii=True)}"
             )
+
+
+def _emit_code_engineering(payload: dict[str, object]) -> None:
+    counts = payload.get("counts")
+    bounded_counts = counts if isinstance(counts, dict) else {}
+    providers = payload.get("providers")
+    provider_states = (
+        {
+            str(item.get("provider_id")): item.get("status")
+            for item in providers
+            if isinstance(item, dict)
+        }
+        if isinstance(providers, list)
+        else {}
+    )
+    _print_console_line(
+        f"CODE_ENGINEERING status={payload.get('status')} "
+        f"modules={bounded_counts.get('modules', 0)} "
+        f"history={provider_states.get('git-history-local', 'not_recorded')} "
+        f"mutation={provider_states.get('cosmic-ray-focal-mutation', 'not_recorded')} "
+        f"mutation_score={payload.get('mutation_score')} "
+        f"reason={json.dumps(payload.get('reason'), ensure_ascii=True)}"
+    )
 
 
 def _emit_code_status_architecture(architecture: dict[str, object]) -> None:
@@ -847,6 +962,7 @@ def _emit_code_status(
         "test_coverage": snapshot.test_coverage,
         "unused_analysis": snapshot.unused_analysis,
         "supply_chain": snapshot.supply_chain,
+        "engineering_analytics": snapshot.engineering_analytics,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -890,6 +1006,7 @@ def _emit_code_status(
     _emit_code_coverage("CODE_COVERAGE", snapshot.test_coverage)
     _emit_code_unused("CODE_UNUSED", snapshot.unused_analysis)
     _emit_code_supply_chain("CODE_SUPPLY_CHAIN", snapshot.supply_chain)
+    _emit_code_engineering(snapshot.engineering_analytics)
 
 
 def _emit_code_review_architecture(analysis: CodeArchitectureAnalysis) -> None:
@@ -935,6 +1052,12 @@ def _module_architecture_changed(module: CodeModuleArchitectureDelta) -> bool:
         module.cognitive_complexity_delta
         or module.fan_in_delta
         or module.fan_out_delta
+        or getattr(module, "dependency_reach_delta", None)
+        or getattr(module, "blast_radius_delta", None)
+        or getattr(module, "directed_degree_centrality_delta", None)
+        or getattr(module, "cross_owner_fan_in_delta", None)
+        or getattr(module, "cross_owner_fan_out_delta", None)
+        or getattr(module, "graph_metrics_status", "comparable") == "not_comparable"
         or module.baseline_cycle_ids != module.current_cycle_ids
         or module.baseline_contract_ids != module.current_contract_ids
     )
@@ -980,6 +1103,12 @@ def _emit_code_publication_architecture(architecture: CodeArchitectureDelta) -> 
             f"module={json.dumps(module.module_id, ensure_ascii=True)} "
             f"cognitive_delta={module.cognitive_complexity_delta} "
             f"fan_in_delta={module.fan_in_delta:+d} fan_out_delta={module.fan_out_delta:+d} "
+            f"dependency_reach_delta={getattr(module, 'dependency_reach_delta', None)} "
+            f"blast_radius_delta={getattr(module, 'blast_radius_delta', None)} "
+            f"centrality_delta={getattr(module, 'directed_degree_centrality_delta', None)} "
+            f"cross_owner_fan_in_delta={getattr(module, 'cross_owner_fan_in_delta', None)} "
+            f"cross_owner_fan_out_delta={getattr(module, 'cross_owner_fan_out_delta', None)} "
+            f"graph_status={getattr(module, 'graph_metrics_status', 'not_comparable')} "
             f"baseline_cycles={json.dumps(module.baseline_cycle_ids, ensure_ascii=True)} "
             f"current_cycles={json.dumps(module.current_cycle_ids, ensure_ascii=True)} "
             f"baseline_contracts={json.dumps(module.baseline_contract_ids, ensure_ascii=True)} "
@@ -1376,6 +1505,23 @@ def _emit_code_publication_supply_chain(analysis: CodeSupplyChainDelta) -> None:
         )
 
 
+def _emit_code_publication_engineering(
+    analysis: CodeEngineeringAnalyticsDelta,
+) -> None:
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_ENGINEERING status={analysis.status} "
+        f"baseline_mutation_score={analysis.baseline_mutation_score} "
+        f"current_mutation_score={analysis.current_mutation_score} "
+        f"mutation_score_delta={analysis.mutation_score_delta} "
+        f"reason={json.dumps(analysis.reason, ensure_ascii=True)}"
+    )
+    for gate in analysis.gates:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_ENGINEERING_GATE id={gate.gate} "
+            f"status={gate.status} reason={json.dumps(gate.reason, ensure_ascii=True)}"
+        )
+
+
 def run_code_publication_diff(args: argparse.Namespace) -> int:
     """Compare two completed Code publications without mutating either state."""
 
@@ -1489,6 +1635,14 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         )
     else:
         _emit_code_publication_supply_chain(supply_chain_delta)
+    engineering_delta = getattr(result, "engineering_analytics", None)
+    if engineering_delta is None:
+        _print_console_line(
+            "CODE_PUBLICATION_DIFF_ENGINEERING status=not_comparable "
+            'reason="engineering_analytics_delta_missing"'
+        )
+    else:
+        _emit_code_publication_engineering(engineering_delta)
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0

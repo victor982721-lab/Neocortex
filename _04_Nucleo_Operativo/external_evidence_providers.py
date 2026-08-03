@@ -42,6 +42,8 @@ from .code_external_evidence import (
     validate_external_inputs,
 )
 from .code_contracts import (
+    DEEP_CONFIGURATION_SCHEMA,
+    LEGACY_DEEP_CONFIGURATION_SCHEMA,
     deep_configuration_payload as build_deep_configuration_payload,
     deep_configuration_signature as calculate_deep_configuration_signature,
 )
@@ -79,6 +81,26 @@ from .external_evidence_models import (
     external_provider_result_digest,
     external_root_identity,
     external_signature,
+)
+from .external_git_history import (
+    GIT_HISTORY_PROVIDER_ID,
+    GIT_HISTORY_PROVIDER_SCHEMA,
+    GitHistoryConfig,
+    GitHistoryExecution,
+    GitRepositorySnapshot,
+    execute_git_history,
+    git_history_input_signature,
+    inspect_git_repository,
+)
+from .external_mutation_cosmic_ray import (
+    COSMIC_RAY_MUTATION_PROVIDER_ID,
+    COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+    FocalMutationConfig,
+    FocalMutationExecution,
+    MutationAbstentionError,
+    cosmic_ray_tool_version,
+    execute_cosmic_ray_mutation,
+    mutation_input_signature,
 )
 from .external_architecture_providers import (
     ArchitectureProviderExecution,
@@ -136,6 +158,9 @@ _SEMGREP_MEMORY_BYTES = 1024 * 1024 * 1024
 _DEPTRY_MEMORY_BYTES = 1024 * 1024 * 1024
 _PIP_AUDIT_MEMORY_BYTES = 512 * 1024 * 1024
 _PACKAGE_INVENTORY_MEMORY_BYTES = 512 * 1024 * 1024
+_GIT_HISTORY_MEMORY_BYTES = 512 * 1024 * 1024
+_FOCAL_MUTATION_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
+_FOCAL_MUTATION_OUTPUT_BYTES = 8 * 1024 * 1024 + 256 * 1024
 _DEEP_COVERAGE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 _DEEP_COVERAGE_OUTPUT_BYTES = 32 * 1024 * 1024
 _DEEP_COVERAGE_FINDING_BOUND = 2_000
@@ -176,6 +201,38 @@ def _deep_tool_version() -> str | None:
     return value if len(value.encode("utf-8")) <= 256 else None
 
 
+def _git_tool_probe() -> tuple[Path | None, str | None]:
+    """Resolve and identify Git without reading repository state."""
+
+    executable = shutil.which("git")
+    if executable is None:
+        return None, None
+    try:
+        completed = run_bounded_capture(
+            (executable, "--version"),
+            timeout_seconds=10.0,
+            stdout_limit_bytes=4_096,
+            stderr_limit_bytes=4_096,
+            environment=_controlled_environment(),
+            memory_limit_bytes=_GIT_HISTORY_MEMORY_BYTES if os.name == "nt" else None,
+        )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired, SubprocessOutputLimitError):
+        return Path(executable), None
+    if completed.returncode != 0 or completed.stderr:
+        return Path(executable), None
+    try:
+        output = completed.stdout.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return Path(executable), None
+    prefix = "git version "
+    version = output.removeprefix(prefix) if output.startswith(prefix) else ""
+    if not version or any(character.isspace() for character in version):
+        return Path(executable), None
+    if len(version.encode("utf-8")) > 256:
+        return Path(executable), None
+    return Path(executable), version
+
+
 def _validated_deep_configuration(
     payload: Mapping[str, object] | None,
     signature: str | None,
@@ -198,13 +255,63 @@ def _validated_deep_configuration(
     ):
         raise ValueError("trusted-deep configuration types are invalid")
     selectors = tuple(item for item in selectors_value if isinstance(item, str))
-    normalized = build_deep_configuration_payload(
-        analysis_profile=str(payload.get("analysis_profile")),
-        test_selectors=selectors,
-        max_tests=max_tests,
-        time_budget_seconds=time_budget_seconds,
-        shard_size=shard_size,
-    )
+    schema = payload.get("schema")
+    if schema == DEEP_CONFIGURATION_SCHEMA:
+        mutation_target = payload.get("mutation_target")
+        mutation_symbol = payload.get("mutation_symbol")
+        mutation_max_mutants = payload.get("mutation_max_mutants")
+        mutation_timeout_seconds = payload.get("mutation_timeout_seconds")
+        mutation_time_budget_seconds = payload.get("mutation_time_budget_seconds")
+        if (
+            (mutation_target is not None and not isinstance(mutation_target, str))
+            or (mutation_symbol is not None and not isinstance(mutation_symbol, str))
+            or isinstance(mutation_max_mutants, bool)
+            or not isinstance(mutation_max_mutants, int)
+            or isinstance(mutation_timeout_seconds, bool)
+            or not isinstance(mutation_timeout_seconds, int)
+            or isinstance(mutation_time_budget_seconds, bool)
+            or not isinstance(mutation_time_budget_seconds, int)
+        ):
+            raise ValueError("trusted-deep mutation configuration types are invalid")
+        current = build_deep_configuration_payload(
+            analysis_profile=str(payload.get("analysis_profile")),
+            test_selectors=selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+            mutation_target=mutation_target,
+            mutation_symbol=mutation_symbol,
+            mutation_max_mutants=mutation_max_mutants,
+            mutation_timeout_seconds=mutation_timeout_seconds,
+            mutation_time_budget_seconds=mutation_time_budget_seconds,
+        )
+    elif schema != LEGACY_DEEP_CONFIGURATION_SCHEMA:
+        raise ValueError("trusted-deep configuration schema is unsupported")
+    else:
+        current = build_deep_configuration_payload(
+            analysis_profile=str(payload.get("analysis_profile")),
+            test_selectors=selectors,
+            max_tests=max_tests,
+            time_budget_seconds=time_budget_seconds,
+            shard_size=shard_size,
+        )
+    normalized = current
+    if schema == LEGACY_DEEP_CONFIGURATION_SCHEMA:
+        normalized = {
+            name: value
+            for name, value in current.items()
+            if name
+            in {
+                "analysis_profile",
+                "content_executed",
+                "suite_selection",
+                "test_selectors",
+                "max_tests",
+                "time_budget_seconds",
+                "shard_size",
+            }
+        }
+        normalized["schema"] = LEGACY_DEEP_CONFIGURATION_SCHEMA
     if normalized != dict(payload) or normalized["analysis_profile"] != "trusted-deep":
         raise ValueError("trusted-deep configuration is not canonical")
     observed_signature = calculate_deep_configuration_signature(normalized)
@@ -621,6 +728,88 @@ def _failure(
         False,
         None,
         _portable_publication_id(descriptor, input_signature=input_signature, result_digest=None),
+        limitations=(reason,),
+    )
+
+
+def _abstention(
+    descriptor: ProviderDescriptor,
+    root: Path,
+    files: Sequence[ExternalEvidenceFile],
+    *,
+    tool_version: str,
+    reason: str,
+    started_ns: int,
+    input_signature_override: str | None = None,
+    process_invocations: int = 0,
+    stdout_bytes: int = 0,
+    stderr_bytes: int = 0,
+) -> ExternalProviderPublication:
+    """Publish one terminal advisory abstention without pretending coverage."""
+
+    validate_external_inputs(files)
+    input_signature = (
+        external_input_signature(files)
+        if input_signature_override is None
+        else input_signature_override
+    )
+    result_digest = external_provider_result_digest((), (), ())
+    completed_ns = time.time_ns()
+    inner = ExternalEvidencePublication(
+        descriptor.tool_name,
+        tool_version,
+        descriptor.configuration_signature,
+        "skipped",
+        started_ns,
+        completed_ns,
+        _provenance(
+            descriptor,
+            root,
+            input_signature,
+            execution="skipped",
+            result_digest=result_digest,
+            findings=0,
+            reason=reason,
+        ),
+    )
+    counters = {
+        "eligible_files": len(files),
+        "covered_files": 0,
+        "files_verified": 0,
+        "bytes_verified": 0,
+        "bytes_read": 0,
+        "bytes_staged": 0,
+        "process_invocations": process_invocations,
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "wall_milliseconds": max(0, (completed_ns - started_ns) // 1_000_000),
+        "findings": 0,
+        "metrics": 0,
+        "relations": 0,
+        "comparable": 0,
+        "cache_hits": 0,
+        "cache_misses": 1,
+        "errors": 0,
+        "timeouts": 0,
+        "skipped": 1,
+        "unavailable": 0,
+    }
+    return ExternalProviderPublication(
+        descriptor,
+        inner,
+        str(root),
+        external_root_identity(root),
+        input_signature,
+        _input_records(files, covered=False, reason=reason),
+        (),
+        counters,
+        False,
+        result_digest,
+        _portable_publication_id(
+            descriptor,
+            input_signature=input_signature,
+            result_digest=result_digest,
+        ),
         limitations=(reason,),
     )
 
@@ -1482,6 +1671,7 @@ def provider_tool_versions() -> dict[str, str | None]:
 
     _node, _index, pyright_version = _pyright_locations()
     ruff_version = _package_version("ruff")
+    _git_executable, git_version = _git_tool_probe()
     return {
         RUFF_PROTECTED_PROVIDER_ID: ruff_version,
         RUFF_TRUSTED_PROVIDER_ID: ruff_version,
@@ -1495,7 +1685,9 @@ def provider_tool_versions() -> dict[str, str | None]:
         DEPTRY_PROVIDER_ID: _package_version("deptry"),
         PIP_AUDIT_PROVIDER_ID: _package_version("pip-audit"),
         INSTALLED_PACKAGE_PROVIDER_ID: _package_version("neocortex-framework"),
+        GIT_HISTORY_PROVIDER_ID: git_version,
         PYTEST_COVERAGE_PROVIDER_ID: _deep_tool_version(),
+        COSMIC_RAY_MUTATION_PROVIDER_ID: cosmic_ray_tool_version(),
     }
 
 
@@ -2612,6 +2804,261 @@ def _architecture_files(
     return tuple(sorted(selected, key=lambda item: item.relative_path.casefold()))
 
 
+class GitHistoryLocalProvider:
+    """Publish bounded observations from the exact local Git object database."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        config: GitHistoryConfig | None = None,
+        inspector: Callable[..., GitRepositorySnapshot] = inspect_git_repository,
+        executor: Callable[..., GitHistoryExecution] = execute_git_history,
+    ) -> None:
+        self.root = root
+        self.config = GitHistoryConfig() if config is None else config
+        self.inspector = inspector
+        self.executor = executor
+        self._root_identity = external_root_identity(root)
+        self._git_executable, self._version = _git_tool_probe()
+        self._prepared: tuple[str, GitRepositorySnapshot, int] | None = None
+        version = self._version or "unavailable"
+        executable_value = (
+            None
+            if self._git_executable is None
+            else os.path.normcase(os.path.abspath(self._git_executable))
+        )
+        limits = ProviderLimits(
+            self.config.timeout_seconds,
+            _GIT_HISTORY_MEMORY_BYTES,
+            RUFF_MAX_TOTAL_BYTES,
+            self.config.stdout_limit_bytes + self.config.stderr_limit_bytes,
+            self.config.max_relations,
+        )
+        self.descriptor = _provider_descriptor(
+            provider_id=GIT_HISTORY_PROVIDER_ID,
+            provider_schema=GIT_HISTORY_PROVIDER_SCHEMA,
+            tool_name="git",
+            tool_version=version,
+            profile="trusted-static",
+            source="external:git-history-local",
+            configuration_payload={
+                "adapter": GIT_HISTORY_PROVIDER_SCHEMA,
+                "history": self.config.as_payload(),
+                "repository_source": "local-object-database",
+                "staging": False,
+            },
+            project_configuration_digest=None,
+            environment_signature=_environment_signature(
+                tool_name="git",
+                tool_version=version,
+                path_value=executable_value,
+            ),
+            root_identity=self._root_identity,
+            execution_strategy="bounded-local-git-history-v1",
+            invalidation_strategy="project_wide",
+            memory=_GIT_HISTORY_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="current-code-inventory-and-local-history-v1",
+            limits=limits,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def _inspect(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> tuple[str, GitRepositorySnapshot, int]:
+        started_ns = time.time_ns()
+        if self._git_executable is None:
+            raise ValueError("git executable is unavailable")
+        snapshot = self.inspector(
+            self.root,
+            _controlled_environment(),
+            config=self.config,
+            git_executable=str(self._git_executable),
+        )
+        signature = git_history_input_signature(files, snapshot, config=self.config)
+        return signature, snapshot, started_ns
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        prepared = self._inspect(files)
+        self._prepared = prepared
+        return prepared[0]
+
+    def _prepared_snapshot(
+        self,
+        files: Sequence[ExternalEvidenceFile],
+    ) -> tuple[str, GitRepositorySnapshot, int]:
+        prepared, self._prepared = self._prepared, None
+        if prepared is not None:
+            signature, snapshot, started_ns = prepared
+            if signature == git_history_input_signature(files, snapshot, config=self.config):
+                return signature, snapshot, started_ns
+        return self._inspect(files)
+
+    @staticmethod
+    def _attach_observation(
+        publication: ExternalProviderPublication,
+        *,
+        snapshot: GitRepositorySnapshot,
+        started_ns: int,
+        execution: GitHistoryExecution | None,
+    ) -> ExternalProviderPublication:
+        counters = dict(publication.counters)
+        if execution is None:
+            counters.update(
+                {
+                    "process_invocations": snapshot.process_invocations,
+                    "stdout_bytes": snapshot.stdout_bytes,
+                    "stderr_bytes": snapshot.stderr_bytes,
+                }
+            )
+            details: Mapping[str, object] = {
+                "provider_schema": GIT_HISTORY_PROVIDER_SCHEMA,
+                "source": "local_git_object_database",
+                "requested_ref": snapshot.requested_ref,
+                "head_commit": snapshot.head_commit,
+                "repository_shallow": snapshot.repository_shallow,
+                "execution": "head_verified_exact_replay",
+                "uses_network": False,
+                "executes_content": False,
+            }
+        else:
+            counters.update({name: int(value) for name, value in execution.counters.items()})
+            details = execution.provenance
+        completed_ns = time.time_ns()
+        counters["wall_milliseconds"] = max(0, (completed_ns - started_ns) // 1_000_000)
+        provenance = dict(publication.publication.provenance)
+        provenance["git_history_execution"] = dict(details)
+        inner = replace(
+            publication.publication,
+            started_ns=started_ns,
+            completed_ns=completed_ns,
+            provenance=provenance,
+        )
+        return replace(
+            publication,
+            publication=inner,
+            counters=counters,
+            coverage_complete=not snapshot.repository_shallow,
+        )
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        del scratch_root
+        started_ns = time.time_ns()
+        if external_root_identity(root) != self._root_identity:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason="git_history_root_changed_after_provider_construction",
+                started_ns=started_ns,
+            )
+        if self._version is None or self._git_executable is None:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version="unavailable",
+                status="unavailable",
+                reason="git_unavailable",
+                started_ns=started_ns,
+            )
+        try:
+            signature, snapshot, started_ns = self._prepared_snapshot(files)
+            replay_limitations = [
+                "merge_commits_excluded_from_churn_window",
+                "exact_replay_reuses_published_history_result",
+            ]
+            if snapshot.repository_shallow:
+                replay_limitations.append("shallow_repository_history_incomplete")
+            if baseline is not None and baseline.input_signature == signature:
+                replay = _exact_replay(
+                    self.descriptor,
+                    root,
+                    files,
+                    baseline,
+                    limitations=replay_limitations,
+                    input_signature_override=signature,
+                )
+                return self._attach_observation(
+                    replay,
+                    snapshot=snapshot,
+                    started_ns=started_ns,
+                    execution=None,
+                )
+            execution = self.executor(
+                root,
+                files,
+                _controlled_environment(),
+                config=self.config,
+                snapshot=snapshot,
+                git_executable=str(self._git_executable),
+            )
+            if execution.history_input_signature != signature:
+                raise ValueError("Git history execution input signature disagrees")
+            if execution.configuration_signature != self.config.signature:
+                raise ValueError("Git history execution configuration signature disagrees")
+            if execution.head_commit != snapshot.head_commit:
+                raise ValueError("Git history execution HEAD disagrees with inspection")
+            if execution.process_invocations != snapshot.process_invocations + 2:
+                raise ValueError("Git history execution process accounting disagrees")
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            files,
+            execution.findings,
+            baseline,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=0,
+            limitations=execution.limitations,
+            input_signature_override=signature,
+        )
+        return self._attach_observation(
+            publication,
+            snapshot=snapshot,
+            started_ns=started_ns,
+            execution=execution,
+        )
+
+
 class _TrustedArchitectureProvider:
     provider_id: str
     provider_schema: str
@@ -2774,6 +3221,375 @@ class ComplexipyCognitiveProvider(_TrustedArchitectureProvider):
     memory_bound = _COMPLEXIPY_MEMORY_BYTES
     execution_strategy = "isolated-python-worker-complexipy-v1"
     executor = staticmethod(execute_complexipy_cognitive)
+
+
+_FOCAL_MUTATION_REPLAY_LIMITATIONS = (
+    "focal_declared_target_and_tests_only",
+    "exact_replay_reuses_published_mutation_result",
+    "advisory_only_no_mutation_authority",
+    "mutation_score_is_not_defect_probability",
+)
+
+
+class CosmicRayFocalMutationProvider:
+    """Execute one explicitly declared focal mutation scope in owned scratch."""
+
+    def __init__(
+        self,
+        root: Path,
+        deep_configuration: Mapping[str, object] | None,
+        deep_configuration_signature: str | None,
+        *,
+        executor: Callable[..., FocalMutationExecution] = execute_cosmic_ray_mutation,
+    ) -> None:
+        payload, _coverage_config = _validated_deep_configuration(
+            deep_configuration,
+            deep_configuration_signature,
+        )
+        assert deep_configuration_signature is not None
+        self.root = root
+        self._root_identity = external_root_identity(root)
+        self.deep_configuration = payload
+        self.deep_configuration_signature = deep_configuration_signature
+        self.executor = executor
+        self._version = cosmic_ray_tool_version()
+        version = self._version or "unavailable"
+        target = payload.get("mutation_target")
+        self._abstention_reason: str | None = None
+        self.config: FocalMutationConfig | None = None
+        if payload.get("schema") == LEGACY_DEEP_CONFIGURATION_SCHEMA:
+            self._abstention_reason = "mutation_not_declared_in_legacy_deep_configuration"
+        elif target is None:
+            self._abstention_reason = "mutation_target_not_declared"
+        else:
+            selectors_value = payload.get("test_selectors")
+            symbol = payload.get("mutation_symbol")
+            max_mutants = payload.get("mutation_max_mutants")
+            timeout_seconds = payload.get("mutation_timeout_seconds")
+            budget_seconds = payload.get("mutation_time_budget_seconds")
+            if (
+                not isinstance(target, str)
+                or not isinstance(selectors_value, list)
+                or any(not isinstance(item, str) for item in selectors_value)
+                or (symbol is not None and not isinstance(symbol, str))
+                or isinstance(max_mutants, bool)
+                or not isinstance(max_mutants, int)
+                or isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, int)
+                or isinstance(budget_seconds, bool)
+                or not isinstance(budget_seconds, int)
+            ):
+                raise ValueError("trusted-deep mutation configuration is invalid")
+            self.config = FocalMutationConfig(
+                target,
+                symbol,
+                tuple(item for item in selectors_value if isinstance(item, str)),
+                max_mutants,
+                float(timeout_seconds),
+                float(budget_seconds),
+                deep_configuration_signature,
+            )
+        configured_budget = 10.0 if self.config is None else self.config.time_budget_seconds
+        configured_mutants = 1 if self.config is None else self.config.max_mutants
+        pytest_version = _package_version("pytest") or "unavailable"
+        self._home_directory = trusted_deep_home_directory()
+        environment_signature = external_signature(
+            "cosmic-ray-focal-environment-v1",
+            {
+                "python_executable": os.path.normcase(os.path.abspath(sys.executable)),
+                "python_version": platform.python_version(),
+                "implementation": platform.python_implementation(),
+                "platform": platform.platform(),
+                "cosmic_ray_version": version,
+                "pytest_version": pytest_version,
+                "home_directory": self._home_directory,
+                "path": os.environ.get("PATH"),
+                "pathext": os.environ.get("PATHEXT"),
+            },
+        )
+        self.descriptor = _provider_descriptor(
+            provider_id=COSMIC_RAY_MUTATION_PROVIDER_ID,
+            provider_schema=COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+            tool_name="cosmic-ray",
+            tool_version=version,
+            profile="trusted-deep",
+            source="external:cosmic-ray-focal-mutation",
+            configuration_payload={
+                "adapter": COSMIC_RAY_MUTATION_PROVIDER_SCHEMA,
+                "deep_configuration": payload,
+                "deep_configuration_signature": deep_configuration_signature,
+                "staging": "exact-owned-scratch-copy",
+                "autofix": False,
+                "network": True,
+            },
+            project_configuration_digest=None,
+            environment_signature=environment_signature,
+            root_identity=self._root_identity,
+            execution_strategy="canonical-root-focal-cosmic-ray-v1",
+            invalidation_strategy="dynamic_suite",
+            memory=_FOCAL_MUTATION_MEMORY_BYTES,
+            loads_project_configuration=False,
+            scope="canonical-neocortex-focal-mutation-v1",
+            limits=ProviderLimits(
+                configured_budget + 15.0,
+                _FOCAL_MUTATION_MEMORY_BYTES,
+                RUFF_MAX_TOTAL_BYTES,
+                _FOCAL_MUTATION_OUTPUT_BYTES,
+                configured_mutants,
+            ),
+            imports_content=True,
+            executes_content=True,
+            uses_network=True,
+        )
+
+    def tool_version(self) -> str | None:
+        return self._version
+
+    def baseline_input_signature(self, files: Sequence[ExternalEvidenceFile]) -> str:
+        validate_external_inputs(files)
+        if self.config is not None:
+            return mutation_input_signature(files, self.config)
+        return external_signature(
+            "cosmic-ray-mutation-abstention-input-v1",
+            {
+                "inventory_signature": external_input_signature(files),
+                "deep_configuration_signature": self.deep_configuration_signature,
+                "reason": self._abstention_reason,
+            },
+        )
+
+    def _abstain(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        reason: str,
+        started_ns: int,
+        process_invocations: int = 0,
+    ) -> ExternalProviderPublication:
+        return _abstention(
+            self.descriptor,
+            root,
+            files,
+            tool_version=self._version or "unavailable",
+            reason=reason,
+            started_ns=started_ns,
+            input_signature_override=self.baseline_input_signature(files),
+            process_invocations=process_invocations,
+        )
+
+    def _attach_execution(
+        self,
+        publication: ExternalProviderPublication,
+        *,
+        configuration: Mapping[str, object],
+        execution: FocalMutationExecution | None,
+    ) -> ExternalProviderPublication:
+        counters = dict(publication.counters)
+        provenance = dict(publication.publication.provenance)
+        provenance["deep_configuration"] = {
+            "payload": dict(configuration),
+            "signature": self.deep_configuration_signature,
+        }
+        mutation_execution: dict[str, object] = {
+            "content_executed": publication.execution == "full",
+            "whole_publication_replay": publication.execution == "cache_replay",
+            "abstained": publication.execution == "skipped",
+            "mutation_authority": False,
+            "uses_network": True,
+        }
+        if execution is not None:
+            generic_wall = counters.get("wall_milliseconds", 0)
+            counters.update({name: int(value) for name, value in execution.counters.items()})
+            counters["wall_milliseconds"] = max(
+                generic_wall,
+                int(execution.counters.get("wall_milliseconds", 0)),
+            )
+            mutation_execution.update(
+                {
+                    "measurement_scope_signature": execution.measurement_scope_signature,
+                    "measurement_complete": execution.measurement_complete,
+                }
+            )
+        provenance["mutation_execution"] = mutation_execution
+        inner = replace(publication.publication, provenance=provenance)
+        return replace(publication, publication=inner, counters=counters)
+
+    def run(
+        self,
+        root: Path,
+        files: Sequence[ExternalEvidenceFile],
+        *,
+        baseline: ExternalProviderBaseline | None,
+        scratch_root: Path,
+    ) -> ExternalProviderPublication:
+        started_ns = time.time_ns()
+        if external_root_identity(root) != self._root_identity:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version or "unavailable",
+                status="failed",
+                reason="trusted_deep_mutation_root_changed_after_provider_construction",
+                started_ns=started_ns,
+            )
+        if self.config is None:
+            assert self._abstention_reason is not None
+            publication = self._abstain(
+                root,
+                files,
+                reason=self._abstention_reason,
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        input_signature = mutation_input_signature(files, self.config)
+        current_paths = {item.relative_path.casefold() for item in files}
+        if self.config.target_relative_path.casefold() not in current_paths:
+            publication = self._abstain(
+                root,
+                files,
+                reason="mutation_target_not_indexed",
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        if self._version is None:
+            publication = self._abstain(
+                root,
+                files,
+                reason="cosmic_ray_8_4_6_unavailable",
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        if baseline is not None and baseline.input_signature == input_signature:
+            replay = _exact_replay(
+                self.descriptor,
+                root,
+                files,
+                baseline,
+                limitations=_FOCAL_MUTATION_REPLAY_LIMITATIONS,
+                input_signature_override=input_signature,
+            )
+            return self._attach_execution(
+                replay,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        try:
+            staging_parent = _validated_staging_parent(root, scratch_root)
+            durable_identity = external_signature(
+                "focal-mutation-scratch-v1",
+                {
+                    "root_identity": self._root_identity,
+                    "configuration_signature": self.config.configuration_signature,
+                },
+            ).rsplit(":", 1)[-1]
+            durable_scratch = staging_parent / "m" / durable_identity
+            durable_scratch.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(
+                prefix="neocortex-cosmic-ray-focal-",
+                dir=staging_parent,
+            ) as temporary:
+                stage_root = Path(temporary)
+                staged = _stage_external_inputs(files, stage_root / "source")
+                environment = _controlled_environment()
+                # trusted-deep executes the repository's declared tests.  Keep
+                # their executable discovery equivalent to the validated host
+                # environment (notably Git-based fixtures) while retaining the
+                # generic provider's otherwise minimal environment.
+                environment["HOME"] = self._home_directory
+                if os.name == "nt":
+                    environment["USERPROFILE"] = self._home_directory
+                for name in ("PATH", "PATHEXT"):
+                    value = os.environ.get(name)
+                    if value:
+                        environment[name] = value
+                for name in ("TEMP", "TMP", "TMPDIR"):
+                    environment[name] = str(durable_scratch)
+                execution = self.executor(
+                    stage_root,
+                    staged,
+                    environment,
+                    trusted_root=root,
+                    scratch_root=durable_scratch,
+                    config=self.config,
+                )
+            if execution.measurement_scope_signature != input_signature:
+                raise ValueError("focal mutation execution input signature disagrees")
+            if execution.process_invocations != int(
+                execution.counters.get("process_invocations", -1)
+            ):
+                raise ValueError("focal mutation execution process accounting disagrees")
+        except MutationAbstentionError as exc:
+            publication = self._abstain(
+                root,
+                files,
+                reason=exc.reason,
+                started_ns=started_ns,
+            )
+            return self._attach_execution(
+                publication,
+                configuration=self.deep_configuration,
+                execution=None,
+            )
+        except subprocess.TimeoutExpired:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="timeout",
+                reason="provider_timeout",
+                started_ns=started_ns,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError, SubprocessOutputLimitError) as exc:
+            return _failure(
+                self.descriptor,
+                root,
+                files,
+                tool_version=self._version,
+                status="failed",
+                reason=f"provider_failure:{type(exc).__name__}:{exc}"[:4096],
+                started_ns=started_ns,
+            )
+        publication = _success(
+            self.descriptor,
+            root,
+            files,
+            execution.findings,
+            baseline if execution.measurement_complete else None,
+            metrics=execution.metrics,
+            relations=execution.relations,
+            tool_version=self._version,
+            started_ns=started_ns,
+            stdout_bytes=execution.stdout_bytes,
+            stderr_bytes=execution.stderr_bytes,
+            process_invocations=execution.process_invocations,
+            bytes_staged=sum(item.size for item in files),
+            limitations=execution.limitations,
+            input_signature_override=input_signature,
+        )
+        publication = replace(
+            publication,
+            coverage_complete=execution.measurement_complete,
+        )
+        return self._attach_execution(
+            publication,
+            configuration=self.deep_configuration,
+            execution=execution,
+        )
 
 
 _DEEP_COVERAGE_LIMITATIONS = (
@@ -3155,6 +3971,7 @@ def providers_for_profile(
             RuffAnalyzeImportsProvider(root),
             GrimpArchitectureProvider(root),
             ComplexipyCognitiveProvider(root),
+            GitHistoryLocalProvider(root),
         )
     if profile == "trusted-deep":
         static = providers_for_profile("trusted-static", root)
@@ -3165,13 +3982,20 @@ def providers_for_profile(
                 deep_configuration,
                 deep_configuration_signature,
             ),
+            CosmicRayFocalMutationProvider(
+                root,
+                deep_configuration,
+                deep_configuration_signature,
+            ),
         )
     raise ValueError("external analysis profile is unsupported")
 
 
 __all__ = [
     "COMPLEXIPY_COGNITIVE_PROVIDER_ID",
+    "COSMIC_RAY_MUTATION_PROVIDER_ID",
     "DEPTRY_PROVIDER_ID",
+    "GIT_HISTORY_PROVIDER_ID",
     "GRIMP_ARCHITECTURE_PROVIDER_ID",
     "INSTALLED_PACKAGE_PROVIDER_ID",
     "MYPY_PROVIDER_ID",
@@ -3184,7 +4008,9 @@ __all__ = [
     "SEMGREP_INVARIANTS_PROVIDER_ID",
     "VULTURE_UNUSED_PROVIDER_ID",
     "ComplexipyCognitiveProvider",
+    "CosmicRayFocalMutationProvider",
     "DeptryProjectDependenciesProvider",
+    "GitHistoryLocalProvider",
     "GrimpArchitectureProvider",
     "InstalledPackageInventoryProvider",
     "MypyTrustedProjectProvider",

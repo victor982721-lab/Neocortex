@@ -31,10 +31,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 - Plataforma External Evidence v1 con perfiles `protected`, `trusted-static` y
   `trusted-deep`. Protected conserva Ruff basic aislado `E4,E7,E9,F`;
   trusted-static suma Ruff proyecto, Mypy, Pyright, Ruff Analyze, Grimp,
-  Complexipy, Vulture, Semgrep, Deptry, pip-audit e inventario instalado como
-  productores independientes. Trusted-deep añade Pytest/Coverage sólo para la
-  identidad física exacta del repositorio. Todos publican evidencia advisory y
-  carecen de autoridad de mutación; sólo el perfil profundo ejecuta contenido.
+  Complexipy, Vulture, Semgrep, Deptry, pip-audit, inventario instalado e
+  historia Git local como productores independientes. Trusted-deep añade
+  Pytest/Coverage y mutación focal Cosmic Ray sólo para la identidad física
+  exacta del repositorio. Todos publican evidencia advisory y carecen de
+  autoridad de mutación; sólo el perfil profundo ejecuta contenido.
 - Code schema 3 añade contratos, inputs, findings, replays y counters externos;
   schema 4 añade métricas y relaciones genéricas con migraciones compatibles y
   consumidores reales. El replay exacto verifica fingerprints y no duplica
@@ -50,10 +51,25 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   metadata de licencia e integridad `RECORD`. Seis gates mantienen separadas
   las categorías de dependencias, vulnerabilidades, paquete y licencias, sin
   score mágico ni fixes.
-- `--code-review` v9 y `--code-publication-diff` v7 exponen proveedores,
-  arquitectura, Coverage, consenso de uso y supply chain mediante deltas y
-  gates explicables. Status, work packages y code doctor consumen la misma
-  evidencia sin cambiar ranking ni autorizar mutaciones.
+- `--code-review` v10 —compatible con v2-v9— y
+  `--code-publication-diff` v8 —compatible con v1-v7— exponen proveedores,
+  arquitectura, Coverage, consenso de uso, supply chain y analítica de
+  ingeniería mediante deltas y gates explicables. Status, work packages y code
+  doctor consumen la misma evidencia sin cambiar ranking ni autorizar
+  mutaciones.
+- Historia Git local v1 publica commits, churn, recencia y relaciones de cambio
+  sin consultar remotos. `neocortex.code-engineering-analytics/v1` correlaciona
+  esa historia con arquitectura v2, Coverage y mutación focal mediante
+  dimensiones y gates explícitos, sin `aggregate_score` ni
+  `defect_probability`.
+- Cosmic Ray `8.4.6` genera y ejecuta mutantes sólo sobre una copia staged
+  verificada del objetivo y su selección de pruebas. Los argumentos nuevos
+  `--deep-mutation-target`, `--deep-mutation-symbol`,
+  `--deep-mutation-max-mutants`, `--deep-mutation-timeout-seconds` y
+  `--deep-mutation-time-budget-seconds` acotan target, símbolo, cantidad,
+  timeout por mutante y presupuesto total. El proveedor declara posible red por
+  el contenido ejecutado, pero no puede mutar repositorio, corpus ni estado
+  durable.
 - Inventario Dedup v9: la publicación generacional ya no depende de USN. Un
   checkpoint conserva cursor completo o tres nulos; la corrida normal usa full
   scan portable cuando USN falta y mantiene Code/rutas incrementales por caché.
@@ -137,10 +153,11 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 ### Corregido
 
 - La instalación base incorpora las herramientas del autoanálisis integrado:
-  Complexipy, Coverage, Deptry, Grimp, Mypy, Packaging, pip-audit, Pytest, Rich,
-  Ruff, Semgrep, Vulture y xxHash. `documents`, `audio`, `image`, `semantic` y
-  `ui` conservan extras explícitos, y `full` mantiene la unión compatible del
-  runtime integrado. Pillow permanece declarado en cada dominio que lo importa.
+  Complexipy, Cosmic Ray, Coverage, Deptry, Grimp, Mypy, Packaging, pip-audit,
+  Pytest, Rich, Ruff, Semgrep, Vulture y xxHash. `documents`, `audio`, `image`,
+  `semantic` y `ui` conservan extras explícitos, y `full` mantiene la unión
+  compatible del runtime integrado. Pillow permanece declarado en cada dominio
+  que lo importa.
 - Knowledge status/search/context y los facades Semantic ya no cargan Pillow ni
   schemas de owners por imports eager al inspeccionar estado ausente ni al leer
   un owner `image` existente.

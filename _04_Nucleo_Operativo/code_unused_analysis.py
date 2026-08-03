@@ -1337,8 +1337,13 @@ def read_code_unused_analysis(
             connection,
             analysis_run_id,
             enforce_current_runtime=True,
+            provider_ids=(PYRIGHT_UNUSED_PROVIDER_ID, VULTURE_UNUSED_PROVIDER_ID),
         )
-        evidence = read_external_provider_evidence(connection, analysis_run_id)
+        evidence = read_external_provider_evidence(
+            connection,
+            analysis_run_id,
+            provider_ids=(PYRIGHT_UNUSED_PROVIDER_ID, VULTURE_UNUSED_PROVIDER_ID),
+        )
         providers, provider_signature, providers_ready = _provider_statuses(suite, evidence)
         if not providers_ready:
             return analyze_code_unused(

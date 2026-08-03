@@ -20,7 +20,14 @@ from .cli_office_surface import (
 )
 from .cli_operations import DirectOperationFamily, selected_direct_operations
 from .cli_semantic_surface import validate_semantic_arguments
-from .code_contracts import normalize_deep_test_selectors
+from .code_contracts import (
+    DEFAULT_DEEP_MUTATION_MAX_MUTANTS,
+    DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS,
+    DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS,
+    normalize_deep_mutation_symbol,
+    normalize_deep_mutation_target,
+    normalize_deep_test_selectors,
+)
 from .corpus_access import path_trees_intersect
 from .route_selection import (
     BUILTIN_ROUTE_ORDER,
@@ -80,6 +87,20 @@ _TRUSTED_DEEP_OPTIONS = frozenset(
         "deep_max_tests",
         "deep_time_budget_seconds",
         "deep_shard_size",
+        "deep_mutation_target",
+        "deep_mutation_symbol",
+        "deep_mutation_max_mutants",
+        "deep_mutation_timeout_seconds",
+        "deep_mutation_time_budget_seconds",
+    }
+)
+_DEEP_MUTATION_OPTIONS = frozenset(
+    {
+        "deep_mutation_target",
+        "deep_mutation_symbol",
+        "deep_mutation_max_mutants",
+        "deep_mutation_timeout_seconds",
+        "deep_mutation_time_budget_seconds",
     }
 )
 
@@ -115,6 +136,13 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     if args.analysis_profile != "trusted-deep" and explicit_deep:
         option = "--" + explicit_deep[0].replace("_", "-")
         raise SystemExit(f"{option} requires --analysis-profile trusted-deep")
+    explicit_counts = getattr(args, "_explicit_option_counts", {})
+    duplicated_mutation_options = sorted(
+        name for name in _DEEP_MUTATION_OPTIONS if explicit_counts.get(name, 0) > 1
+    )
+    if duplicated_mutation_options:
+        option = "--" + duplicated_mutation_options[0].replace("_", "-")
+        raise SystemExit(f"{option} cannot be repeated")
     try:
         args.deep_test_selectors = normalize_deep_test_selectors(args.deep_test_selectors)
     except ValueError as exc:
@@ -125,6 +153,34 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         raise SystemExit("--deep-time-budget-seconds must be between 30 and 900")
     if not 1 <= args.deep_shard_size <= 50:
         raise SystemExit("--deep-shard-size must be between 1 and 50")
+    try:
+        args.deep_mutation_target = normalize_deep_mutation_target(args.deep_mutation_target)
+    except ValueError as exc:
+        raise SystemExit(f"invalid --deep-mutation-target: {exc}") from exc
+    try:
+        args.deep_mutation_symbol = normalize_deep_mutation_symbol(args.deep_mutation_symbol)
+    except ValueError as exc:
+        raise SystemExit(f"invalid --deep-mutation-symbol: {exc}") from exc
+    if not 1 <= args.deep_mutation_max_mutants <= 100:
+        raise SystemExit("--deep-mutation-max-mutants must be between 1 and 100")
+    if not 1 <= args.deep_mutation_timeout_seconds <= 120:
+        raise SystemExit("--deep-mutation-timeout-seconds must be between 1 and 120")
+    if not 10 <= args.deep_mutation_time_budget_seconds <= 900:
+        raise SystemExit("--deep-mutation-time-budget-seconds must be between 10 and 900")
+    explicit_mutation = explicit & _DEEP_MUTATION_OPTIONS
+    if args.deep_mutation_symbol is not None and args.deep_mutation_target is None:
+        raise SystemExit("--deep-mutation-symbol requires --deep-mutation-target")
+    if args.deep_mutation_target is None and explicit_mutation:
+        option = "--" + sorted(explicit_mutation)[0].replace("_", "-")
+        raise SystemExit(f"{option} requires --deep-mutation-target")
+    if args.deep_mutation_target is not None and not args.deep_test_selectors:
+        raise SystemExit("--deep-mutation-target requires explicit --deep-test-selector")
+    if args.deep_mutation_target is None and (
+        args.deep_mutation_max_mutants != DEFAULT_DEEP_MUTATION_MAX_MUTANTS
+        or args.deep_mutation_timeout_seconds != DEFAULT_DEEP_MUTATION_TIMEOUT_SECONDS
+        or args.deep_mutation_time_budget_seconds != DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS
+    ):
+        raise SystemExit("deep mutation limits require --deep-mutation-target")
     if "root" not in explicit:
         raise SystemExit("--self-analysis requires explicit --root")
     if "state_directory" not in explicit:

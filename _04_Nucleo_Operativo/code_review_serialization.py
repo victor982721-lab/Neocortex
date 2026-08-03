@@ -6,6 +6,7 @@ from dataclasses import asdict
 
 from .code_architecture_analysis import CodeArchitectureAnalysis
 from .code_coverage_analysis import CodeCoverageAnalysis
+from .code_engineering_analytics import CodeEngineeringAnalytics
 from .code_external_evidence import (
     ExternalEvidenceStatus,
     external_status_digest_payload,
@@ -44,6 +45,7 @@ def build_code_review_digest(
     external_evidence_suite: ExternalEvidenceSuiteStatus,
     architecture: CodeArchitectureAnalysis,
     test_coverage: CodeCoverageAnalysis,
+    engineering_analytics: CodeEngineeringAnalytics,
     unused_analysis: CodeUnusedAnalysis,
     supply_chain: CodeSupplyChainAnalysis,
     limitations: tuple[str, ...],
@@ -74,6 +76,15 @@ def build_code_review_digest(
             "external_evidence_suite": external_evidence_suite.as_payload(),
             "architecture": architecture.digest_payload(),
             "test_coverage": test_coverage.digest_payload(),
+            "engineering_analytics": {
+                "status": engineering_analytics.status,
+                "reason": engineering_analytics.reason,
+                "digest": engineering_analytics.digest,
+                "authority": engineering_analytics.authority,
+                "mutation_authority": engineering_analytics.mutation_authority,
+                "aggregate_score": engineering_analytics.aggregate_score,
+                "defect_probability": engineering_analytics.defect_probability,
+            },
             "unused_analysis": unused_analysis.digest_payload(),
             "supply_chain": {
                 "schema": supply_chain.as_payload()["schema"],

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Collection
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from _04_Nucleo_Operativo import code_schema
+from _04_Nucleo_Operativo import code_schema, external_evidence_store
 from _04_Nucleo_Operativo.code_external_evidence import ExternalEvidencePublication
 from _04_Nucleo_Operativo.external_evidence_models import (
     ExternalProviderFinding,
@@ -242,6 +244,41 @@ def _replay_publication(
     )
 
 
+def _abstained_publication(provider_id: str) -> ExternalProviderPublication:
+    source = _full_publication(provider_id)
+    reason = "focal_scope_not_declared"
+    digest = external_provider_result_digest((), (), ())
+    return replace(
+        source,
+        publication=replace(
+            source.publication,
+            status="skipped",
+            provenance={
+                "execution": "skipped",
+                "error": {"reason": reason},
+            },
+        ),
+        inputs=tuple(
+            replace(item, covered=False, coverage_reason=reason) for item in source.inputs
+        ),
+        counters={
+            "eligible_files": 1,
+            "covered_files": 0,
+            "findings": 0,
+            "metrics": 0,
+            "relations": 0,
+            "skipped": 1,
+            "errors": 0,
+            "process_invocations": 0,
+        },
+        coverage_complete=False,
+        result_digest=digest,
+        metrics=(),
+        relations=(),
+        limitations=(reason,),
+    )
+
+
 def _downgrade_fixture_to_populated_v3(database: Path) -> tuple[tuple[object, ...], ...]:
     _create_current_owner(database, 1)
     connection = code_schema.connect_code_state(database, create=False)
@@ -299,6 +336,43 @@ def test_v1_digest_and_hito1_publication_constructor_remain_exact() -> None:
     assert publication.metrics == ()
     assert publication.relations == ()
     assert external_provider_result_digest(publication.findings) == digest
+
+
+def test_terminal_non_replay_skip_is_publicly_abstained_but_replay_remains_ready(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "terminal-abstention.sqlite3"
+    _create_current_owner(database, 1, 2)
+    connection = code_schema.connect_code_state(database, create=False)
+    try:
+        abstained = _abstained_publication("focal-provider")
+        publish_external_provider(connection, 1, abstained)
+        abstained_suite = read_external_evidence_suite(
+            connection,
+            1,
+            enforce_current_runtime=False,
+        )
+        source = _full_publication("replay-provider")
+        source_id = publish_external_provider(connection, 1, source)
+        publish_external_provider(connection, 2, _replay_publication(source, source_id))
+        replay_suite = read_external_evidence_suite(
+            connection,
+            2,
+            enforce_current_runtime=False,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    status = abstained_suite.providers[0]
+    assert status.status == "abstained"
+    assert status.reason == "provider_abstained:focal_scope_not_declared"
+    assert status.execution == "skipped"
+    assert status.covered_files == 0
+    assert status.content_executed is False
+    assert status.counters["process_invocations"] == 0
+    assert replay_suite.providers[0].status == "ready"
+    assert replay_suite.providers[0].execution == "cache_replay"
 
 
 def test_v2_digest_and_portable_identities_are_order_stable() -> None:
@@ -545,6 +619,74 @@ def test_one_corrupt_provider_abstains_without_hiding_a_valid_provider(
     assert evidence["first"].status == "abstained"
     assert evidence["second"].status == "ready"
     assert len(evidence["second"].metrics) == len(evidence["second"].relations) == 1
+
+
+def test_provider_filter_skips_unrequested_projection_reads_and_preserves_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "filtered-evidence.sqlite3"
+    _create_current_owner(database, 1, 2)
+    connection = code_schema.connect_code_state(database, create=False)
+    try:
+        source = _full_publication("selected")
+        source_run_id = publish_external_provider(connection, 1, source)
+        replay_run_id = publish_external_provider(
+            connection,
+            2,
+            _replay_publication(source, source_run_id),
+        )
+        unrequested_run_id = publish_external_provider(
+            connection,
+            2,
+            _full_publication("unrequested-large-provider"),
+        )
+        connection.commit()
+
+        metric_reads: list[int] = []
+        relation_reads: list[int] = []
+        original_metrics = external_evidence_store._provider_metrics
+        original_relations = external_evidence_store._provider_relations
+
+        def tracked_metrics(
+            selected_connection: sqlite3.Connection,
+            tool_run_id: int,
+        ) -> tuple[ExternalProviderMetric, ...]:
+            metric_reads.append(tool_run_id)
+            return original_metrics(selected_connection, tool_run_id)
+
+        def tracked_relations(
+            selected_connection: sqlite3.Connection,
+            tool_run_id: int,
+        ) -> tuple[ExternalProviderRelation, ...]:
+            relation_reads.append(tool_run_id)
+            return original_relations(selected_connection, tool_run_id)
+
+        monkeypatch.setattr(external_evidence_store, "_provider_metrics", tracked_metrics)
+        monkeypatch.setattr(external_evidence_store, "_provider_relations", tracked_relations)
+
+        evidence = read_external_provider_evidence(
+            connection,
+            2,
+            provider_ids={"selected"},
+        )
+        with pytest.raises(TypeError, match="identities must be strings"):
+            read_external_provider_evidence(
+                connection,
+                2,
+                provider_ids=cast(Collection[str], ("selected", 7)),
+            )
+    finally:
+        connection.close()
+
+    assert tuple(evidence) == ("selected",)
+    assert evidence["selected"].status == "ready"
+    assert evidence["selected"].tool_run_id == replay_run_id
+    assert evidence["selected"].effective_tool_run_id == source_run_id
+    assert metric_reads and set(metric_reads) == {source_run_id}
+    assert relation_reads and set(relation_reads) == {source_run_id}
+    assert unrequested_run_id not in metric_reads
+    assert unrequested_run_id not in relation_reads
 
 
 def test_invalid_provider_publication_rolls_back_its_whole_savepoint(

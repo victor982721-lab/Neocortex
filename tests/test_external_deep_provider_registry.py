@@ -24,6 +24,7 @@ from _04_Nucleo_Operativo.external_evidence_models import (
     ProviderLimits,
 )
 from _04_Nucleo_Operativo.external_evidence_providers import (
+    COSMIC_RAY_MUTATION_PROVIDER_ID,
     PYTEST_COVERAGE_PROVIDER_ID,
     VULTURE_UNUSED_PROVIDER_ID,
     PytestCoverageTrustedDeepProvider,
@@ -122,9 +123,15 @@ def test_trusted_deep_registry_extends_static_matrix_with_declared_execution(
         "ruff-analyze-imports",
         "grimp-architecture",
         "complexipy-cognitive",
+        "git-history-local",
         PYTEST_COVERAGE_PROVIDER_ID,
+        COSMIC_RAY_MUTATION_PROVIDER_ID,
     )
-    descriptor = providers[-1].descriptor
+    descriptor = next(
+        item.descriptor
+        for item in providers
+        if item.descriptor.provider_id == PYTEST_COVERAGE_PROVIDER_ID
+    )
     assert descriptor.profile == "trusted-deep"
     assert descriptor.trust_requirement == "trusted-execution"
     assert descriptor.invalidation_strategy == "dynamic_suite"

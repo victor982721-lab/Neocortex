@@ -184,11 +184,12 @@ def test_trusted_static_runs_independent_provider_matrix(
             )
         }
     providers = {item.provider_id: item for item in suite.providers}
-    assert summary.external_tool_runs == 12
-    assert replay_summary.external_tool_runs == 12
+    assert summary.external_tool_runs == 13
+    assert replay_summary.external_tool_runs == 13
     assert tuple(row[0] for row in provider_rows) == (
         "complexipy-cognitive",
         "deptry-project-dependencies",
+        "git-history-local",
         "grimp-architecture",
         "installed-package-inventory",
         "mypy-trusted-project",
@@ -655,7 +656,7 @@ def test_status_review_and_diff_consume_the_normalized_provider_contract(
     second_diff = compare_code_publications(baseline_state, current_state)
     assert first_diff == second_diff
     assert first_diff.status == "ready"
-    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v7"
+    assert first_diff.as_payload()["schema"] == "neocortex.code-publication-diff/v8"
     assert first_diff.analysis_profile == "protected"
     assert len(first_diff.providers) == 1
     assert first_diff.providers[0].provider_id == "ruff-protected-basic"

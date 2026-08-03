@@ -221,10 +221,11 @@ Neocortex --state-directory $MiniState --code-review
 El primer comando escribe inventario y estado de código; no es una consulta de
 sólo lectura. El perfil predeterminado `protected` ejecuta Ruff con una política
 fija `E4,E7,E9,F`, aislada de la configuración del proyecto. Para una raíz que
-Victor haya declarado confiable, `--analysis-profile trusted-static` añade,
-como proveedores independientes, Ruff con la política versionada del proyecto,
-acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze, Grimp y
-Complexipy, y `vulture-unused-static`. Ruff trusted omite
+Victor haya declarado confiable, `--analysis-profile trusted-static` suma 13
+proveedores independientes: Ruff basic, Ruff con la política versionada del
+proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy, Pyright, Ruff Analyze,
+Grimp, Complexipy, Vulture, Semgrep, Deptry, pip-audit, inventario del entorno
+instalado e historial Git local. Ruff trusted omite
 deliberadamente `I,PT,SIM,UP`: esas familias de estilo, tests y modernización no
 deben ahogar la señal de mantenimiento en esta etapa. Los dos type checkers
 conservan hallazgos separados y publican
@@ -252,17 +253,23 @@ se derivan de los seis paquetes de producción y conservan explícitamente las
 fronteras permitidas y los ciclos ya existentes como baseline `no-new`; no
 presentan la arquitectura actual como acíclica.
 
-Los ocho proveedores estáticos trabajan sobre copias verificadas, tienen
-límites y no importan ni ejecutan el código observado. Todos publican versión,
-firmas, cobertura, contadores de proceso/bytes/tiempo/caché y evidencia
-únicamente advisory; ninguno aplica fixes ni posee autoridad de mutación. Un
-replay exacto vuelve a verificar los inputs y reutiliza la publicación sin abrir
-otro proceso. La suite aparece en status, review, publication diff y code
-doctor; una indisponibilidad o límite alcanzado obliga a abstener el gate
+Los 13 proveedores estáticos tienen límites y no importan ni ejecutan el código
+observado; los analizadores de contenido trabajan sobre copias verificadas. El
+historial se limita al repositorio Git local, pip-audit declara la red usada por
+su snapshot y el inventario instalado se recalcula en cada corrida. Todos
+publican versión, firmas, cobertura, contadores de proceso/bytes/tiempo/caché y
+evidencia únicamente advisory; ninguno aplica fixes ni posee autoridad de
+mutación. Un
+replay exacto vuelve a verificar los inputs y reutiliza la publicación sin
+reejecutar el workload del analizador, tests o mutantes; puede usar probes
+acotados, explicados y costeados. La suite aparece en status, review,
+publication diff y code doctor; una indisponibilidad o límite alcanzado obliga
+a abstener el gate
 afectado, no borra la evidencia de los demás proveedores.
 
 `trusted-deep` es un perfil adicional, nunca predeterminado, que conserva los
-ocho proveedores estáticos y añade `pytest-coverage-trusted-deep`. Sólo acepta
+13 proveedores estáticos y añade `pytest-coverage-trusted-deep` y
+`cosmic-ray-focal-mutation`, para un total de 15. Sólo acepta
 la identidad física exacta de `C:\Users\Victor\Neocortex\Repository`: ejecuta
 el código del proyecto, sus pruebas y `conftest.py`, mide líneas y ramas con
 contextos dinámicos por test, y por ello no se admite sobre una raíz arbitraria.
@@ -272,6 +279,14 @@ El estado debe permanecer aislado en Laboratory:
 $Root = 'C:\Users\Victor\Neocortex\Repository'
 $State = 'C:\Users\Victor\Neocortex\Laboratory\self-analysis\trusted-deep'
 Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State
+
+# Mutación focal del símbolo elegido por el work package.
+Neocortex --self-analysis --analysis-profile trusted-deep --root $Root --state-directory $State `
+  --deep-test-selector tests/test_external_deep_coverage.py `
+  --deep-mutation-target _04_Nucleo_Operativo/external_deep_coverage.py `
+  --deep-mutation-symbol external_deep_coverage._normalize `
+  --deep-mutation-max-mutants 20 --deep-mutation-timeout-seconds 30 `
+  --deep-mutation-time-budget-seconds 600
 ```
 
 Sin `--deep-test-selector`, ejecuta la suite declarada completa. El selector se
@@ -282,6 +297,11 @@ todas sus pruebas aprobadas producen checkpoints reanudables ligados a las
 firmas exactas de inputs, herramientas y configuración. Coverage mide sólo el
 proceso principal: la cobertura de subprocesses no se atribuye y se declara
 como limitación.
+La mutación focal exige al menos un selector explícito. Admite 1–100 mutantes
+(20), timeout individual de 1–120 segundos (30) y presupuesto total de 10–900
+segundos (600). Cosmic Ray sólo modifica la copia staged, pero ejecuta las
+pruebas seleccionadas y éstas pueden usar red; no tiene autoridad alguna sobre
+el repositorio original.
 El status sí es estrictamente read-only:
 cualquier `-wal`, `-shm`
 o `-journal` junto a `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`,
@@ -296,10 +316,11 @@ manifest registra `journal.status=unavailable`, el status nunca afirma
 cambios.
 
 `--code-review` convierte la publicación en una lista de mantenimiento
-explicable. El envelope v8 conserva las capas anteriores, el ranking bruto y
+explicable. El envelope `neocortex.code-review/v10`, compatible con v2-v9,
+conserva las capas anteriores, el ranking bruto y
 hasta tres recomendaciones `act_now`, y añade
 `external_evidence_suite` con los proveedores y gates normalizados sin alterar
-ranking ni actionability. La proyección `architecture_analysis` consume las
+ranking ni actionability. La proyección `architecture_analysis` v2 consume las
 métricas y relaciones portables del schema Code v4 y muestra módulos, imports,
 SCC, contratos y los estados `import_graph_consensus`,
 `architecture_contracts` y `module_complexity_displacement`; ausencia o falta
@@ -318,7 +339,10 @@ publicación `trusted-deep`, también enlaza pruebas protectoras, líneas y rama
 faltantes del símbolo objetivo, y añade `tests_passed`, `coverage_available`,
 `work_package_target_protected`, `line_coverage_not_degraded` y
 `branch_coverage_not_degraded`. Los dos últimos sólo se evalúan ante un baseline
-comparable. El horizonte de planeación permanece fijo en 50 aunque la vista
+comparable. `engineering_analytics` v1 conserva por módulo complejidad,
+cobertura, mutación, historia y grafo sin colapsarlos en un score de riesgo, y
+el work package incorpora su perfil y gates con `mutation_authority=false`. El
+horizonte de planeación permanece fijo en 50 aunque la vista
 muestre 10; no agrupa por nombre, directorio ni prefijo de módulo.
 `--code-review-limit N --code-json` amplía de 1 a 50 la vista auditable. La
 consulta es estrictamente read-only y todo paquete es consejo, nunca autorización
@@ -329,8 +353,10 @@ descriptivo y separado. Un snapshot full completado sin USN se etiqueta
 `publication_only`; un journal avanzado/discontinuo o un vínculo incompatible
 causa abstención con código `2`.
 
-`--code-publication-diff` v6 compara dos publicaciones Code completadas sin
-escribirlas. Informa calls comunes, resoluciones nuevas/corregidas/perdidas,
+`--code-publication-diff` publica el envelope
+`neocortex.code-publication-diff/v8`, compatible con v1-v7, y compara dos
+publicaciones Code completadas sin escribirlas. Informa calls comunes,
+resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
 hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
 coinciden. Añade deltas de métricas por módulo, contratos, ciclos y complejidad
@@ -340,12 +366,24 @@ configuración y herramientas; de otro modo la dimensión queda
 `not_evaluated`. También compara identidades y cambios entre los cuatro estados
 de código potencialmente no usado sólo si coinciden proveedor, policy,
 calibración y holdout, e informa candidatos de consenso alto añadidos o
-resueltos; cualquier incompatibilidad queda `not_evaluated`. El veredicto
+resueltos; cualquier incompatibilidad queda `not_evaluated`. También proyecta
+por separado deltas comparables de `engineering_analytics`, incluido el score
+de mutación sólo cuando coincide su alcance. El veredicto
 agregado siempre conserva las limitaciones parciales y nunca transforma el
 delta en autorización de borrado.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
 Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
 regresión inventada.
+
+La validación H6 sobre la raíz canónica produjo el work package
+`_04_Nucleo_Operativo.external_deep_coverage` /
+`external_deep_coverage._normalize`. Run 9 terminó en 343.168 s con 585
+candidatos (2 procesados, 583 por caché), 15 proveedores y 0 errores; Cosmic Ray
+completó 20/20 mutantes seleccionados (5 killed, 5 survived, 10 incompetent, 0
+timeout; score 0.50) de 524 generados. Run 10 repitió los mismos bytes en 23.996
+s: 585/585 candidatos por caché, cero bytes/analyze/persist/graph y 14 replays;
+el inventario instalado se recalculó. Status, review y diff tardaron 38.982,
+47.675 y 57.856 s, respectivamente.
 
 La corrida normal usa el mismo baseline portable cuando USN no existe o deja
 de estar disponible: publica el snapshot completo con cursor nulo y las rutas
