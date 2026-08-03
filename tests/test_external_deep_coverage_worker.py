@@ -202,7 +202,7 @@ def test_collect_returns_sorted_deterministic_nodeids(tmp_path: Path) -> None:
         "subprocess_coverage": False,
         "uses_network": False,
     }
-    worker_runs = tmp_path / "scratch-first" / "worker-runs"
+    worker_runs = tmp_path / "scratch-first" / "w"
     assert worker_runs.is_dir()
     assert not tuple(worker_runs.iterdir())
 
@@ -267,7 +267,7 @@ def test_shard_maps_outcomes_contexts_and_branches(tmp_path: Path) -> None:
     assert not (project / ".coverage").exists()
     assert not (project / ".pytest_cache").exists()
     assert not any(project.rglob("__pycache__"))
-    worker_runs = tmp_path / "scratch" / "worker-runs"
+    worker_runs = tmp_path / "scratch" / "w"
     assert worker_runs.is_dir()
     assert not tuple(worker_runs.iterdir())
 
@@ -333,7 +333,7 @@ def test_worker_rejects_source_escape_before_execution(tmp_path: Path) -> None:
 
     assert completed.returncode == 2
     assert _payload(completed)["error"]["code"] == "unsafe_path"
-    assert not (tmp_path / "scratch" / "pytest-basetemp").exists()
+    assert not (tmp_path / "scratch" / "b").exists()
 
 
 def test_shard_rejects_more_than_fifty_exact_nodeids(tmp_path: Path) -> None:
@@ -351,7 +351,7 @@ def test_shard_rejects_more_than_fifty_exact_nodeids(tmp_path: Path) -> None:
 
     assert completed.returncode == 2
     assert _payload(completed)["error"]["code"] == "test_bound_exceeded"
-    assert not (tmp_path / "scratch" / "pytest-basetemp").exists()
+    assert not (tmp_path / "scratch" / "b").exists()
 
 
 def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
@@ -375,9 +375,17 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
         encoding="utf-8",
     )
     (tests / "test_logic.py").write_text(
+        "import shutil\n"
+        "import subprocess\n\n"
         "from _04_Nucleo_Operativo.logic import choose\n\n"
-        "def test_true():\n"
-        "    assert choose(True) == 1\n\n"
+        "def test_true(tmp_path):\n"
+        "    assert choose(True) == 1\n"
+        "    git = shutil.which('git')\n"
+        "    assert git is not None\n"
+        "    subprocess.run(\n"
+        "        [git, 'init', '--quiet', str(tmp_path / 'nested-repository')],\n"
+        "        check=True, capture_output=True, timeout=20,\n"
+        "    )\n\n"
         "def test_false():\n"
         "    assert choose(False) == 2\n",
         encoding="utf-8",
@@ -469,6 +477,6 @@ def test_real_adapter_runs_collect_shards_and_checkpoint_replay(
     )
     assert replay.counters["shards_reused"] == 2
     assert replay.process_invocations == 2
-    worker_runs = scratch / "runtime" / "worker-runs"
+    worker_runs = scratch / "r" / "w"
     assert worker_runs.is_dir()
     assert not tuple(worker_runs.iterdir())

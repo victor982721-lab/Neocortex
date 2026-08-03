@@ -1425,7 +1425,9 @@ def execute_pytest_coverage(
     durable_scratch = _validate_scratch(stage_root, scratch_root, project_root)
     owners = _owners_by_relative(staged)
     controlled_environment = dict(environment)
-    runtime_root = durable_scratch / "runtime"
+    # These names are internal and intentionally compact: pytest appends long,
+    # node-id-derived paths below this root on Windows.
+    runtime_root = durable_scratch / "r"
     runtime_root.mkdir(parents=True, exist_ok=True)
     home_directory = trusted_deep_home_directory()
     controlled_environment["HOME"] = home_directory

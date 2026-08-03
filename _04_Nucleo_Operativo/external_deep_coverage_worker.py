@@ -49,6 +49,7 @@ HARD_MAX_NODEID_CHARS = 16_384
 HARD_MAX_PATH_CHARS = 4_096
 HARD_MAX_LINE_MAGNITUDE = 10_000_000
 _FINGERPRINT_GUARD_SEED = 0x4E454F43
+_WORKER_RUNS_DIRECTORY = "w"
 
 _COMMON_REQUEST_KEYS = frozenset(
     {
@@ -428,7 +429,7 @@ def _validate_sources_unchanged(sources: Sequence[SourceFile]) -> None:
 
 
 def _runtime_paths(scratch_root: Path, request_signature: str) -> RuntimePaths:
-    worker_runs = scratch_root / "worker-runs"
+    worker_runs = scratch_root / _WORKER_RUNS_DIRECTORY
     worker_runs.mkdir(exist_ok=True)
     if not worker_runs.is_dir() or _is_reparse_point(worker_runs):
         raise WorkerContractError("unsafe_path", "worker scratch root is unsafe")
@@ -436,11 +437,11 @@ def _runtime_paths(scratch_root: Path, request_signature: str) -> RuntimePaths:
     invocation_root = Path(tempfile.mkdtemp(prefix=prefix, dir=worker_runs)).resolve(strict=True)
     _require_plain_tree_path(invocation_root, scratch_root, label="worker invocation scratch")
     _RUNTIME_ROOTS.append(invocation_root)
-    base_temp = invocation_root / "pytest-basetemp"
-    cache = invocation_root / "pytest-cache"
-    coverage_directory = invocation_root / "coverage"
-    temp = invocation_root / "temp"
-    pycache = invocation_root / "pycache"
+    base_temp = invocation_root / "b"
+    cache = invocation_root / "c"
+    coverage_directory = invocation_root / "v"
+    temp = invocation_root / "t"
+    pycache = invocation_root / "p"
     coverage_directory.mkdir()
     temp.mkdir()
     pycache.mkdir()
@@ -462,7 +463,9 @@ def _cleanup_runtime_roots() -> None:
         parent = root.parent
         try:
             resolved = root.resolve(strict=True)
-            if parent.name != "worker-runs" or resolved.parent != parent.resolve(strict=True):
+            if parent.name != _WORKER_RUNS_DIRECTORY or resolved.parent != parent.resolve(
+                strict=True
+            ):
                 raise WorkerContractError(
                     "unsafe_cleanup_target", "worker scratch cleanup target is unsafe"
                 )

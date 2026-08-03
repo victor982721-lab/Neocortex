@@ -1997,7 +1997,10 @@ class PytestCoverageTrustedDeepProvider:
                     "configuration_signature": self.config.configuration_signature,
                 },
             ).rsplit(":", 1)[-1]
-            durable_scratch = staging_parent / "external-deep-coverage" / durable_identity
+            # Keep the unpublished internal scratch layout deliberately short.  Pytest
+            # adds node-id-derived directories below its basetemp and nested Git
+            # fixtures must still fit the traditional Windows path budget.
+            durable_scratch = staging_parent / "d" / durable_identity
             durable_scratch.mkdir(parents=True, exist_ok=True)
             staged = {os.path.normcase(os.path.abspath(item.path)): item for item in files}
             if len(staged) != len(files):
