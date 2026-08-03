@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -36,6 +37,13 @@ _EXTERNAL_SUBJECT_KINDS = frozenset(
 
 EXTERNAL_PROVIDER_SCHEMA = "neocortex.external-provider/v1"
 EXTERNAL_SUITE_SCHEMA = "neocortex.external-evidence-suite/v1"
+_PYRIGHT_PROVIDER_ID = "pyright-trusted-project"
+_PYRIGHT_STAGE_ROOT = re.compile(
+    r"(?i)(?:[a-z]:)?[\\/]+(?:[^\\/\r\n]+[\\/]+)*"
+    r"neocortex-pyright-trusted-project-[^\\/\r\n]+[\\/]+source"
+)
+_UNCHANGED_EXTERNAL_FINDING_MESSAGE = re.compile(r"(?!x)x")
+_EXTERNAL_FINDING_MESSAGE_PATHS = {_PYRIGHT_PROVIDER_ID: _PYRIGHT_STAGE_ROOT}
 
 
 @dataclass(frozen=True, slots=True)
@@ -459,6 +467,43 @@ def external_signature(prefix: str, payload: Mapping[str, object]) -> str:
     return f"{prefix}:xxh3_128:" + fingerprint_text(canonical_json(payload)).xxh3_128
 
 
+def normalize_external_finding_message(provider_id: str, message: str) -> str:
+    """Remove provider-owned volatile paths from otherwise portable evidence."""
+
+    pattern = _EXTERNAL_FINDING_MESSAGE_PATHS.get(provider_id, _UNCHANGED_EXTERNAL_FINDING_MESSAGE)
+    return pattern.sub("<project>", message)
+
+
+def external_finding_identity(
+    provider_id: str,
+    *,
+    relative_path: str,
+    category: str,
+    code: str,
+    message: str,
+    start_line: int,
+    start_column: int,
+    end_line: int,
+    end_column: int,
+) -> str:
+    """Build a stable finding identity from normalized public evidence."""
+
+    return external_signature(
+        "external-finding-v1",
+        {
+            "provider_id": provider_id,
+            "path": relative_path,
+            "category": category,
+            "code": code,
+            "message": normalize_external_finding_message(provider_id, message),
+            "start_line": start_line,
+            "start_column": start_column,
+            "end_line": end_line,
+            "end_column": end_column,
+        },
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalProviderPublication:
     descriptor: ProviderDescriptor
@@ -669,10 +714,12 @@ __all__ = [
     "ProviderGateEvaluation",
     "ProviderLimits",
     "TypeConsensusSummary",
+    "external_finding_identity",
     "external_findings_digest",
     "external_metric_identity",
     "external_provider_result_digest",
     "external_relation_identity",
     "external_root_identity",
     "external_signature",
+    "normalize_external_finding_message",
 ]

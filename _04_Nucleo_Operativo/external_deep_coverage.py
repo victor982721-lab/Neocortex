@@ -175,6 +175,27 @@ class _SymbolObservation:
     end_line: int
 
 
+@dataclass(slots=True)
+class _CoverageTotals:
+    executable_lines: int = 0
+    covered_lines: int = 0
+    branch_exits: int = 0
+    covered_branch_exits: int = 0
+
+    def add(
+        self,
+        *,
+        statements: set[int],
+        executed: set[int],
+        possible_arcs: set[tuple[int, int]],
+        executed_arcs: set[tuple[int, int]],
+    ) -> None:
+        self.executable_lines += len(statements)
+        self.covered_lines += len(statements & executed)
+        self.branch_exits += len(possible_arcs)
+        self.covered_branch_exits += len(possible_arcs & executed_arcs)
+
+
 def _required_mapping(value: object, *, label: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{label} is not an object")
@@ -981,31 +1002,10 @@ def _phase_context(value: str) -> tuple[str, str] | None:
     return nodeid, phase
 
 
-def _normalize(
-    shards: Sequence[Mapping[str, object]],
-    *,
+def _normalize_symbols(
     raw_symbols: Sequence[Mapping[str, object]],
     owners: Mapping[str, ExternalEvidenceFile],
-    config: DeepCoverageConfig,
-    tool_versions: Mapping[str, str],
-    suite_signature: str,
-    code_input_signature: str,
-    support_signature: str,
-    publication_input_signature: str,
-    measurement_scope_signature: str,
-    measurement_complete: bool,
-    collected_count: int,
-    selected_nodeids: tuple[str, ...],
-    shards_reused: int,
-) -> tuple[
-    tuple[ExternalProviderFinding, ...],
-    tuple[ExternalProviderMetric, ...],
-    tuple[ExternalProviderRelation, ...],
-    dict[str, int],
-]:
-    files: dict[str, _CoverageAggregate] = {}
-    tests: dict[str, str] = {}
-    failures: list[Mapping[str, object]] = []
+) -> dict[tuple[str, str, str, int, int], _SymbolObservation]:
     symbols: dict[tuple[str, str, str, int, int], _SymbolObservation] = {}
     for symbol in raw_symbols:
         relative = _relative_path(symbol.get("relative_path"), label="symbol path")
@@ -1027,6 +1027,80 @@ def _normalize(
             start,
             end,
         )
+    return symbols
+
+
+def _coverage_line_sets(item: Mapping[str, object]) -> tuple[set[int], set[int]]:
+    statements = {
+        _required_int(value, label="coverage statement")
+        for value in _required_list(item.get("statements"), label="coverage statements")
+    }
+    executed = {
+        _required_int(value, label="coverage executed line")
+        for value in _required_list(item.get("executed_lines"), label="coverage executed lines")
+    }
+    missing = {
+        _required_int(value, label="coverage missing line")
+        for value in _required_list(item.get("missing_lines"), label="coverage missing lines")
+    }
+    if statements != executed | missing or executed & missing:
+        raise ValueError("deep coverage line accounting is inconsistent")
+    return statements, executed
+
+
+def _coverage_arc_sets(
+    item: Mapping[str, object],
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
+    executed_arcs = {
+        _validate_arc(value, label="coverage executed branch")
+        for value in _required_list(
+            item.get("executed_branches"), label="coverage executed branches"
+        )
+    }
+    missing_arcs = {
+        _validate_arc(value, label="coverage missing branch")
+        for value in _required_list(item.get("missing_branches"), label="coverage missing branches")
+    }
+    return executed_arcs, missing_arcs
+
+
+def _merge_coverage_file(
+    item: Mapping[str, object],
+    files: dict[str, _CoverageAggregate],
+) -> None:
+    relative = _relative_path(item.get("relative_path"), label="coverage path")
+    file_key = relative.casefold()
+    module = _required_text(item.get("module"), label="coverage module")
+    aggregate = files.get(file_key)
+    if aggregate is None:
+        aggregate = _CoverageAggregate(relative, module)
+        files[file_key] = aggregate
+    if aggregate.module != module:
+        raise ValueError("deep coverage module observations disagree")
+    statements, executed = _coverage_line_sets(item)
+    executed_arcs, missing_arcs = _coverage_arc_sets(item)
+    aggregate.statements.update(statements)
+    aggregate.executed.update(executed)
+    aggregate.possible_arcs.update(executed_arcs | missing_arcs)
+    aggregate.executed_arcs.update(executed_arcs)
+    raw_context_map = _required_mapping(item.get("contexts"), label="coverage contexts")
+    for raw_line, raw_values in raw_context_map.items():
+        if not isinstance(raw_line, str) or not raw_line.isdecimal():
+            raise ValueError("coverage context line is invalid")
+        line_number = int(raw_line)
+        context_values = {
+            _required_text(value, label="coverage context", maximum=20_000)
+            for value in _required_list(raw_values, label="coverage line contexts")
+        }
+        aggregate.contexts[line_number].update(context_values)
+
+
+def _normalize_shards(
+    shards: Sequence[Mapping[str, object]],
+) -> tuple[dict[str, _CoverageAggregate], dict[str, str], list[Mapping[str, object]]]:
+    files: dict[str, _CoverageAggregate] = {}
+    tests: dict[str, str] = {}
+    failures: list[Mapping[str, object]] = []
     for shard in shards:
         for raw_test in _required_list(shard.get("tests"), label="shard tests"):
             test = _required_mapping(raw_test, label="shard test")
@@ -1039,62 +1113,22 @@ def _normalize(
             for item in _required_list(shard.get("failures"), label="pytest failures")
         )
         for raw_file in _required_list(shard.get("files"), label="coverage files"):
-            item = _required_mapping(raw_file, label="coverage file")
-            relative = _relative_path(item.get("relative_path"), label="coverage path")
-            file_key = relative.casefold()
-            module = _required_text(item.get("module"), label="coverage module")
-            aggregate = files.get(file_key)
-            if aggregate is None:
-                aggregate = _CoverageAggregate(relative, module)
-                files[file_key] = aggregate
-            if aggregate.module != module:
-                raise ValueError("deep coverage module observations disagree")
-            statements = {
-                _required_int(value, label="coverage statement")
-                for value in _required_list(item.get("statements"), label="coverage statements")
-            }
-            executed = {
-                _required_int(value, label="coverage executed line")
-                for value in _required_list(
-                    item.get("executed_lines"), label="coverage executed lines"
-                )
-            }
-            missing = {
-                _required_int(value, label="coverage missing line")
-                for value in _required_list(
-                    item.get("missing_lines"), label="coverage missing lines"
-                )
-            }
-            if statements != executed | missing or executed & missing:
-                raise ValueError("deep coverage line accounting is inconsistent")
-            executed_arcs = {
-                _validate_arc(value, label="coverage executed branch")
-                for value in _required_list(
-                    item.get("executed_branches"), label="coverage executed branches"
-                )
-            }
-            missing_arcs = {
-                _validate_arc(value, label="coverage missing branch")
-                for value in _required_list(
-                    item.get("missing_branches"), label="coverage missing branches"
-                )
-            }
-            aggregate.statements.update(statements)
-            aggregate.executed.update(executed)
-            aggregate.possible_arcs.update(executed_arcs | missing_arcs)
-            aggregate.executed_arcs.update(executed_arcs)
-            raw_context_map = _required_mapping(item.get("contexts"), label="coverage contexts")
-            for raw_line, raw_values in raw_context_map.items():
-                if not isinstance(raw_line, str) or not raw_line.isdecimal():
-                    raise ValueError("coverage context line is invalid")
-                line_number = int(raw_line)
-                context_values = {
-                    _required_text(value, label="coverage context", maximum=20_000)
-                    for value in _required_list(raw_values, label="coverage line contexts")
-                }
-                aggregate.contexts[line_number].update(context_values)
+            _merge_coverage_file(_required_mapping(raw_file, label="coverage file"), files)
+    return files, tests, failures
 
-    common = {
+
+def _common_coverage_metadata(
+    *,
+    config: DeepCoverageConfig,
+    tool_versions: Mapping[str, str],
+    suite_signature: str,
+    code_input_signature: str,
+    support_signature: str,
+    publication_input_signature: str,
+    measurement_scope_signature: str,
+    measurement_complete: bool,
+) -> dict[str, object]:
+    return {
         "suite_selection": config.suite_selection,
         "measurement_complete": measurement_complete,
         "content_executed": True,
@@ -1108,13 +1142,62 @@ def _normalize(
         "subprocess_coverage": False,
         "coverage_scope": "main_process_only",
     }
+
+
+def _coverage_scope_metadata(
+    common: Mapping[str, object],
+    *,
+    relative: str,
+    module: str,
+    statements: set[int],
+    executed: set[int],
+    possible_arcs: set[tuple[int, int]],
+    executed_arcs: set[tuple[int, int]],
+) -> dict[str, object]:
+    ranges = _ranges(sorted(statements - executed))
+    arcs = sorted(possible_arcs - executed_arcs)
+    return {
+        **common,
+        "relative_path": relative,
+        "module_key": module,
+        "missing_line_ranges": [list(value) for value in ranges[:_MAX_METADATA_RANGES]],
+        "missing_line_ranges_truncated": len(ranges) > _MAX_METADATA_RANGES,
+        "missing_branch_arcs": [list(value) for value in arcs[:_MAX_METADATA_ARCS]],
+        "missing_branch_arcs_truncated": len(arcs) > _MAX_METADATA_ARCS,
+    }
+
+
+def _merge_module_coverage(
+    modules: dict[str, _ModuleAggregate],
+    *,
+    module: str,
+    relative: str,
+    owner: ExternalEvidenceFile,
+    statements: set[int],
+    executed: set[int],
+    possible_arcs: set[tuple[int, int]],
+    executed_arcs: set[tuple[int, int]],
+) -> None:
+    module_data = modules.get(module)
+    if module_data is None:
+        module_data = _ModuleAggregate(relative, owner.version_id)
+        modules[module] = module_data
+    if module_data.relative_path != relative:
+        raise ValueError("deep coverage module maps to multiple files")
+    module_data.statements.update(statements)
+    module_data.executed.update(executed)
+    module_data.possible_arcs.update(possible_arcs)
+    module_data.executed_arcs.update(executed_arcs)
+
+
+def _file_coverage_metrics(
+    files: Mapping[str, _CoverageAggregate],
+    owners: Mapping[str, ExternalEvidenceFile],
+    common: Mapping[str, object],
+) -> tuple[list[ExternalProviderMetric], dict[str, _ModuleAggregate], _CoverageTotals]:
     metrics: list[ExternalProviderMetric] = []
-    run_key = f"coverage-run:{measurement_scope_signature}"
-    # Run line numbers from different files cannot share a raw integer identity.
-    # Counts are therefore summed below; the set-based helper is only used for
-    # file/module/symbol scopes.
-    line_totals = line_covered = branch_totals = branch_covered = 0
     modules: dict[str, _ModuleAggregate] = {}
+    totals = _CoverageTotals()
     for file_key in sorted(files):
         file_aggregate = files[file_key]
         relative = file_aggregate.relative_path
@@ -1128,20 +1211,6 @@ def _normalize(
         executed = set(file_aggregate.executed)
         possible_arcs = set(file_aggregate.possible_arcs)
         executed_arcs = set(file_aggregate.executed_arcs)
-        missing_line_numbers = sorted(statements - executed)
-        missing_arc_values = sorted(possible_arcs - executed_arcs)
-        ranges = _ranges(missing_line_numbers)
-        metadata = {
-            **common,
-            "relative_path": relative,
-            "module_key": module,
-            "missing_line_ranges": [list(value) for value in ranges[:_MAX_METADATA_RANGES]],
-            "missing_line_ranges_truncated": len(ranges) > _MAX_METADATA_RANGES,
-            "missing_branch_arcs": [
-                list(value) for value in missing_arc_values[:_MAX_METADATA_ARCS]
-            ],
-            "missing_branch_arcs_truncated": len(missing_arc_values) > _MAX_METADATA_ARCS,
-        }
         metrics.extend(
             _coverage_metrics(
                 subject_kind="file",
@@ -1151,42 +1220,47 @@ def _normalize(
                 possible_arcs=possible_arcs,
                 executed_arcs=executed_arcs,
                 version_id=owner.version_id,
-                metadata=metadata,
+                metadata=_coverage_scope_metadata(
+                    common,
+                    relative=relative,
+                    module=module,
+                    statements=statements,
+                    executed=executed,
+                    possible_arcs=possible_arcs,
+                    executed_arcs=executed_arcs,
+                ),
             )
         )
-        module_data = modules.get(module)
-        if module_data is None:
-            module_data = _ModuleAggregate(relative, owner.version_id)
-            modules[module] = module_data
-        # A Python module is owned by one file; disagreement is fail-closed.
-        if module_data.relative_path != relative:
-            raise ValueError("deep coverage module maps to multiple files")
-        module_data.statements.update(statements)
-        module_data.executed.update(executed)
-        module_data.possible_arcs.update(possible_arcs)
-        module_data.executed_arcs.update(executed_arcs)
-        line_totals += len(statements)
-        line_covered += len(statements & executed)
-        branch_totals += len(possible_arcs)
-        branch_covered += len(possible_arcs & executed_arcs)
+        _merge_module_coverage(
+            modules,
+            module=module,
+            relative=relative,
+            owner=owner,
+            statements=statements,
+            executed=executed,
+            possible_arcs=possible_arcs,
+            executed_arcs=executed_arcs,
+        )
+        totals.add(
+            statements=statements,
+            executed=executed,
+            possible_arcs=possible_arcs,
+            executed_arcs=executed_arcs,
+        )
+    return metrics, modules, totals
 
+
+def _module_coverage_metrics(
+    modules: Mapping[str, _ModuleAggregate],
+    common: Mapping[str, object],
+) -> list[ExternalProviderMetric]:
+    metrics: list[ExternalProviderMetric] = []
     for module in sorted(modules):
         module_aggregate = modules[module]
         statements = set(module_aggregate.statements)
         executed = set(module_aggregate.executed)
         possible_arcs = set(module_aggregate.possible_arcs)
         executed_arcs = set(module_aggregate.executed_arcs)
-        ranges = _ranges(sorted(statements - executed))
-        arcs = sorted(possible_arcs - executed_arcs)
-        module_metadata = {
-            **common,
-            "relative_path": module_aggregate.relative_path,
-            "module_key": module,
-            "missing_line_ranges": [list(value) for value in ranges[:_MAX_METADATA_RANGES]],
-            "missing_line_ranges_truncated": len(ranges) > _MAX_METADATA_RANGES,
-            "missing_branch_arcs": [list(value) for value in arcs[:_MAX_METADATA_ARCS]],
-            "missing_branch_arcs_truncated": len(arcs) > _MAX_METADATA_ARCS,
-        }
         metrics.extend(
             _coverage_metrics(
                 subject_kind="module",
@@ -1196,90 +1270,122 @@ def _normalize(
                 possible_arcs=possible_arcs,
                 executed_arcs=executed_arcs,
                 version_id=module_aggregate.version_id,
-                metadata=module_metadata,
+                metadata=_coverage_scope_metadata(
+                    common,
+                    relative=module_aggregate.relative_path,
+                    module=module,
+                    statements=statements,
+                    executed=executed,
+                    possible_arcs=possible_arcs,
+                    executed_arcs=executed_arcs,
+                ),
             )
         )
+    return metrics
 
-    relation_accumulator: dict[tuple[str, str], dict[str, object]] = {}
-    for symbol_identity in sorted(symbols):
-        symbol_observation = symbols[symbol_identity]
-        relative = symbol_observation.relative_path
-        if PurePosixPath(relative).parts[0] not in _PRODUCTION_ROOTS:
-            continue
-        file_data = files.get(relative.casefold())
-        if file_data is None:
-            continue
-        owner = owners[relative.casefold()]
-        start = symbol_observation.start_line
-        end = symbol_observation.end_line
-        module = symbol_observation.module
-        qualified = symbol_observation.qualified_name
-        kind = symbol_observation.kind
-        stable_symbol = f"{module}:{qualified}:{start}:{end}"
-        statements = {line for line in file_data.statements if start <= line <= end}
-        executed = {line for line in file_data.executed if start <= line <= end}
-        possible_arcs = {arc for arc in file_data.possible_arcs if start <= arc[0] <= end}
-        executed_arcs = {arc for arc in file_data.executed_arcs if start <= arc[0] <= end}
-        ranges = _ranges(sorted(statements - executed))
-        arcs = sorted(possible_arcs - executed_arcs)
-        symbol_metadata = {
-            **common,
+
+def _symbol_coverage_sets(
+    symbol: _SymbolObservation,
+    file_data: _CoverageAggregate,
+) -> tuple[set[int], set[int], set[tuple[int, int]], set[tuple[int, int]]]:
+    start = symbol.start_line
+    end = symbol.end_line
+    return (
+        {line for line in file_data.statements if start <= line <= end},
+        {line for line in file_data.executed if start <= line <= end},
+        {arc for arc in file_data.possible_arcs if start <= arc[0] <= end},
+        {arc for arc in file_data.executed_arcs if start <= arc[0] <= end},
+    )
+
+
+def _symbol_test_evidence(
+    file_data: _CoverageAggregate,
+    executed: set[int],
+    tests: Mapping[str, str],
+) -> tuple[dict[str, set[int]], dict[str, set[str]]]:
+    by_test_lines: dict[str, set[int]] = defaultdict(set)
+    by_test_contexts: dict[str, set[str]] = defaultdict(set)
+    for line in sorted(executed):
+        for context in sorted(file_data.contexts.get(line, set())):
+            parsed = _phase_context(context)
+            if parsed is None:
+                continue
+            nodeid, _phase = parsed
+            if nodeid not in tests:
+                raise ValueError("deep coverage context references an unselected test")
+            by_test_lines[nodeid].add(line)
+            by_test_contexts[nodeid].add(context)
+    return by_test_lines, by_test_contexts
+
+
+def _one_symbol_coverage(
+    symbol: _SymbolObservation,
+    file_data: _CoverageAggregate,
+    owner: ExternalEvidenceFile,
+    tests: Mapping[str, str],
+    common: Mapping[str, object],
+    measurement_scope_signature: str,
+) -> tuple[list[ExternalProviderMetric], dict[tuple[str, str], dict[str, object]]]:
+    relative = symbol.relative_path
+    module = symbol.module
+    qualified = symbol.qualified_name
+    start = symbol.start_line
+    end = symbol.end_line
+    stable_symbol = f"{module}:{qualified}:{start}:{end}"
+    statements, executed, possible_arcs, executed_arcs = _symbol_coverage_sets(symbol, file_data)
+    metadata = {
+        **_coverage_scope_metadata(
+            common,
+            relative=relative,
+            module=module,
+            statements=statements,
+            executed=executed,
+            possible_arcs=possible_arcs,
+            executed_arcs=executed_arcs,
+        ),
+        "symbol_key": stable_symbol,
+        "qualified_name": qualified,
+        "symbol_kind": symbol.kind,
+        "start_line": start,
+        "end_line": end,
+    }
+    metrics = _coverage_metrics(
+        subject_kind="symbol",
+        subject_key=stable_symbol,
+        statements=statements,
+        executed=executed,
+        possible_arcs=possible_arcs,
+        executed_arcs=executed_arcs,
+        version_id=owner.version_id,
+        metadata=metadata,
+    )
+    by_test_lines, by_test_contexts = _symbol_test_evidence(file_data, executed, tests)
+    relation_metadata: dict[tuple[str, str], dict[str, object]] = {}
+    for nodeid in sorted(by_test_lines):
+        evidence_lines = by_test_lines[nodeid]
+        evidence_contexts = by_test_contexts[nodeid]
+        relation_metadata[(nodeid, stable_symbol)] = {
             "relative_path": relative,
             "module_key": module,
             "symbol_key": stable_symbol,
             "qualified_name": qualified,
-            "symbol_kind": kind,
             "start_line": start,
             "end_line": end,
-            "missing_line_ranges": [list(value) for value in ranges[:_MAX_METADATA_RANGES]],
-            "missing_line_ranges_truncated": len(ranges) > _MAX_METADATA_RANGES,
-            "missing_branch_arcs": [list(value) for value in arcs[:_MAX_METADATA_ARCS]],
-            "missing_branch_arcs_truncated": len(arcs) > _MAX_METADATA_ARCS,
+            "test_nodeids": [nodeid],
+            "lines": sorted(evidence_lines)[:_MAX_RELATION_LINES],
+            "lines_truncated": len(evidence_lines) > _MAX_RELATION_LINES,
+            "contexts": sorted(evidence_contexts)[:_MAX_RELATION_CONTEXTS],
+            "contexts_truncated": len(evidence_contexts) > _MAX_RELATION_CONTEXTS,
+            "measurement_scope_signature": measurement_scope_signature,
         }
-        metrics.extend(
-            _coverage_metrics(
-                subject_kind="symbol",
-                subject_key=stable_symbol,
-                statements=statements,
-                executed=executed,
-                possible_arcs=possible_arcs,
-                executed_arcs=executed_arcs,
-                version_id=owner.version_id,
-                metadata=symbol_metadata,
-            )
-        )
-        by_test_lines: dict[str, set[int]] = defaultdict(set)
-        by_test_contexts: dict[str, set[str]] = defaultdict(set)
-        for line in sorted(executed):
-            for context in sorted(file_data.contexts.get(line, set())):
-                parsed = _phase_context(context)
-                if parsed is None:
-                    continue
-                nodeid, _phase = parsed
-                if nodeid not in tests:
-                    raise ValueError("deep coverage context references an unselected test")
-                by_test_lines[nodeid].add(line)
-                by_test_contexts[nodeid].add(context)
-        for nodeid in sorted(by_test_lines):
-            evidence_lines = by_test_lines[nodeid]
-            evidence_contexts = by_test_contexts[nodeid]
-            relation_accumulator[(nodeid, stable_symbol)] = {
-                "relative_path": relative,
-                "module_key": module,
-                "symbol_key": stable_symbol,
-                "qualified_name": qualified,
-                "start_line": start,
-                "end_line": end,
-                "test_nodeids": [nodeid],
-                "lines": sorted(evidence_lines)[:_MAX_RELATION_LINES],
-                "lines_truncated": len(evidence_lines) > _MAX_RELATION_LINES,
-                "contexts": sorted(evidence_contexts)[:_MAX_RELATION_CONTEXTS],
-                "contexts_truncated": len(evidence_contexts) > _MAX_RELATION_CONTEXTS,
-                "measurement_scope_signature": measurement_scope_signature,
-            }
-    if len(relation_accumulator) > _MAX_RELATIONS:
-        raise ValueError("deep coverage relation count exceeds its bound")
-    relations = tuple(
+    return metrics, relation_metadata
+
+
+def _coverage_relations(
+    relation_metadata: Mapping[tuple[str, str], Mapping[str, object]],
+    owners: Mapping[str, ExternalEvidenceFile],
+) -> tuple[ExternalProviderRelation, ...]:
+    return tuple(
         ExternalProviderRelation(
             external_relation_identity(
                 PYTEST_COVERAGE_PROVIDER_ID,
@@ -1298,49 +1404,113 @@ def _normalize(
             target_version_id=owners[str(metadata["relative_path"]).casefold()].version_id,
             metadata=metadata,
         )
-        for (nodeid, symbol), metadata in sorted(relation_accumulator.items())
+        for (nodeid, symbol), metadata in sorted(relation_metadata.items())
     )
 
-    test_counts = {
+
+def _symbol_coverage_metrics_and_relations(
+    symbols: Mapping[tuple[str, str, str, int, int], _SymbolObservation],
+    files: Mapping[str, _CoverageAggregate],
+    owners: Mapping[str, ExternalEvidenceFile],
+    tests: Mapping[str, str],
+    common: Mapping[str, object],
+    measurement_scope_signature: str,
+) -> tuple[list[ExternalProviderMetric], tuple[ExternalProviderRelation, ...]]:
+    metrics: list[ExternalProviderMetric] = []
+    relation_metadata: dict[tuple[str, str], dict[str, object]] = {}
+    for symbol_identity in sorted(symbols):
+        symbol = symbols[symbol_identity]
+        if PurePosixPath(symbol.relative_path).parts[0] not in _PRODUCTION_ROOTS:
+            continue
+        file_data = files.get(symbol.relative_path.casefold())
+        if file_data is None:
+            continue
+        symbol_metrics, symbol_relations = _one_symbol_coverage(
+            symbol,
+            file_data,
+            owners[symbol.relative_path.casefold()],
+            tests,
+            common,
+            measurement_scope_signature,
+        )
+        metrics.extend(symbol_metrics)
+        relation_metadata.update(symbol_relations)
+    if len(relation_metadata) > _MAX_RELATIONS:
+        raise ValueError("deep coverage relation count exceeds its bound")
+    return metrics, _coverage_relations(relation_metadata, owners)
+
+
+def _coverage_test_counts(
+    tests: Mapping[str, str],
+    *,
+    collected_count: int,
+    selected_nodeids: tuple[str, ...],
+    shards_total: int,
+    shards_reused: int,
+) -> dict[str, int]:
+    return {
         "tests_collected": collected_count,
         "tests_selected": len(selected_nodeids),
         "tests_passed": sum(value == "passed" for value in tests.values()),
         "tests_failed": sum(value == "failed" for value in tests.values()),
         "tests_skipped": sum(value == "skipped" for value in tests.values()),
-        "shards_total": len(shards),
+        "shards_total": shards_total,
         "shards_reused": shards_reused,
     }
+
+
+def _run_coverage_metrics(
+    totals: _CoverageTotals,
+    test_counts: Mapping[str, int],
+    *,
+    run_key: str,
+    common: Mapping[str, object],
+) -> list[ExternalProviderMetric]:
     run_values: dict[str, tuple[float, str]] = {
-        "executable_lines": (line_totals, "count"),
-        "covered_lines": (line_covered, "count"),
-        "missing_lines": (line_totals - line_covered, "count"),
+        "executable_lines": (totals.executable_lines, "count"),
+        "covered_lines": (totals.covered_lines, "count"),
+        "missing_lines": (totals.executable_lines - totals.covered_lines, "count"),
         "line_coverage_percent": (
-            (line_covered / line_totals * 100.0) if line_totals else 100.0,
+            (totals.covered_lines / totals.executable_lines * 100.0)
+            if totals.executable_lines
+            else 100.0,
             "percent",
         ),
-        "branch_exits": (branch_totals, "count"),
-        "covered_branch_exits": (branch_covered, "count"),
-        "missing_branch_exits": (branch_totals - branch_covered, "count"),
+        "branch_exits": (totals.branch_exits, "count"),
+        "covered_branch_exits": (totals.covered_branch_exits, "count"),
+        "missing_branch_exits": (
+            totals.branch_exits - totals.covered_branch_exits,
+            "count",
+        ),
         "branch_coverage_percent": (
-            (branch_covered / branch_totals * 100.0) if branch_totals else 100.0,
+            (totals.covered_branch_exits / totals.branch_exits * 100.0)
+            if totals.branch_exits
+            else 100.0,
             "percent",
         ),
     }
     for name, count_value in test_counts.items():
         run_values[name] = (float(count_value), "count")
-    for name, (metric_value, unit) in run_values.items():
-        metrics.append(
-            _metric(
-                subject_kind="run",
-                subject_key=run_key,
-                name=name,
-                value=float(metric_value),
-                unit=unit,
-                version_id=None,
-                metadata=common,
-            )
+    return [
+        _metric(
+            subject_kind="run",
+            subject_key=run_key,
+            name=name,
+            value=float(metric_value),
+            unit=unit,
+            version_id=None,
+            metadata=common,
         )
+        for name, (metric_value, unit) in run_values.items()
+    ]
 
+
+def _failure_findings(
+    failures: Sequence[Mapping[str, object]],
+    tests: Mapping[str, str],
+    owners: Mapping[str, ExternalEvidenceFile],
+    common: Mapping[str, object],
+) -> list[ExternalProviderFinding]:
     findings: list[ExternalProviderFinding] = []
     for raw in failures:
         nodeid = _required_text(raw.get("nodeid"), label="failure nodeid", maximum=16_384)
@@ -1389,10 +1559,81 @@ def _normalize(
                 },
             )
         )
+    return findings
+
+
+def _validate_normalized_publications(
+    findings: Sequence[ExternalProviderFinding],
+    metrics: Sequence[ExternalProviderMetric],
+) -> None:
     if len({item.portable_finding_id for item in findings}) != len(findings):
         raise ValueError("deep coverage produced duplicate findings")
     if len({item.portable_metric_id for item in metrics}) != len(metrics):
         raise ValueError("deep coverage produced duplicate metrics")
+
+
+def _normalize(
+    shards: Sequence[Mapping[str, object]],
+    *,
+    raw_symbols: Sequence[Mapping[str, object]],
+    owners: Mapping[str, ExternalEvidenceFile],
+    config: DeepCoverageConfig,
+    tool_versions: Mapping[str, str],
+    suite_signature: str,
+    code_input_signature: str,
+    support_signature: str,
+    publication_input_signature: str,
+    measurement_scope_signature: str,
+    measurement_complete: bool,
+    collected_count: int,
+    selected_nodeids: tuple[str, ...],
+    shards_reused: int,
+) -> tuple[
+    tuple[ExternalProviderFinding, ...],
+    tuple[ExternalProviderMetric, ...],
+    tuple[ExternalProviderRelation, ...],
+    dict[str, int],
+]:
+    symbols = _normalize_symbols(raw_symbols, owners)
+    files, tests, failures = _normalize_shards(shards)
+    common = _common_coverage_metadata(
+        config=config,
+        tool_versions=tool_versions,
+        suite_signature=suite_signature,
+        code_input_signature=code_input_signature,
+        support_signature=support_signature,
+        publication_input_signature=publication_input_signature,
+        measurement_scope_signature=measurement_scope_signature,
+        measurement_complete=measurement_complete,
+    )
+    metrics, modules, totals = _file_coverage_metrics(files, owners, common)
+    metrics.extend(_module_coverage_metrics(modules, common))
+    symbol_metrics, relations = _symbol_coverage_metrics_and_relations(
+        symbols,
+        files,
+        owners,
+        tests,
+        common,
+        measurement_scope_signature,
+    )
+    metrics.extend(symbol_metrics)
+    test_counts = _coverage_test_counts(
+        tests,
+        collected_count=collected_count,
+        selected_nodeids=selected_nodeids,
+        shards_total=len(shards),
+        shards_reused=shards_reused,
+    )
+    metrics.extend(
+        _run_coverage_metrics(
+            totals,
+            test_counts,
+            run_key=f"coverage-run:{measurement_scope_signature}",
+            common=common,
+        )
+    )
+    findings = _failure_findings(failures, tests, owners, common)
+    _validate_normalized_publications(findings, metrics)
     return (
         tuple(sorted(findings, key=lambda item: item.portable_finding_id)),
         tuple(sorted(metrics, key=lambda item: item.portable_metric_id)),

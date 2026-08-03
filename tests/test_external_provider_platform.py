@@ -493,7 +493,7 @@ def test_pyright_parser_preserves_structured_range_and_rule(
                 {
                     "file": staged_path,
                     "severity": "warning",
-                    "message": "Import cycle detected",
+                    "message": f"Import cycle detected\n  {staged_path}",
                     "rule": "reportImportCycles",
                 },
             ],
@@ -521,6 +521,8 @@ def test_pyright_parser_preserves_structured_range_and_rule(
     file_level = next(item for item in publication.findings if item.code == "reportImportCycles")
     assert (file_level.start_line, file_level.start_column) == (1, 0)
     assert file_level.metadata["location_precision"] == "file"
+    assert file_level.message.startswith("Import cycle detected\n  <project>")
+    assert str(scratch).casefold() not in file_level.message.casefold()
 
 
 def test_malformed_provider_output_abstains_without_partial_findings(

@@ -78,9 +78,11 @@ from .external_evidence_models import (
     ProviderDescriptor,
     ProviderLimits,
     ProviderTrust,
+    external_finding_identity,
     external_provider_result_digest,
     external_root_identity,
     external_signature,
+    normalize_external_finding_message,
 )
 from .external_git_history import (
     GIT_HISTORY_PROVIDER_ID,
@@ -1021,19 +1023,17 @@ def _finding(
     url: str | None = None,
     fix_available: bool = False,
 ) -> ExternalProviderFinding:
-    identity = external_signature(
-        "external-finding-v1",
-        {
-            "provider_id": provider_id,
-            "path": owner.relative_path,
-            "category": category,
-            "code": code,
-            "message": message,
-            "start_line": start_line,
-            "start_column": start_column,
-            "end_line": end_line,
-            "end_column": end_column,
-        },
+    portable_message = normalize_external_finding_message(provider_id, message)
+    identity = external_finding_identity(
+        provider_id,
+        relative_path=owner.relative_path,
+        category=category,
+        code=code,
+        message=portable_message,
+        start_line=start_line,
+        start_column=start_column,
+        end_line=end_line,
+        end_column=end_column,
     )
     return ExternalProviderFinding(
         identity,
@@ -1042,7 +1042,7 @@ def _finding(
         category,
         code,
         severity,
-        message,
+        portable_message,
         True,
         1.0,
         None,

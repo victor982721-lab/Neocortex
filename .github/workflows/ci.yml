@@ -121,7 +121,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $venvPython = Join-Path $venv "Scripts\python.exe"
           & $venvPython -m pip install --disable-pip-version-check --no-cache-dir `
-            --constraint "$env:GITHUB_WORKSPACE\constraints.txt" $wheels[0].FullName
+            --constraint "$env:GITHUB_WORKSPACE\constraints.txt" $wheels[0].FullName "Pillow>=12.2,<13"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $scripts = Join-Path $venv "Scripts"
           "STANDARD_PYTHON=$venvPython" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -172,6 +172,10 @@ jobs:
           New-Item -ItemType Directory -Path $suiteRoot -Force | Out-Null
           Copy-Item -LiteralPath "$env:GITHUB_WORKSPACE\tests" `
             -Destination "$suiteRoot\tests" -Recurse
+          $pythonTemp = Join-Path $env:RUNNER_TEMP "python-temp-standard"
+          New-Item -ItemType Directory -Path $pythonTemp -Force | Out-Null
+          $env:TEMP = $pythonTemp
+          $env:TMP = $pythonTemp
           $env:PYTHONPATH = $suiteRoot
           Push-Location $suiteRoot
           try {
