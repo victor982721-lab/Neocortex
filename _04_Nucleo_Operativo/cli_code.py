@@ -57,6 +57,7 @@ class _CodeStatusSnapshot:
     schema_version: int
     counts: dict[str, int]
     latest_run: sqlite3.Row | None
+    external_evidence: dict[str, object]
 
 
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
@@ -102,6 +103,13 @@ def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
                 ON v.version_id=d.version_id WHERE v.invalidated_ns IS NULL"""
             ).fetchone()[0]
         ),
+        "current_external_diagnostics": int(
+            connection.execute(
+                """SELECT COUNT(*) FROM diagnostics d JOIN file_versions v
+                ON v.version_id=d.version_id WHERE v.invalidated_ns IS NULL
+                AND d.source='external:ruff'"""
+            ).fetchone()[0]
+        ),
         "projects": int(
             connection.execute(
                 "SELECT COUNT(*) FROM projects WHERE status<>'historical'"
@@ -128,6 +136,7 @@ def _latest_code_run(connection: sqlite3.Connection) -> sqlite3.Row | None:
 
 
 def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
+    from .code_external_evidence import read_external_evidence
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
     from .self_analysis_status import quiescent_sqlite_database
 
@@ -138,7 +147,20 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
         if version != CODE_SCHEMA_VERSION:
             raise RuntimeError(f"code state schema {version} is unsupported for status")
         latest = _latest_code_run(connection)
-    return _CodeStatusSnapshot(version, counts, latest)
+        external_evidence = (
+            read_external_evidence(
+                connection,
+                int(latest["analysis_run_id"]),
+                enforce_current_runtime=True,
+            )[0].as_payload()
+            if latest is not None
+            else read_external_evidence(
+                connection,
+                -1,
+                enforce_current_runtime=True,
+            )[0].as_payload()
+        )
+    return _CodeStatusSnapshot(version, counts, latest, external_evidence)
 
 
 def _read_self_analysis_payload(
@@ -181,6 +203,11 @@ def _emit_missing_code_status(
         "exists": False,
         "analyzers": analyzers,
         "self_analysis": None,
+        "external_evidence": {
+            "status": "not_recorded",
+            "reason": "code_state_missing",
+            "provider": "ruff",
+        },
     }
     _emit(
         payload if json_output else f"CODE_STATUS database={path} exists=false",
@@ -206,6 +233,7 @@ def _emit_code_status(
         "latest_run": None if latest is None else dict(latest),
         "analyzers": analyzers,
         "self_analysis": self_analysis,
+        "external_evidence": snapshot.external_evidence,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -221,6 +249,12 @@ def _emit_code_status(
             f"candidates={latest['candidates']} processed={latest['processed']} "
             f"cache_hits={latest['cache_hits']} errors={latest['errors']}"
         )
+    external = snapshot.external_evidence
+    _print_console_line(
+        f"CODE_EXTERNAL provider=ruff status={external['status']} "
+        f"execution={external.get('execution')} diagnostics="
+        f"{external.get('diagnostics', 0)} gate={external.get('gate')}"
+    )
 
 
 def run_code_status(args: argparse.Namespace) -> int:
@@ -289,6 +323,14 @@ def run_code_review(args: argparse.Namespace) -> int:
         f"resolved_calls={result.coverage.resolved_call_edges}/"
         f"{result.coverage.call_edges}"
     )
+    if result.external_evidence is not None:
+        external = result.external_evidence
+        _print_console_line(
+            f"CODE_REVIEW_EXTERNAL provider={external.provider} "
+            f"status={external.status} execution={external.execution} "
+            f"diagnostics={external.diagnostics} added={external.added} "
+            f"resolved={external.resolved} gate={external.gate}"
+        )
     if result.recommendation_status == "abstained":
         _print_console_line(
             "CODE_REVIEW_RECOMMENDATION status=abstained "
@@ -367,6 +409,7 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         or result.calls is None
         or result.hotspots is None
         or result.probable_dead_delta is None
+        or result.external_evidence is None
         or result.digest is None
     ):
         return _error(
@@ -392,6 +435,14 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         f"changed_evidence={result.hotspots.changed_evidence} "
         f"probable_dead_delta={result.probable_dead_delta:+d}"
     )
+    _print_console_line(
+        "CODE_PUBLICATION_DIFF_EXTERNAL provider=ruff "
+        f"status={result.external_evidence.status} "
+        f"common={result.external_evidence.common} "
+        f"added={result.external_evidence.added} "
+        f"resolved={result.external_evidence.resolved} "
+        f"gate={result.external_evidence.gate}"
+    )
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0
@@ -401,9 +452,11 @@ def run_code_doctor(args: argparse.Namespace) -> int:
     """Validate schema, FTS and optional tools without loading heavy analyzers."""
 
     from .code_analyzers import builtin_analyzer_registry
+    from .code_external_evidence import RuffEvidenceProvider
     from .code_schema import code_database, validate_code_schema
 
     path = _state_path(args)
+    ruff_version = RuffEvidenceProvider.tool_version()
     report: dict[str, object] = {
         "kind": "code-doctor",
         "database": str(path),
@@ -411,7 +464,14 @@ def run_code_doctor(args: argparse.Namespace) -> int:
         "analyzers": builtin_analyzer_registry().status(),
         "tools": {
             name: shutil.which(name)
-            for name in ("cargo", "rustc", "rust-analyzer", "ruff", "mypy")
+            for name in ("cargo", "rustc", "rust-analyzer", "mypy")
+        },
+        "external_evidence": {
+            "provider": "ruff",
+            "available": ruff_version is not None,
+            "version": ruff_version,
+            "runtime": sys.executable,
+            "resolution": "runtime-distribution",
         },
     }
     if path.is_file():

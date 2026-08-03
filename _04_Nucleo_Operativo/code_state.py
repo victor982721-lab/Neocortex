@@ -20,6 +20,16 @@ from .code_contracts import (
     CodeAnalysis,
     DiagnosticRecord,
 )
+from .code_external_evidence import (
+    ExternalEvidenceBaseline,
+    ExternalEvidenceFile,
+    ExternalEvidencePublication,
+    RUFF_SOURCE,
+    decode_external_baseline,
+    external_input_signature,
+    read_external_evidence,
+    read_external_evidence_files,
+)
 from .code_schema import connect_code_state, initialize_code_state
 from .route_filters import CandidateSelection
 from .semantic_models import canonical_json, fingerprint_text
@@ -42,6 +52,7 @@ _DERIVED_DIAGNOSTIC_SOURCES = (
     "neocortex-project-resolver",
     "neocortex-project-graph",
     "neocortex-reference-graph",
+    RUFF_SOURCE,
 )
 
 
@@ -253,10 +264,16 @@ class CodeState:
         *,
         partial: bool,
         graph_current: bool = False,
+        external_evidence: ExternalEvidencePublication | None = None,
     ) -> None:
         """Complete one run and optionally publish its graph-completion fence."""
 
         with self.connection:
+            if external_evidence is not None:
+                self._publish_external_evidence(
+                    analysis_run_id,
+                    external_evidence,
+                )
             updated = self.connection.execute(
                 """UPDATE analysis_runs SET status=?,completed_ns=?,candidates=?,
                 processed=?,cache_hits=?,errors=?,summary_json=?,error_type=NULL,
@@ -291,6 +308,159 @@ class CodeState:
                         ),
                     ),
                 )
+
+    def external_evidence_files(self, root: Path) -> tuple[ExternalEvidenceFile, ...]:
+        """Return every current fingerprinted Python version under an owner root."""
+
+        return read_external_evidence_files(self.connection, root)
+
+    def external_evidence_baselines(
+        self,
+        *,
+        root: Path,
+        tool_name: str,
+        tool_version: str,
+        configuration_signature: str,
+        files: tuple[ExternalEvidenceFile, ...],
+    ) -> tuple[ExternalEvidenceBaseline | None, ExternalEvidenceBaseline | None]:
+        """Return an exact reusable publication and latest comparable baseline."""
+
+        input_signature = external_input_signature(files)
+        normalized_root = os.path.normcase(os.path.abspath(root))
+        rows = self.connection.execute(
+            """SELECT tool_run_id,analysis_run_id,tool_version,
+            configuration_signature,status,provenance_json
+            FROM external_tool_runs
+            WHERE tool_name=? AND tool_version=? AND configuration_signature=?
+            AND status='completed'
+            ORDER BY tool_run_id DESC LIMIT 128""",
+            (tool_name, tool_version, configuration_signature),
+        ).fetchall()
+        comparable: ExternalEvidenceBaseline | None = None
+        exact: ExternalEvidenceBaseline | None = None
+        for row in rows:
+            baseline = decode_external_baseline(
+                int(row["tool_run_id"]),
+                int(row["analysis_run_id"]),
+                str(row["tool_version"]),
+                str(row["configuration_signature"]),
+                str(row["provenance_json"]),
+            )
+            if baseline is None:
+                continue
+            try:
+                baseline_root = os.path.normcase(os.path.abspath(baseline.root))
+            except (OSError, TypeError, ValueError):
+                continue
+            if baseline_root != normalized_root:
+                continue
+            if comparable is None:
+                comparable = baseline
+            if baseline.input_signature == input_signature:
+                exact = baseline
+                break
+        if exact is None:
+            return None, comparable
+        projection_status, _, _ = read_external_evidence(
+            self.connection,
+            exact.analysis_run_id,
+            enforce_current_runtime=False,
+        )
+        if (
+            projection_status.status != "ready"
+            or projection_status.effective_tool_run_id != exact.tool_run_id
+        ):
+            return None, comparable
+        return exact, comparable
+
+    def _delete_current_external_diagnostics(self) -> None:
+        self.connection.execute(
+            """DELETE FROM diagnostics WHERE source=? AND version_id IN(
+            SELECT v.version_id FROM file_versions v
+            JOIN files f ON f.current_version_id=v.version_id
+            WHERE f.status='current' AND v.invalidated_ns IS NULL)""",
+            (RUFF_SOURCE,),
+        )
+
+    def _publish_external_evidence(
+        self,
+        analysis_run_id: int,
+        publication: ExternalEvidencePublication,
+    ) -> None:
+        owner = self.connection.execute(
+            "SELECT status FROM analysis_runs WHERE analysis_run_id=?",
+            (analysis_run_id,),
+        ).fetchone()
+        if owner is None or str(owner["status"]) != "running":
+            raise RuntimeError("external evidence requires one running Code owner")
+        cursor = self.connection.execute(
+            """INSERT INTO external_tool_runs(
+            analysis_run_id,project_id,tool_name,tool_version,
+            configuration_signature,status,started_ns,completed_ns,provenance_json)
+            VALUES(?,NULL,?,?,?,?,?,?,?)""",
+            (
+                analysis_run_id,
+                publication.tool_name,
+                publication.tool_version,
+                publication.configuration_signature,
+                publication.status,
+                publication.started_ns,
+                publication.completed_ns,
+                _json(publication.provenance),
+            ),
+        )
+        tool_run_id = _lastrowid(cursor)
+        if publication.status == "skipped" and publication.execution == "cache_replay":
+            return
+        self._delete_current_external_diagnostics()
+        if publication.status != "completed":
+            return
+        for diagnostic in publication.diagnostics:
+            current = self.connection.execute(
+                """SELECT 1 FROM files f JOIN file_versions v
+                ON v.version_id=f.current_version_id
+                WHERE v.version_id=? AND f.status='current'
+                AND v.invalidated_ns IS NULL""",
+                (diagnostic.version_id,),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("external diagnostic version is no longer current")
+            metadata = {
+                "schema": "neocortex.external-diagnostic/v1",
+                "external_tool_run_id": tool_run_id,
+                "external_diagnostic_identity": diagnostic.identity,
+                "relative_path": diagnostic.relative_path,
+                "claim_scope": "tool_reported",
+                "authority": "advisory",
+                "mutation_authority": False,
+                "fix_available": diagnostic.fix_available,
+                "url": diagnostic.url,
+            }
+            self.connection.execute(
+                """INSERT INTO diagnostics(
+                version_id,source,code,severity,message,tool_name,tool_version,
+                confirmed,confidence,start_line,start_column,end_line,end_column,
+                start_byte,end_byte,metadata_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    diagnostic.version_id,
+                    RUFF_SOURCE,
+                    diagnostic.code,
+                    "warning",
+                    diagnostic.message,
+                    publication.tool_name,
+                    publication.tool_version,
+                    1,
+                    1.0,
+                    diagnostic.start_line,
+                    diagnostic.start_column,
+                    diagnostic.end_line,
+                    diagnostic.end_column,
+                    None,
+                    None,
+                    _json(metadata),
+                ),
+            )
 
     def fail_run(self, analysis_run_id: int, exc: BaseException) -> None:
         status = (

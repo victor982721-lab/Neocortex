@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -12,7 +11,8 @@ import os
 import subprocess
 import tempfile
 import threading
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import IO
 
@@ -86,11 +86,14 @@ def _start_bounded_process(
     *,
     stdin: int | IO[bytes],
     creationflags: int,
+    cwd: str | None,
+    environment: Mapping[str, str] | None,
+    memory_limit_bytes: int | None,
 ) -> tuple[subprocess.Popen[bytes], WindowsKillOnCloseJob | None]:
     job: WindowsKillOnCloseJob | None = None
     effective_creationflags = creationflags
     if os.name == "nt":
-        job = WindowsKillOnCloseJob()
+        job = WindowsKillOnCloseJob(memory_limit_bytes)
         effective_creationflags |= job.suspended_creation_flag()
     try:
         process = subprocess.Popen(
@@ -99,6 +102,8 @@ def _start_bounded_process(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             creationflags=effective_creationflags,
+            cwd=cwd,
+            env=environment,
         )
     except BaseException:
         if job is not None:
@@ -138,6 +143,9 @@ def run_bounded_capture(
     stdout_limit_bytes: int,
     stderr_limit_bytes: int,
     creationflags: int = 0,
+    cwd: str | os.PathLike[str] | None = None,
+    environment: Mapping[str, str] | None = None,
+    memory_limit_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run a child with bounded capture and exact Windows descendant cleanup.
 
@@ -154,19 +162,25 @@ def run_bounded_capture(
         raise ValueError("subprocess timeout must be positive")
     if stdout_limit_bytes < 0 or stderr_limit_bytes < 0:
         raise ValueError("subprocess output limits cannot be negative")
+    if memory_limit_bytes is not None and memory_limit_bytes < 1:
+        raise ValueError("subprocess memory limit must be positive")
 
     command = tuple(os.fspath(argument) for argument in arguments)
-    with tempfile.TemporaryFile() as input_stream:
+    working_directory = None if cwd is None else os.fspath(cwd)
+    with ExitStack() as resources:
+        stdin: int | IO[bytes] = subprocess.DEVNULL
         if input_bytes is not None:
+            input_stream = resources.enter_context(tempfile.TemporaryFile())
             input_stream.write(input_bytes)
             input_stream.seek(0)
-            stdin: int | IO[bytes] = input_stream
-        else:
-            stdin = subprocess.DEVNULL
+            stdin = input_stream
         process, job = _start_bounded_process(
             command,
             stdin=stdin,
             creationflags=creationflags,
+            cwd=working_directory,
+            environment=environment,
+            memory_limit_bytes=memory_limit_bytes,
         )
         assert process.stdout is not None
         assert process.stderr is not None

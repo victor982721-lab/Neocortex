@@ -278,6 +278,7 @@ class CodeRouteConfig:
     include_vendored: bool = True
     complexity_warning: int = 15
     function_lines_warning: int = 200
+    external_evidence_root: Path | None = None
     selection: CandidateSelection = field(default_factory=CandidateSelection)
 
     def __post_init__(self) -> None:
@@ -338,6 +339,13 @@ class CodeRouteSummary:
     analyze_milliseconds: int = 0
     persist_milliseconds: int = 0
     graph_milliseconds: int = 0
+    external_tool_runs: int = 0
+    external_diagnostics: int = 0
+    external_added_diagnostics: int = 0
+    external_resolved_diagnostics: int = 0
+    external_cache_hits: int = 0
+    external_errors: int = 0
+    external_milliseconds: int = 0
 
 
 @dataclass(frozen=True, slots=True)

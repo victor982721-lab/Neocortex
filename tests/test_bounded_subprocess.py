@@ -48,6 +48,54 @@ def test_bounded_capture_collects_both_streams_and_input() -> None:
     assert completed.stderr == b"diagnostic"
 
 
+def test_bounded_capture_uses_exact_cwd_and_environment(tmp_path: Path) -> None:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key.casefold() in {"systemroot", "windir"}
+    }
+    environment["NEOCORTEX_BOUNDED_ENV"] = "controlled"
+    completed = run_bounded_capture(
+        _python(
+            "import os,sys; "
+            "sys.stdout.write(os.getcwd()+'\\n'); "
+            "sys.stdout.write(os.environ['NEOCORTEX_BOUNDED_ENV']+'\\n'); "
+            "sys.stdout.write(str('RUFF_CACHE_DIR' in os.environ))"
+        ),
+        timeout_seconds=5,
+        stdout_limit_bytes=4096,
+        stderr_limit_bytes=4096,
+        cwd=tmp_path,
+        environment=environment,
+    )
+
+    lines = completed.stdout.decode("utf-8").splitlines()
+    assert Path(lines[0]).resolve() == tmp_path.resolve()
+    assert lines[1:] == ["controlled", "False"]
+
+
+def test_bounded_capture_without_input_does_not_create_a_temporary_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_temporary_file(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("stdin without a payload must use DEVNULL")
+
+    monkeypatch.setattr(
+        "_04_Nucleo_Operativo.bounded_subprocess.tempfile.TemporaryFile",
+        reject_temporary_file,
+    )
+
+    completed = run_bounded_capture(
+        _python("import sys; sys.stdout.buffer.write(b'bounded')"),
+        timeout_seconds=5,
+        stdout_limit_bytes=64,
+        stderr_limit_bytes=64,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout == b"bounded"
+
+
 @pytest.mark.parametrize("stream", ("stdout", "stderr"))
 def test_bounded_capture_terminates_output_overflow(stream: str) -> None:
     target = "stdout" if stream == "stdout" else "stderr"
@@ -87,9 +135,17 @@ def test_bounded_capture_kills_and_reaps_timeout() -> None:
         {"timeout_seconds": 0, "stdout_limit_bytes": 1, "stderr_limit_bytes": 1},
         {"timeout_seconds": 1, "stdout_limit_bytes": -1, "stderr_limit_bytes": 1},
         {"timeout_seconds": 1, "stdout_limit_bytes": 1, "stderr_limit_bytes": -1},
+        {
+            "timeout_seconds": 1,
+            "stdout_limit_bytes": 1,
+            "stderr_limit_bytes": 1,
+            "memory_limit_bytes": 0,
+        },
     ),
 )
-def test_bounded_capture_rejects_invalid_bounds(arguments: dict[str, float]) -> None:
+def test_bounded_capture_rejects_invalid_bounds(
+    arguments: dict[str, float | int],
+) -> None:
     with pytest.raises(ValueError):
         run_bounded_capture(_python("pass"), **arguments)
 
@@ -257,4 +313,6 @@ def test_windows_job_handle_close_is_idempotent() -> None:
     assert job.closed
     job.close()
     assert job.closed
+
+
 # endregion [02]

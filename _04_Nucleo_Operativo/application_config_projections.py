@@ -123,6 +123,7 @@ def code_route_config_from_application(
         include_vendored=config.code_include_vendored,
         complexity_warning=config.code_complexity_warning,
         function_lines_warning=config.code_function_lines_warning,
+        external_evidence_root=config.root if config.self_analysis else None,
         selection=config.selection,
     )
 

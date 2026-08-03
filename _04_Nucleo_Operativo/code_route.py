@@ -48,6 +48,12 @@ from .code_detection import (
     likely_code_candidate,
     looks_binary,
 )
+from .code_external_evidence import (
+    ExternalEvidencePublication,
+    RuffEvidenceProvider,
+    failed_external_publication,
+    skipped_external_publication,
+)
 from .code_schema import checkpoint_code_wal, remove_checkpointed_code_sidecars
 from .code_state import CachedCodeVersion, CodeState, SkippedCodeObservation
 from .semantic_models import fingerprint_bytes
@@ -248,6 +254,7 @@ class CodeRoute:
         cancellation: CancellationToken | None = None,
         analyzers: AnalyzerRegistry | None = None,
         memory_gate: CodeResourceGate | None = None,
+        external_evidence_provider: RuffEvidenceProvider | None = None,
     ):
         self.config = config
         self.dedup_index = dedup_index
@@ -258,6 +265,11 @@ class CodeRoute:
         self.cancellation = cancellation or CancellationToken()
         self.analyzers = analyzers or builtin_analyzer_registry()
         self.memory_gate = memory_gate
+        self.external_evidence_provider = (
+            external_evidence_provider
+            if external_evidence_provider is not None
+            else RuffEvidenceProvider()
+        )
         self.processing_signature = (
             f"{self.config.processing_signature}|"
             f"artifact-detector={DETECTOR_VERSION}|"
@@ -315,6 +327,72 @@ class CodeRoute:
         return self.memory_gate.admit(
             estimate_code_graph_memory_bytes(self.config.state_path)
         )
+
+    def _external_evidence(
+        self,
+        state: CodeState,
+        *,
+        full_reconciliation: bool,
+        counters: dict[str, int],
+    ) -> ExternalEvidencePublication | None:
+        root = self.config.external_evidence_root
+        if root is None:
+            return None
+        started = time.perf_counter_ns()
+        try:
+            files = state.external_evidence_files(root)
+        except (OSError, ValueError) as exc:
+            publication = failed_external_publication(
+                root,
+                reason="input_projection_failed",
+                error=exc,
+            )
+        else:
+            if not full_reconciliation:
+                publication = skipped_external_publication(
+                    root,
+                    files=files,
+                    reason="partial_code_run_not_publishable",
+                )
+            else:
+                version = self.external_evidence_provider.tool_version()
+                exact = None
+                comparable = None
+                if version is not None:
+                    exact, comparable = state.external_evidence_baselines(
+                        root=root,
+                        tool_name=self.external_evidence_provider.tool_name,
+                        tool_version=version,
+                        configuration_signature=(
+                            self.external_evidence_provider.configuration_signature
+                        ),
+                        files=files,
+                    )
+                if exact is not None:
+                    publication = self.external_evidence_provider.replay(
+                        root,
+                        files,
+                        exact,
+                    )
+                else:
+                    publication = self.external_evidence_provider.run(
+                        root,
+                        files,
+                        baseline=comparable,
+                        scratch_root=self.config.state_path.parent,
+                    )
+        counters["external_tool_runs"] = 1
+        counters["external_diagnostics"] = publication.diagnostic_count
+        counters["external_added_diagnostics"] = publication.added_count
+        counters["external_resolved_diagnostics"] = publication.resolved_count
+        counters["external_cache_hits"] = int(publication.execution == "cache_replay")
+        counters["external_errors"] = int(
+            publication.status in {"failed", "timeout", "unavailable"}
+        )
+        counters["external_milliseconds"] = (
+            time.perf_counter_ns() - started
+        ) // 1_000_000
+        return publication
 
     def _resolve_analyzer_identity(
         self,
@@ -744,6 +822,13 @@ class CodeRoute:
                 counters["graph_milliseconds"] = (
                     time.perf_counter_ns() - graph_started
                 ) // 1_000_000
+                self.cancellation.checkpoint()
+                external_evidence = self._external_evidence(
+                    state,
+                    full_reconciliation=full_reconciliation,
+                    counters=counters,
+                )
+                self.cancellation.checkpoint()
                 summary = CodeRouteSummary(
                     processing_signature=self.processing_signature,
                     **counters,
@@ -757,6 +842,7 @@ class CodeRoute:
                         or self.config.selection.active
                     ),
                     graph_current=True,
+                    external_evidence=external_evidence,
                 )
                 self.framework_state.complete_route_phase(
                     self.framework_run_id,

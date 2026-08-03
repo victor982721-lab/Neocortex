@@ -18,12 +18,48 @@ confiable sin autorizar trabajo común sobre el corpus. El preset:
 - omite `DedupPlanner`, `FrameworkActions`, catálogo y organización;
 - excluye código generado y vendorizado;
 - escribe estado derivado en un directorio separado, pero no modifica los
-  archivos de la raíz analizada.
+  archivos de la raíz analizada;
+- produce evidencia externa Ruff v1 sobre cada Python vigente que Code publicó
+  con fingerprint exacto —incluidos parseos internos parciales—, con ejecución
+  aislada, acotada y sin autoridad de mutación.
 
 No es una consulta read-only: crea o actualiza `framework.sqlite3`,
 `dedup.sqlite3` y `code.sqlite3` en el estado indicado. El código observado se
 trata como datos; nunca se ejecuta ni adquiere autoridad para pedir
 herramientas, permisos, red o mutaciones.
+
+## Evidencia externa Ruff v1
+
+Ruff es parte del runtime canónico y se ejecuta únicamente dentro de
+`--self-analysis`. Code entrega una lista explícita de versiones Python
+vigentes, con fingerprint exacto, no generadas y no vendorizadas; Ruff no
+recorre la raíz por su cuenta. Esto incluye archivos cuyo parser interno quedó
+`partial`, para que las reglas sintácticas E9 no desaparezcan del denominador.
+NeoCortex lee y verifica cada versión por handle, materializa una copia temporal
+con el mismo árbol relativo bajo el directorio de estado disjunto y Ruff sólo
+abre esas copias. No confía en `TEMP/TMP` para elegir staging: cualquier scratch
+que resuelva dentro de la raíz observada falla cerrado. Después vuelve a
+verificar los mismos inputs publicados; cualquier ruta desconocida, cambio
+concurrente en ellos, salida inválida, timeout, overflow o límite alcanzado hace
+fallar o abstener la evidencia externa sin ocultar el estado AST útil. Una ruta
+nueva sólo entra después de que el inventario la publique.
+
+El adaptador invoca `python -I -m ruff check` con `--isolated`, Python 3.13,
+reglas `E4,E7,E9,F`, JSON, `--no-cache` y todas las formas de fix deshabilitadas.
+Usa cwd y entorno controlados, elimina overrides `RUFF_*` y no ejecuta ni
+importa el código observado. Los límites públicos son 2 000 archivos y 512 MiB
+de inputs, 50 archivos/24 KiB de argv por lote, 30 s por lote y 180 s totales,
+512 MiB de memoria, 10 000 diagnósticos, 8 MiB de stdout, 64 KiB de stderr,
+4 MiB de resultado y 8 MiB de provenance. La versión, configuración, inputs,
+digest recomputado, cobertura, límites y resultado quedan en
+`external_tool_runs`; la proyección vigente se publica en `diagnostics` como
+`external:ruff`, advisory y sin autoridad de mutación.
+
+La publicación de Ruff, sus diagnósticos y la finalización de Code comparten una
+transacción. Un replay exacto valida de nuevo fingerprints, registra
+`skipped/cache_replay` y referencia la ejecución completa reutilizada sin
+duplicar diagnósticos. Una corrida parcial, indisponible o fallida no puede
+aprobar el gate externo ni dejar una proyección vieja aparentando frescura.
 
 ## Preflight y disjunción obligatoria
 
@@ -140,7 +176,8 @@ documento liga:
 - run, modo, raíz, identidad y estado;
 - scan, modo de inventario, journal disponible con cursores o estado
   `unavailable`, reglas y firma de política;
-- ruta `code`, `input_source=inventory_snapshot`, firma y summary efectivos;
+- ruta `code`, `input_source=inventory_snapshot`, firma, summary y contadores
+  de evidencia externa efectivos;
 - los cuatro conteos de seguridad en cero;
 - los dos arrays argv canónicos.
 
@@ -178,8 +215,9 @@ Neocortex --state-directory $State --code-review --code-json
 Neocortex --state-directory $State --code-review --code-review-limit 50 --code-json
 ```
 
-El contrato `neocortex.code-review/v3` conserva íntegramente las dos capas v2 y
-declara esa compatibilidad en el envelope. `findings` selecciona
+El contrato `neocortex.code-review/v4` conserva íntegramente las capas v2/v3 y
+declara ambas compatibilidades en el envelope. Añade `external_evidence` sin
+cambiar ranking, actionability o selección de paquetes. `findings` selecciona
 sólo diagnósticos Python confirmados `high_complexity` y `long_function`,
 enumera hasta 10 000 hotspots y mantiene el ranking v2 auditable. Devuelve 10
 por defecto, primero uno por archivo y luego un segundo hasta completar;
@@ -220,7 +258,10 @@ No usa coincidencias de nombre, ruta, módulo ni caller compartido. Cada relaci�
 conserva profundidad, símbolo puente, confianza mínima y provenance; el paquete
 expone riesgo conservador, contratos, orden de ejecución, validación y los gates
 históricos de caracterización exacta, cero hotspots sustitutos, cero
-resoluciones corregidas/perdidas y replay completamente incremental. Los guards
+resoluciones corregidas/perdidas y replay completamente incremental. También
+expone `no_added_ruff_diagnostics`: sólo puede aprobarse frente a una línea base
+Ruff comparable. La primera publicación sana queda `baseline`; si falta el
+proveedor o cambia versión/configuración queda `not_evaluated`. Los guards
 no son objetivos automáticos y el paquete nunca autoriza modificar código.
 
 `probable_dead_symbol` se informa únicamente como conteo suprimido. Una muestra
@@ -304,14 +345,16 @@ raíz/framework ligadas. Un snapshot full terminado con journal no disponible
 puede leerse como `freshness=publication_only`, `current=false` y limitación
 explícita: demuestra qué se publicó, no que el árbol vivo no cambió después.
 Journal `advanced`/`discontinuous`, vínculo incompatible, sidecars o schema no
-admitido causan abstención con código `2`. El digest excluye timestamps e IDs
-SQLite de corrida para que un replay sin cambios conserve identidad de
-contenido.
+admitido causan abstención con código `2`. El digest excluye timestamps, rutas
+locales, IDs SQLite, firma de input local y modo full/replay. Sí incorpora la
+comparabilidad y el gate Ruff: adquirir por primera vez una línea base comparable
+cambia honestamente la decisión aunque los diagnósticos permanezcan iguales.
 
 ## Comparación read-only entre publicaciones
 
 `--code-publication-diff` convierte la comparación de dos publicaciones Code
-en una operación canónica, acotada y determinista. El argumento identifica el
+en una operación canónica, acotada y determinista. El envelope v2 conserva v1 y
+añade un delta Ruff comparable. El argumento identifica el
 estado baseline; `--state-directory` identifica la publicación actual:
 
 ```powershell
@@ -331,6 +374,10 @@ resueltas; los cambios de texto que desplazan un rango aparecen honestamente
 como sitios exclusivos de una publicación. Los hotspots se identifican por
 ruta relativa y qualified name. El conteo `probable_dead` se muestra sólo como
 delta no calibrado y nunca autoriza cambios de código o corpus.
+Ruff se compara únicamente cuando ambas publicaciones están listas y conservan
+la misma versión y firma de configuración; entonces informa IDs comunes,
+añadidos y resueltos y el gate correspondiente. Un baseline histórico sin Ruff
+o incompatible produce `not_evaluated`, no corrupción ni un falso aprobado.
 
 ## Mini-root de laboratorio
 
@@ -342,12 +389,14 @@ $Lab = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\fixtures'
 $MiniRoot = Join-Path $Lab 'mini-root'
 $MiniState = Join-Path $Lab 'mini-state'
 
-Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState --code-max-count 100
+Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
 Neocortex --state-directory $MiniState --code-review --code-json
 ```
 
-El ejemplo presupone que un fixture sintético ya creó `$MiniRoot`; no autoriza
+El ejemplo presupone que un fixture sintético de 20–50 archivos ya creó
+`$MiniRoot`; esa raíz acotada es el límite físico y permite una publicación
+completa de evidencia Ruff. No autoriza
 crear, copiar o limpiar datos fuera del laboratorio. Use un estado nuevo por
 secuencia aislada; para validar full→incremental/no-op/cambio, reutilice ese
 mismo estado sólo dentro de la secuencia controlada y con la misma configuración.

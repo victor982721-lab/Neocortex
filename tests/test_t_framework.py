@@ -154,10 +154,16 @@ class CommandLineTests(unittest.TestCase):
             (),
             {"route_results": {"image": {"adult_unavailable": 1}}},
         )()
+        external = type(
+            "Result",
+            (),
+            {"route_results": {"code": {"external_errors": 1}}},
+        )()
         self.assertFalse(_has_strict_route_errors(clean))
         self.assertTrue(_has_strict_route_errors(partial))
         self.assertTrue(_has_strict_route_errors(cached))
         self.assertTrue(_has_strict_route_errors(adult_unavailable))
+        self.assertTrue(_has_strict_route_errors(external))
 
     def test_image_report_exposes_adult_model_unavailability(self) -> None:
         result = type(

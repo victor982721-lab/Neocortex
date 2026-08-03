@@ -272,7 +272,14 @@ def _print_code_report(result) -> None:
         f"code_read_ms={summary.read_milliseconds} "
         f"code_analyze_ms={summary.analyze_milliseconds} "
         f"code_persist_ms={summary.persist_milliseconds} "
-        f"code_graph_ms={summary.graph_milliseconds}"
+        f"code_graph_ms={summary.graph_milliseconds} "
+        f"code_external_runs={summary.external_tool_runs} "
+        f"code_external_diagnostics={summary.external_diagnostics} "
+        f"code_external_added={summary.external_added_diagnostics} "
+        f"code_external_resolved={summary.external_resolved_diagnostics} "
+        f"code_external_cache_hits={summary.external_cache_hits} "
+        f"code_external_errors={summary.external_errors} "
+        f"code_external_ms={summary.external_milliseconds}"
     )
 
 
@@ -426,6 +433,7 @@ STRICT_ROUTE_ERROR_FIELDS = (
     "document_timeouts",
     "catalog_errors",
     "adult_unavailable",
+    "external_errors",
 )
 
 

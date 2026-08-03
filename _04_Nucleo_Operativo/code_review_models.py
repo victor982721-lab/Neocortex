@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from .code_external_evidence import ExternalEvidenceStatus
 from .code_review_actionability import (
     Actionability,
     ChangeRisk,
@@ -13,8 +14,11 @@ from .code_review_actionability import (
 )
 
 
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v3"
-CODE_REVIEW_COMPATIBLE_SCHEMAS = ("neocortex.code-review/v2",)
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v4"
+CODE_REVIEW_COMPATIBLE_SCHEMAS = (
+    "neocortex.code-review/v2",
+    "neocortex.code-review/v3",
+)
 
 ReviewStatus = Literal["ready", "abstained"]
 ReviewFreshness = Literal["current", "publication_only"]
@@ -250,6 +254,7 @@ class CodeReviewResult:
     findings: tuple[CodeReviewFinding, ...]
     recommendations: tuple[CodeReviewRecommendation, ...]
     work_packages: tuple[CodeReviewWorkPackage, ...]
+    external_evidence: ExternalEvidenceStatus | None
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
 

@@ -14,6 +14,10 @@ from .code_review_models import (
     CodeReviewWorkPackage,
     RecommendationStatus,
 )
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    external_status_digest_payload,
+)
 from .semantic_models import canonical_json, fingerprint_text
 
 
@@ -31,6 +35,7 @@ def build_code_review_digest(
     work_package_status: RecommendationStatus,
     work_package_reason: str | None,
     work_packages: tuple[CodeReviewWorkPackage, ...],
+    external_evidence: ExternalEvidenceStatus,
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     """Hash every decision-bearing field while excluding local database paths."""
@@ -57,6 +62,7 @@ def build_code_review_digest(
                 asdict(recommendation) for recommendation in recommendations
             ],
             "work_packages": [asdict(package) for package in work_packages],
+            "external_evidence": external_status_digest_payload(external_evidence),
             "limitations": list(limitations),
         }
     )

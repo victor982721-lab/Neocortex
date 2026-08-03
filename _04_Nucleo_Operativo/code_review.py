@@ -34,6 +34,10 @@ from .code_review_models import (
     RecommendationStatus,
     build_code_review_recommendations,
 )
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    read_external_evidence,
+)
 from .code_review_serialization import build_code_review_digest
 from .code_review_work_packages import (
     CODE_REVIEW_PLANNING,
@@ -110,6 +114,7 @@ class _ReviewRead:
     planning_findings: tuple[CodeReviewFinding, ...]
     planning_links: tuple[CodeReviewPlanningLink, ...]
     enumeration_truncated: bool
+    external_evidence: ExternalEvidenceStatus
 
 
 _CANDIDATE_SQL = """
@@ -695,6 +700,11 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         ).fetchone()
         current_python = int(current_python_files)
         complete_python = int(complete_python_files or 0)
+        external_evidence = read_external_evidence(
+            connection,
+            -1 if latest_run is None else latest_run.analysis_run_id,
+            enforce_current_runtime=True,
+        )[0]
     return _ReviewRead(
         latest_run=latest_run,
         coverage=CodeReviewCoverage(
@@ -711,6 +721,7 @@ def _read_review(path: Path, *, limit: int) -> _ReviewRead:
         planning_findings=planning_findings,
         planning_links=planning_links,
         enumeration_truncated=total_candidates > len(candidates),
+        external_evidence=external_evidence,
     )
 
 
@@ -731,6 +742,7 @@ def _abstained(path: Path, reason: str) -> CodeReviewResult:
         findings=(),
         recommendations=(),
         work_packages=(),
+        external_evidence=None,
         limitations=(),
         digest=None,
     )
@@ -776,6 +788,13 @@ def review_code_state(
         limitations.insert(0, freshness_limitation)
     if read.enumeration_truncated:
         limitations.append("candidate_enumeration_truncated")
+    if read.external_evidence.status != "ready":
+        limitations.append(
+            "ruff_external_evidence_not_ready:"
+            + (read.external_evidence.reason or read.external_evidence.status)
+        )
+    elif read.external_evidence.gate == "baseline":
+        limitations.append("ruff_external_evidence_baseline_only")
     snapshot = CodeReviewSnapshot(
         analysis_run_id=read.latest_run.analysis_run_id,
         framework_run_id=read.latest_run.framework_run_id,
@@ -824,6 +843,7 @@ def review_code_state(
         findings=read.findings,
         recommendations=recommendations,
         work_packages=work_packages,
+        external_evidence=read.external_evidence,
         limitations=limitation_tuple,
         digest=build_code_review_digest(
             snapshot,
@@ -838,6 +858,7 @@ def review_code_state(
             work_package_status=work_package_status,
             work_package_reason=work_package_reason,
             work_packages=work_packages,
+            external_evidence=read.external_evidence,
             limitations=limitation_tuple,
         ),
     )

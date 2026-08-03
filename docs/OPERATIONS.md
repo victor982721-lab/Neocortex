@@ -112,7 +112,7 @@ $Lab = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\fixtures'
 $MiniRoot = Join-Path $Lab 'mini-root'
 $MiniState = Join-Path $Lab 'mini-state'
 
-Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState --code-max-count 100
+Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
 ```
 
@@ -344,6 +344,9 @@ Neocortex --code-doctor
 - FFprobe se requiere para el sondeo de audio; FFmpeg se informa en el
   diagnóstico de audio.
 - qpdf es opcional y sólo participa en recuperación estructural PDF.
+- Ruff pertenece al runtime base. `--code-doctor --code-json` debe mostrar su
+  distribución y versión desde el mismo intérprete de Neocortex; una copia
+  global encontrada en `PATH` no satisface esta capacidad.
 - La primera transcripción puede descargar el modelo Whisper. Use
   `--audio-local-models-only` para prohibir descargas.
 - Los modelos semánticos sólo se adquieren mediante
@@ -379,8 +382,10 @@ No ejecute una cola operativa grande antes de demostrar en un estado aislado
 20–50 elementos, publicación, búsquedas representativas y segunda corrida
 incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
-No ejecute herramientas externas ni descargue modelos para validar una
-instalación básica.
+No ejecute manualmente herramientas externas ni descargue modelos para validar
+una instalación básica. `--self-analysis` supervisa por sí mismo su evidencia
+Ruff fija; la validación del wheel debe confirmar que esa dependencia está en el
+runtime.
 
 ## Cancelación de una corrida normal
 

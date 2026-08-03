@@ -53,7 +53,7 @@ La METADATA de `0.7.2` separa el cierre de runtime así:
 
 | Selección | Requisitos directos |
 |---|---|
-| base | `rich`, `xxhash` |
+| base | `rich`, `ruff`, `xxhash` |
 | `documents` | `Pillow`, `PyMuPDF`, `pdfminer.six`, `pytesseract` |
 | `audio` | `faster-whisper` |
 | `image` | `Pillow`, `nudenet` |
@@ -73,9 +73,10 @@ declaran presencia, no validan los rangos de versiones: el resolver hermético y
 `--no-deps` permite comprobar versión y ayuda porque esas rutas de arranque no
 importan engines. No demuestra que `KnowledgeSearchService`, inventario o una
 ruta operativa funcionen: para ello el venv aislado debe contener al menos el
-cierre base de `rich` y `xxhash`. Ningún probe de instalación debe cargar o
-descargar modelos; la disponibilidad de modelos se valida después, de forma
-offline y contra cachés explícitas.
+cierre base de `rich`, `ruff` y `xxhash`. Ruff debe resolverse dentro del mismo
+runtime; una copia global en `PATH` no satisface el autoanálisis. Ningún probe
+de instalación debe cargar o descargar modelos; la disponibilidad de modelos
+se valida después, de forma offline y contra cachés explícitas.
 
 Conserva el wheel y sdist `0.7.2`, su `constraints.txt`, el inventario del
 wheelhouse, hashes de procedencia y resultados de las barreras como evidencia

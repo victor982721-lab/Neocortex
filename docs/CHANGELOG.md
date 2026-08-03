@@ -28,6 +28,16 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
   scan/journal, evidencia code, cuatro conteos cero y argv canónicos
   `analyze`/`status` como arrays acotados; si USN no está disponible registra el
   fallback completo sin checkpoint ni cursor ficticio.
+- External Code Evidence v1 integra Ruff en el autoanálisis protegido sobre el
+  manifest Python ya publicado: configuración aislada `E4,E7,E9,F`, sin caché
+  ni fixes, entorno/cwd controlados, límites de tiempo/memoria/salida y
+  fingerprints verificados antes/después. Publica fila, diagnósticos advisory y
+  finalización Code atómicamente; el replay exacto no duplica evidencia.
+- `--code-review` v4 y `--code-publication-diff` v2 exponen cobertura y deltas
+  Ruff comparables con el gate `no_added_ruff_diagnostics`, preservan lectura de
+  sus schemas anteriores y dejan el subestado/gate externo en `not_evaluated`
+  ante proveedor, versión o configuración incompatible, sin cambiar el estado
+  interno del review/diff, el ranking ni autorizar mutaciones.
 - Inventario Dedup v9: la publicación generacional ya no depende de USN. Un
   checkpoint conserva cursor completo o tres nulos; la corrida normal usa full
   scan portable cuando USN falta y mantiene Code/rutas incrementales por caché.
@@ -110,7 +120,7 @@ no se copian aquí para evitar que se conviertan en datos históricos sin contex
 
 ### Corregido
 
-- La instalación base se limita a `rich` y `xxhash`; `documents`, `audio`,
+- La instalación base se limita a `rich`, `ruff` y `xxhash`; `documents`, `audio`,
   `image`, `semantic` y `ui` poseen extras explícitos, y `full` conserva la
   unión compatible del runtime integrado anterior. Pillow permanece declarado
   en cada dominio que lo importa directamente.
