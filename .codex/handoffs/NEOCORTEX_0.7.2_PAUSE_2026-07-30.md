@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, Hito 3 en aceptación final instalada.
+> Actualizado: 2026-08-03, Hito 3 aceptado y listo para publicación.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > Su contenido sustituye por completo el handoff de release del 30–31 de julio.
 > El historial anterior permanece recuperable en Git; no debe ejecutarse como
@@ -8,7 +8,7 @@
 
 ## Resultado actual
 
-El checkpoint vigente es el **Hito 3 de la plataforma multianalizador** en
+El checkpoint vigente cierra el **Hito 3 de la plataforma multianalizador** en
 `codex/neocortex-trusted-deep-v1`. El perfil explícito `trusted-deep` sólo
 acepta la identidad física exacta de
 `C:\Users\Victor\Neocortex\Repository`; nunca es predeterminado ni se admite
@@ -16,21 +16,24 @@ sobre mini-roots o raíces arbitrarias. Añade Pytest 9.1.0 y Coverage 7.14.1 a
 los siete proveedores estáticos, con branch coverage, contextos dinámicos,
 selección declarada, límites duros, shards reanudables y replay exacto.
 
-El piloto instalado rc4 procesó 551 candidatos Code y dejó los ocho proveedores
-`ready`, sin errores externos. La selección representativa fue honesta y
-parcial: 22/22 pruebas aprobaron; Coverage enlazó 708 relaciones test→símbolo,
-5 308 símbolos y 272 módulos. Midió 3 429/51 766 líneas (6.6240 %) y
-322/16 516 salidas de rama (1.9496 %). Ambos gates públicos —`tests_passed` y
+La aceptación instalada final procesó 551 candidatos Code y dejó los ocho
+proveedores `ready`, sin errores externos. La selección representativa fue
+honesta y parcial: 22/22 pruebas aprobaron; Coverage enlazó 708 relaciones
+test→símbolo, 5 310 símbolos y 272 módulos. Midió 3 429/51 802 líneas
+(6.6194 %) y 322/16 532 salidas de rama (1.9477 %). Ambos gates públicos
+—`tests_passed` y
 `coverage_available`— quedaron `passed`; la publicación conserva explícitamente
 que no es cobertura completa del proyecto y que no observa subprocesses.
 
-La ejecución inicial empleó 29 procesos externos y 220.330 s agregados de
-proveedores; Pytest/Coverage ocupó 111.559 s. El replay exacto terminó en 18.8 s
-de pared: reutilizó 551/551 entradas Code y 8/8 proveedores, no repitió análisis,
-persistencia ni grafo y redujo la ruta externa a 1.261 s. Los proveedores
-estáticos abrieron cero procesos; trusted-deep conservó una invocación acotada
-de preparación para verificar 10 183 524 bytes de soporte y 8 940 159 bytes de
-inputs antes de reutilizar su publicación.
+La ejecución final (`analysis_run_id=13`) empleó 29 procesos externos y
+214.436 s en los contadores de proveedores; la ruta externa completa informó
+214.765 s y Pytest/Coverage ocupó 112.837 s. El replay exacto
+(`analysis_run_id=14`) terminó en 20.381 s de pared: reutilizó 551/551 entradas
+Code y 8/8 proveedores, no releyó bytes Code ni repitió análisis, persistencia
+o grafo y redujo la ruta externa a 1.922 s. Los proveedores estáticos abrieron
+cero procesos; trusted-deep conservó una invocación acotada de preparación para
+verificar 10 194 651 bytes de soporte y 8 950 931 bytes de inputs antes de
+reutilizar su publicación.
 
 La corrida real cerró tres defectos operativos en vez de rodearlos: preserva
 `HOME`/`USERPROFILE`, `PATH`/`PATHEXT` y los arcos negativos que Coverage usa
@@ -47,16 +50,25 @@ Review v7 está `ready` y el work package vigente es
 evidencia Coverage empaquetada no se enlazaba al nombre corto del analizador;
 la corrección resuelve sólo el sufijo cualificado único, conserva nombres
 locales y se abstiene ante dos candidatos. La evidencia real del objetivo es
-77.27 % de ramas y queda disponible para proyectar pruebas protectoras, líneas,
-ramas y su gate. Diff v5 contra Hito 2 es factual pero no comparable: Hito 2 no
-tenía Coverage y las firmas de proveedores cambiaron con los nuevos inputs; no
-se inventa un veredicto de mejora o regresión.
+91.72 % de líneas y 77.27 % de ramas, enlaza ocho pruebas protectoras y aprueba
+`work_package_target_protected`. Diff v5 contra Hito 2 es factual pero no
+comparable: Hito 2 no tenía Coverage y las firmas de proveedores cambiaron con
+los nuevos inputs; no se inventa un veredicto de mejora o regresión.
 
-El wheel rc5 instalado tiene 1 465 968 bytes, SHA-256
-`E0607B77A9B48E928CF505E74B5FEBD5938AA3DEA00B23C2D4124C534EF4ABC1` y
-`pip check` limpio. Falta únicamente reconstruir el artefacto después del fix
-de alias y de esta documentación, repetir una vez la publicación afectada,
-comprobar status/review/diff finales y publicar el hito.
+La publicación final conserva 0 findings Ruff protected, 157 Ruff trusted,
+386 Mypy y 643 Pyright. El consenso tipado registra 242 coincidencias, 90 sólo
+Mypy, 259 sólo Pyright, cero contradicciones y cero incomparables. Ruff Analyze
+y Grimp publican 1 058 relaciones cada uno; Complexipy publica 5 014 métricas y
+Grimp 1 103. Los gates de providers, imports y contratos están `passed`; los
+gates de cobertura global permanecen honestamente no comparables frente a Hito
+2.
+
+El wheel final instalado tiene 1 466 105 bytes, 285 miembros, SHA-256
+`074095F0F9A39DD9F49246D5C4D6C957034156E77FD03FDC35CE2CA29380E092`,
+integridad ZIP y `pip check` limpios. `doctor capabilities` informa todas las
+capacidades disponibles y `code-doctor` confirma schema `ok`, cero violaciones
+de foreign keys y los ocho proveedores disponibles. El launcher estable no se
+promovió, no se procesó corpus personal y no se modificó estado durable vivo.
 
 El **Hito 2 de la plataforma multianalizador** quedó publicado desde
 `codex/neocortex-architecture-analysis-v1`. Code schema v4 conserva las
@@ -1143,20 +1155,15 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar y publicar el Hito 3.** Construir el wheel final, repetir una sola
-   vez la publicación afectada sobre el estado aislado, ejecutar el replay
-   exacto, status/review/diff instalados y las barreras proporcionales; después
-   commit del handoff, push, PR listo, checks propios, merge y verificación
-   `main == origin/main`. Este checkpoint no cierra el objetivo terminal.
-2. **Abrir el Hito 4 desde ese `main`.** Seleccionar Vulture o una alternativa
-   mediante fixture etiquetado y holdout; correlacionar uso estático, grafo,
-   Pyright, reexports, callbacks, registries, fixtures, entry points, Protocols
-   y cobertura dinámica sin autoridad de borrado.
-3. **Publicar consenso de código potencialmente no usado.** Exponer
+1. **Abrir el Hito 4 desde el `main` publicado.** Seleccionar Vulture o una
+   alternativa mediante fixture etiquetado y holdout; correlacionar uso
+   estático, grafo, Pyright, reexports, callbacks, registries, fixtures, entry
+   points, Protocols y cobertura dinámica sin autoridad de borrado.
+2. **Publicar consenso de código potencialmente no usado.** Exponer
    `explained_usage`, `dynamic_usage_possible`, `insufficient_evidence` y
    `probable_unused_high_consensus`, con precision, recall, abstención, review,
    diff y work packages como consumidores reales.
-4. **Continuar Hitos 5–7 en el orden autorizado.** Semgrep/supply chain,
+3. **Continuar Hitos 5–7 en el orden autorizado.** Semgrep/supply chain,
    mutación/historia Git/analítica del grafo y la integración final se abren sólo
    después de publicar y fusionar su hito anterior.
 
