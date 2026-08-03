@@ -29,7 +29,7 @@ from .sqlite_schema_contract import (
 # region [01] Versioned DDL
 
 
-CODE_SCHEMA_VERSION = 3
+CODE_SCHEMA_VERSION = 4
 
 _V1_DDL = (
     """CREATE TABLE metadata(
@@ -523,6 +523,81 @@ _V3_DDL = (
 )
 
 
+_V4_DDL = (
+    """CREATE TABLE external_metrics(
+        metric_id INTEGER PRIMARY KEY,
+        tool_run_id INTEGER NOT NULL,
+        portable_metric_id TEXT NOT NULL,
+        subject_kind TEXT NOT NULL CHECK(subject_kind IN (
+            'file','symbol','module','project','run','contract','scc'
+        )),
+        subject_key TEXT NOT NULL,
+        category TEXT NOT NULL,
+        metric_name TEXT NOT NULL,
+        value REAL NOT NULL,
+        unit TEXT NOT NULL,
+        version_id INTEGER,
+        symbol_id INTEGER,
+        project_id INTEGER,
+        metadata_json TEXT NOT NULL,
+        UNIQUE(tool_run_id,portable_metric_id),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(project_id) REFERENCES projects(project_id)
+    )""",
+    """CREATE INDEX external_metrics_run_idx
+        ON external_metrics(tool_run_id,category,metric_name)""",
+    """CREATE INDEX external_metrics_subject_idx
+        ON external_metrics(subject_kind,subject_key,metric_name,tool_run_id)""",
+    """CREATE TABLE external_relations(
+        relation_id INTEGER PRIMARY KEY,
+        tool_run_id INTEGER NOT NULL,
+        portable_relation_id TEXT NOT NULL,
+        relation_kind TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK(source_kind IN (
+            'file','symbol','module','project','run','contract','scc'
+        )),
+        source_key TEXT NOT NULL,
+        target_kind TEXT NOT NULL CHECK(target_kind IN (
+            'file','symbol','module','project','run','contract','scc'
+        )),
+        target_key TEXT NOT NULL,
+        directed INTEGER NOT NULL CHECK(directed IN (0,1)),
+        confidence REAL CHECK(
+            confidence IS NULL OR (confidence>=0.0 AND confidence<=1.0)
+        ),
+        source_version_id INTEGER,
+        source_symbol_id INTEGER,
+        source_project_id INTEGER,
+        target_version_id INTEGER,
+        target_symbol_id INTEGER,
+        target_project_id INTEGER,
+        metadata_json TEXT NOT NULL,
+        UNIQUE(tool_run_id,portable_relation_id),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY(source_version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(source_symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(source_project_id) REFERENCES projects(project_id),
+        FOREIGN KEY(target_version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(target_symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(target_project_id) REFERENCES projects(project_id)
+    )""",
+    """CREATE INDEX external_relations_run_idx
+        ON external_relations(tool_run_id,relation_kind)""",
+    """CREATE INDEX external_relations_source_idx
+        ON external_relations(
+            source_kind,source_key,relation_kind,target_kind,target_key,tool_run_id
+        )""",
+    """CREATE INDEX external_relations_target_idx
+        ON external_relations(
+            target_kind,target_key,relation_kind,source_kind,source_key,tool_run_id
+        )""",
+)
+
+
 # endregion [01]
 
 
@@ -619,6 +694,7 @@ def _build_current_schema(connection: sqlite3.Connection) -> None:
     _execute(connection, _V1_DDL)
     _execute(connection, _V2_DDL)
     _execute(connection, _V3_DDL)
+    _execute(connection, _V4_DDL)
 
 
 @lru_cache(maxsize=1)
@@ -709,6 +785,13 @@ def _create_fresh(connection: sqlite3.Connection, applied_ns: int) -> None:
         "normalized multi-provider external code evidence",
         applied_ns + 2,
     )
+    _execute(connection, _V4_DDL)
+    _record_migration(
+        connection,
+        4,
+        "portable external provider metrics and relations",
+        applied_ns + 3,
+    )
 
 
 def _migrate_one_to_two(connection: sqlite3.Connection, applied_ns: int) -> None:
@@ -727,6 +810,16 @@ def _migrate_two_to_three(connection: sqlite3.Connection, applied_ns: int) -> No
         connection,
         3,
         "normalized multi-provider external code evidence",
+        applied_ns,
+    )
+
+
+def _migrate_three_to_four(connection: sqlite3.Connection, applied_ns: int) -> None:
+    _execute(connection, _V4_DDL)
+    _record_migration(
+        connection,
+        4,
+        "portable external provider metrics and relations",
         applied_ns,
     )
 
@@ -765,8 +858,12 @@ def initialize_code_state(path: Path) -> None:
             elif current == 1:
                 _migrate_one_to_two(connection, applied_ns)
                 _migrate_two_to_three(connection, applied_ns + 1)
+                _migrate_three_to_four(connection, applied_ns + 2)
             elif current == 2:
                 _migrate_two_to_three(connection, applied_ns)
+                _migrate_three_to_four(connection, applied_ns + 1)
+            elif current == 3:
+                _migrate_three_to_four(connection, applied_ns)
             else:
                 raise RuntimeError(f"unsupported code migration start: {current}")
             validate_code_schema(connection)

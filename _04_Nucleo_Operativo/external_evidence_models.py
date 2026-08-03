@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -28,6 +29,10 @@ ProviderGateStatus = Literal["passed", "failed", "baseline", "not_evaluated", "a
 TypeConsensusKind = Literal[
     "both_report", "mypy_only", "pyright_only", "contradictory", "not_comparable"
 ]
+ExternalSubjectKind = Literal["file", "symbol", "module", "project", "run", "contract", "scc"]
+_EXTERNAL_SUBJECT_KINDS = frozenset(
+    {"file", "symbol", "module", "project", "run", "contract", "scc"}
+)
 
 EXTERNAL_PROVIDER_SCHEMA = "neocortex.external-provider/v1"
 EXTERNAL_SUITE_SCHEMA = "neocortex.external-evidence-suite/v1"
@@ -246,6 +251,114 @@ class ExternalProviderFinding:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ExternalProviderMetric:
+    """One portable numeric observation owned by an external provider run."""
+
+    portable_metric_id: str
+    subject_kind: ExternalSubjectKind
+    subject_key: str
+    category: str
+    metric_name: str
+    value: float
+    unit: str
+    version_id: int | None = None
+    symbol_id: int | None = None
+    project_id: int | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.portable_metric_id or not self.subject_key:
+            raise ValueError("external metric identity cannot be empty")
+        if self.subject_kind not in _EXTERNAL_SUBJECT_KINDS:
+            raise ValueError("external metric subject kind is invalid")
+        if not self.category or not self.metric_name or not self.unit:
+            raise ValueError("external metric definition cannot be empty")
+        if isinstance(self.value, bool) or not math.isfinite(float(self.value)):
+            raise ValueError("external metric value must be finite")
+        object.__setattr__(self, "value", float(self.value))
+        for local_id in (self.version_id, self.symbol_id, self.project_id):
+            if local_id is not None and (
+                isinstance(local_id, bool) or not isinstance(local_id, int) or local_id < 1
+            ):
+                raise ValueError("external metric local identity is invalid")
+
+    def digest_payload(self) -> dict[str, object]:
+        return {
+            "portable_metric_id": self.portable_metric_id,
+            "subject_kind": self.subject_kind,
+            "subject_key": self.subject_key,
+            "category": self.category,
+            "metric_name": self.metric_name,
+            "value": self.value,
+            "unit": self.unit,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalProviderRelation:
+    """One portable, explainable edge owned by an external provider run."""
+
+    portable_relation_id: str
+    relation_kind: str
+    source_kind: ExternalSubjectKind
+    source_key: str
+    target_kind: ExternalSubjectKind
+    target_key: str
+    directed: bool = True
+    confidence: float | None = None
+    source_version_id: int | None = None
+    source_symbol_id: int | None = None
+    source_project_id: int | None = None
+    target_version_id: int | None = None
+    target_symbol_id: int | None = None
+    target_project_id: int | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.portable_relation_id or not self.relation_kind:
+            raise ValueError("external relation identity cannot be empty")
+        if not self.source_key or not self.target_key:
+            raise ValueError("external relation endpoint cannot be empty")
+        if (
+            self.source_kind not in _EXTERNAL_SUBJECT_KINDS
+            or self.target_kind not in _EXTERNAL_SUBJECT_KINDS
+        ):
+            raise ValueError("external relation endpoint kind is invalid")
+        if not isinstance(self.directed, bool):
+            raise ValueError("external relation direction must be a boolean")
+        if self.confidence is not None:
+            if isinstance(self.confidence, bool) or not 0.0 <= self.confidence <= 1.0:
+                raise ValueError("external relation confidence must be within 0..1")
+            object.__setattr__(self, "confidence", float(self.confidence))
+        for local_id in (
+            self.source_version_id,
+            self.source_symbol_id,
+            self.source_project_id,
+            self.target_version_id,
+            self.target_symbol_id,
+            self.target_project_id,
+        ):
+            if local_id is not None and (
+                isinstance(local_id, bool) or not isinstance(local_id, int) or local_id < 1
+            ):
+                raise ValueError("external relation local identity is invalid")
+
+    def digest_payload(self) -> dict[str, object]:
+        return {
+            "portable_relation_id": self.portable_relation_id,
+            "relation_kind": self.relation_kind,
+            "source_kind": self.source_kind,
+            "source_key": self.source_key,
+            "target_kind": self.target_kind,
+            "target_key": self.target_key,
+            "directed": self.directed,
+            "confidence": self.confidence,
+            "metadata": dict(self.metadata),
+        }
+
+
 def external_findings_digest(
     findings: Sequence[ExternalProviderFinding],
 ) -> str:
@@ -255,6 +368,83 @@ def external_findings_digest(
     )
     payload = canonical_json({"findings": ordered})
     return "external-findings-v1:xxh3_128:" + fingerprint_text(payload).xxh3_128
+
+
+def external_provider_result_digest(
+    findings: Sequence[ExternalProviderFinding],
+    metrics: Sequence[ExternalProviderMetric] = (),
+    relations: Sequence[ExternalProviderRelation] = (),
+) -> str:
+    """Digest all provider evidence while preserving the exact Hito 1 digest."""
+
+    if not metrics and not relations:
+        return external_findings_digest(findings)
+    ordered_findings = sorted(
+        (item.digest_payload() for item in findings),
+        key=lambda item: str(item["portable_finding_id"]),
+    )
+    ordered_metrics = sorted(
+        (item.digest_payload() for item in metrics),
+        key=lambda item: str(item["portable_metric_id"]),
+    )
+    ordered_relations = sorted(
+        (item.digest_payload() for item in relations),
+        key=lambda item: str(item["portable_relation_id"]),
+    )
+    payload = canonical_json(
+        {
+            "findings": ordered_findings,
+            "metrics": ordered_metrics,
+            "relations": ordered_relations,
+        }
+    )
+    return "external-provider-result-v2:xxh3_128:" + fingerprint_text(payload).xxh3_128
+
+
+def external_metric_identity(
+    provider_id: str,
+    *,
+    subject_kind: ExternalSubjectKind,
+    subject_key: str,
+    category: str,
+    metric_name: str,
+    unit: str,
+) -> str:
+    return external_signature(
+        "external-metric-v1",
+        {
+            "provider_id": provider_id,
+            "subject_kind": subject_kind,
+            "subject_key": subject_key,
+            "category": category,
+            "metric_name": metric_name,
+            "unit": unit,
+        },
+    )
+
+
+def external_relation_identity(
+    provider_id: str,
+    *,
+    relation_kind: str,
+    source_kind: ExternalSubjectKind,
+    source_key: str,
+    target_kind: ExternalSubjectKind,
+    target_key: str,
+    directed: bool = True,
+) -> str:
+    return external_signature(
+        "external-relation-v1",
+        {
+            "provider_id": provider_id,
+            "relation_kind": relation_kind,
+            "source_kind": source_kind,
+            "source_key": source_key,
+            "target_kind": target_kind,
+            "target_key": target_key,
+            "directed": directed,
+        },
+    )
 
 
 def external_root_identity(root: Path) -> str:
@@ -285,6 +475,8 @@ class ExternalProviderPublication:
     replay_source_tool_run_id: int | None = None
     verification_signature: str | None = None
     limitations: tuple[str, ...] = ()
+    metrics: tuple[ExternalProviderMetric, ...] = ()
+    relations: tuple[ExternalProviderRelation, ...] = ()
 
     @property
     def status(self) -> str:
@@ -312,6 +504,20 @@ class ExternalProviderBaseline:
     comparability_signature: str
     result_digest: str
     portable_finding_ids: tuple[str, ...]
+    portable_metric_ids: tuple[str, ...] = ()
+    portable_relation_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalProviderEvidence:
+    provider_id: str
+    tool_run_id: int
+    effective_tool_run_id: int | None
+    status: Literal["ready", "abstained"]
+    reason: str | None
+    findings: tuple[ExternalProviderFinding, ...] = ()
+    metrics: tuple[ExternalProviderMetric, ...] = ()
+    relations: tuple[ExternalProviderRelation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -338,6 +544,8 @@ class ExternalProviderStatus:
     mutation_authority: bool = False
     content_executed: bool = False
     counters: Mapping[str, int] = field(default_factory=dict)
+    metrics: int = 0
+    relations: int = 0
 
     def as_payload(self) -> dict[str, object]:
         return {
@@ -353,6 +561,8 @@ class ExternalProviderStatus:
             "eligible_files": self.eligible_files,
             "covered_files": self.covered_files,
             "findings": self.findings,
+            "metrics": self.metrics,
+            "relations": self.relations,
             "added": self.added,
             "resolved": self.resolved,
             "comparable": self.comparable,
@@ -447,15 +657,22 @@ __all__ = [
     "ExternalEvidenceProvider",
     "ExternalEvidenceSuiteStatus",
     "ExternalProviderBaseline",
+    "ExternalProviderEvidence",
     "ExternalProviderFinding",
+    "ExternalProviderMetric",
     "ExternalProviderPublication",
+    "ExternalProviderRelation",
     "ExternalProviderStatus",
     "ExternalRunInput",
+    "ExternalSubjectKind",
     "ProviderDescriptor",
     "ProviderGateEvaluation",
     "ProviderLimits",
     "TypeConsensusSummary",
     "external_findings_digest",
+    "external_metric_identity",
+    "external_provider_result_digest",
+    "external_relation_identity",
     "external_root_identity",
     "external_signature",
 ]

@@ -17,17 +17,23 @@ from .external_evidence_models import (
     AnalysisProfile,
     ExternalEvidenceSuiteStatus,
     ExternalProviderBaseline,
+    ExternalProviderEvidence,
     ExternalProviderFinding,
+    ExternalProviderMetric,
     ExternalProviderPublication,
+    ExternalProviderRelation,
     ExternalProviderStatus,
+    ExternalSubjectKind,
     ProviderGateEvaluation,
     TypeConsensusSummary,
-    external_findings_digest,
+    external_provider_result_digest,
 )
 from .semantic_models import canonical_json
 
 _PROVIDER_STATUS_LIMIT = 32
 _FINDING_LIMIT = 10_000
+_METRIC_LIMIT = 100_000
+_RELATION_LIMIT = 250_000
 _COUNTER_LIMIT = 128
 
 
@@ -116,7 +122,7 @@ def _insert_finding_projection(
     return _lastrowid(cursor)
 
 
-def publish_external_provider(
+def _publish_external_provider(
     connection: sqlite3.Connection,
     analysis_run_id: int,
     publication: ExternalProviderPublication,
@@ -244,7 +250,11 @@ def publish_external_provider(
         return tool_run_id
     if len(publication.findings) > _FINDING_LIMIT:
         raise ValueError("external provider findings exceed their bound")
-    if publication.result_digest != external_findings_digest(publication.findings):
+    if publication.result_digest != external_provider_result_digest(
+        publication.findings,
+        publication.metrics,
+        publication.relations,
+    ):
         raise ValueError("external provider result digest is inconsistent")
     for finding in publication.findings:
         if not _current_version_exists(connection, finding.version_id):
@@ -288,6 +298,89 @@ def publish_external_provider(
                 diagnostic_id,
             ),
         )
+    if len(publication.metrics) > _METRIC_LIMIT:
+        raise ValueError("external provider metrics exceed their bound")
+    if len({item.portable_metric_id for item in publication.metrics}) != len(publication.metrics):
+        raise ValueError("external provider produced duplicate metric identities")
+    for metric in publication.metrics:
+        if metric.version_id is not None and not _current_version_exists(
+            connection, metric.version_id
+        ):
+            raise RuntimeError("external metric version is no longer current")
+        connection.execute(
+            """INSERT INTO external_metrics(
+            tool_run_id,portable_metric_id,subject_kind,subject_key,category,
+            metric_name,value,unit,version_id,symbol_id,project_id,metadata_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                tool_run_id,
+                metric.portable_metric_id,
+                metric.subject_kind,
+                metric.subject_key,
+                metric.category,
+                metric.metric_name,
+                metric.value,
+                metric.unit,
+                metric.version_id,
+                metric.symbol_id,
+                metric.project_id,
+                canonical_json(dict(metric.metadata)),
+            ),
+        )
+    if len(publication.relations) > _RELATION_LIMIT:
+        raise ValueError("external provider relations exceed their bound")
+    if len({item.portable_relation_id for item in publication.relations}) != len(
+        publication.relations
+    ):
+        raise ValueError("external provider produced duplicate relation identities")
+    for relation in publication.relations:
+        for version_id in (relation.source_version_id, relation.target_version_id):
+            if version_id is not None and not _current_version_exists(connection, version_id):
+                raise RuntimeError("external relation version is no longer current")
+        connection.execute(
+            """INSERT INTO external_relations(
+            tool_run_id,portable_relation_id,relation_kind,source_kind,source_key,
+            target_kind,target_key,directed,confidence,source_version_id,
+            source_symbol_id,source_project_id,target_version_id,target_symbol_id,
+            target_project_id,metadata_json)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                tool_run_id,
+                relation.portable_relation_id,
+                relation.relation_kind,
+                relation.source_kind,
+                relation.source_key,
+                relation.target_kind,
+                relation.target_key,
+                int(relation.directed),
+                relation.confidence,
+                relation.source_version_id,
+                relation.source_symbol_id,
+                relation.source_project_id,
+                relation.target_version_id,
+                relation.target_symbol_id,
+                relation.target_project_id,
+                canonical_json(dict(relation.metadata)),
+            ),
+        )
+    return tool_run_id
+
+
+def publish_external_provider(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    publication: ExternalProviderPublication,
+) -> int:
+    """Atomically publish one provider beneath a running Code transaction."""
+
+    connection.execute("SAVEPOINT external_provider_publication")
+    try:
+        tool_run_id = _publish_external_provider(connection, analysis_run_id, publication)
+    except BaseException:
+        connection.execute("ROLLBACK TO external_provider_publication")
+        connection.execute("RELEASE external_provider_publication")
+        raise
+    connection.execute("RELEASE external_provider_publication")
     return tool_run_id
 
 
@@ -335,6 +428,22 @@ def read_external_provider_baselines(
                 (int(row["tool_run_id"]),),
             ).fetchall()
         )
+        metric_ids = tuple(
+            str(item[0])
+            for item in connection.execute(
+                """SELECT portable_metric_id FROM external_metrics
+                WHERE tool_run_id=? ORDER BY portable_metric_id""",
+                (int(row["tool_run_id"]),),
+            ).fetchall()
+        )
+        relation_ids = tuple(
+            str(item[0])
+            for item in connection.execute(
+                """SELECT portable_relation_id FROM external_relations
+                WHERE tool_run_id=? ORDER BY portable_relation_id""",
+                (int(row["tool_run_id"]),),
+            ).fetchall()
+        )
         baseline = ExternalProviderBaseline(
             int(row["tool_run_id"]),
             str(row["provider_id"]),
@@ -343,6 +452,8 @@ def read_external_provider_baselines(
             str(row["comparability_signature"]),
             digest,
             ids,
+            metric_ids,
+            relation_ids,
         )
         if comparable is None and baseline.comparability_signature == comparability_signature:
             comparable = baseline
@@ -455,6 +566,89 @@ def _provider_findings(
     return tuple(findings)
 
 
+def _provider_metrics(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+) -> tuple[ExternalProviderMetric, ...]:
+    rows = connection.execute(
+        """SELECT portable_metric_id,subject_kind,subject_key,category,
+        metric_name,value,unit,version_id,symbol_id,project_id,metadata_json
+        FROM external_metrics WHERE tool_run_id=?
+        ORDER BY portable_metric_id LIMIT ?""",
+        (tool_run_id, _METRIC_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _METRIC_LIMIT:
+        raise ValueError("external provider metrics exceed their read bound")
+    metrics: list[ExternalProviderMetric] = []
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("external metric metadata is malformed") from exc
+        if not isinstance(metadata, dict):
+            raise ValueError("external metric metadata is not an object")
+        metrics.append(
+            ExternalProviderMetric(
+                str(row["portable_metric_id"]),
+                cast(ExternalSubjectKind, str(row["subject_kind"])),
+                str(row["subject_key"]),
+                str(row["category"]),
+                str(row["metric_name"]),
+                float(row["value"]),
+                str(row["unit"]),
+                None if row["version_id"] is None else int(row["version_id"]),
+                None if row["symbol_id"] is None else int(row["symbol_id"]),
+                None if row["project_id"] is None else int(row["project_id"]),
+                metadata,
+            )
+        )
+    return tuple(metrics)
+
+
+def _provider_relations(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+) -> tuple[ExternalProviderRelation, ...]:
+    rows = connection.execute(
+        """SELECT portable_relation_id,relation_kind,source_kind,source_key,
+        target_kind,target_key,directed,confidence,source_version_id,
+        source_symbol_id,source_project_id,target_version_id,target_symbol_id,
+        target_project_id,metadata_json FROM external_relations
+        WHERE tool_run_id=? ORDER BY portable_relation_id LIMIT ?""",
+        (tool_run_id, _RELATION_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _RELATION_LIMIT:
+        raise ValueError("external provider relations exceed their read bound")
+    relations: list[ExternalProviderRelation] = []
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("external relation metadata is malformed") from exc
+        if not isinstance(metadata, dict):
+            raise ValueError("external relation metadata is not an object")
+        relations.append(
+            ExternalProviderRelation(
+                str(row["portable_relation_id"]),
+                str(row["relation_kind"]),
+                cast(ExternalSubjectKind, str(row["source_kind"])),
+                str(row["source_key"]),
+                cast(ExternalSubjectKind, str(row["target_kind"])),
+                str(row["target_key"]),
+                bool(row["directed"]),
+                None if row["confidence"] is None else float(row["confidence"]),
+                (None if row["source_version_id"] is None else int(row["source_version_id"])),
+                (None if row["source_symbol_id"] is None else int(row["source_symbol_id"])),
+                (None if row["source_project_id"] is None else int(row["source_project_id"])),
+                (None if row["target_version_id"] is None else int(row["target_version_id"])),
+                (None if row["target_symbol_id"] is None else int(row["target_symbol_id"])),
+                (None if row["target_project_id"] is None else int(row["target_project_id"])),
+                metadata,
+            )
+        )
+    return tuple(relations)
+
+
 def _abstained_provider(
     row: sqlite3.Row | Mapping[str, object],
     reason: str,
@@ -487,6 +681,40 @@ def _abstained_provider(
         content_executed=bool(row["executes_content"]),
         counters={} if counters is None else counters,
     )
+
+
+def _effective_provider_run_id(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row | Mapping[str, object],
+) -> int:
+    tool_run_id = int(str(row["tool_run_id"]))
+    if str(row["execution"]) != "cache_replay":
+        return tool_run_id
+    replay = connection.execute(
+        """SELECT source_tool_run_id,files_verified,bytes_verified
+        FROM external_run_replays WHERE tool_run_id=?""",
+        (tool_run_id,),
+    ).fetchone()
+    if replay is None:
+        raise ValueError("replay_missing")
+    effective_run_id = int(replay["source_tool_run_id"])
+    source = connection.execute(
+        """SELECT r.status,c.provider_id,c.result_digest,c.input_signature,
+        c.comparability_signature FROM external_tool_runs r
+        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+        WHERE r.tool_run_id=?""",
+        (effective_run_id,),
+    ).fetchone()
+    if (
+        source is None
+        or str(source["status"]) != "completed"
+        or str(source["provider_id"]) != str(row["provider_id"])
+        or source["result_digest"] != row["result_digest"]
+        or source["input_signature"] != row["input_signature"]
+        or source["comparability_signature"] != row["comparability_signature"]
+    ):
+        raise ValueError("replay_source_invalid")
+    return effective_run_id
 
 
 def _provider_status(
@@ -536,36 +764,19 @@ def _provider_status(
                 ),
                 (),
             )
-        effective_run_id = tool_run_id
-        if str(row["execution"]) == "cache_replay":
-            replay = connection.execute(
-                """SELECT source_tool_run_id,files_verified,bytes_verified
-                FROM external_run_replays WHERE tool_run_id=?""",
-                (tool_run_id,),
-            ).fetchone()
-            if replay is None:
-                raise ValueError("replay_missing")
-            effective_run_id = int(replay["source_tool_run_id"])
-            source = connection.execute(
-                """SELECT r.status,c.provider_id,c.result_digest,c.input_signature,
-                c.comparability_signature FROM external_tool_runs r
-                JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
-                WHERE r.tool_run_id=?""",
-                (effective_run_id,),
-            ).fetchone()
-            if (
-                source is None
-                or str(source["status"]) != "completed"
-                or str(source["provider_id"]) != str(row["provider_id"])
-                or source["result_digest"] != row["result_digest"]
-                or source["input_signature"] != row["input_signature"]
-                or source["comparability_signature"] != row["comparability_signature"]
-            ):
-                raise ValueError("replay_source_invalid")
+        effective_run_id = _effective_provider_run_id(connection, row)
         findings = _provider_findings(connection, effective_run_id)
-        digest = external_findings_digest(findings)
+        metrics = _provider_metrics(connection, effective_run_id)
+        relations = _provider_relations(connection, effective_run_id)
+        digest = external_provider_result_digest(findings, metrics, relations)
         if row["result_digest"] != digest:
             raise ValueError("result_digest")
+        if counters.get("findings", len(findings)) != len(findings):
+            raise ValueError("finding_counter")
+        if counters.get("metrics", len(metrics)) != len(metrics):
+            raise ValueError("metric_counter")
+        if counters.get("relations", len(relations)) != len(relations):
+            raise ValueError("relation_counter")
         for item in inputs:
             if not _current_version_exists(connection, int(item["version_id"])):
                 raise ValueError("input_not_current")
@@ -594,6 +805,8 @@ def _provider_status(
             limitations,
             content_executed=bool(row["executes_content"]),
             counters=counters,
+            metrics=len(metrics),
+            relations=len(relations),
         )
         return status, findings
     except (KeyError, TypeError, ValueError, sqlite3.DatabaseError):
@@ -821,6 +1034,63 @@ def read_external_evidence_suite(
     )
 
 
+def read_external_provider_evidence(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+) -> dict[str, ExternalProviderEvidence]:
+    """Read latest provider evidence, resolving exact replays to their source."""
+
+    rows = connection.execute(
+        """SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
+        r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
+        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+        WHERE r.analysis_run_id=? ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
+        (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _PROVIDER_STATUS_LIMIT:
+        raise ValueError("external provider evidence exceeds its provider bound")
+    latest: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        latest.setdefault(str(row["provider_id"]), row)
+    result: dict[str, ExternalProviderEvidence] = {}
+    for provider_id, row in sorted(latest.items()):
+        status, findings = _provider_status(connection, row)
+        tool_run_id = int(row["tool_run_id"])
+        if status.status != "ready":
+            result[provider_id] = ExternalProviderEvidence(
+                provider_id,
+                tool_run_id,
+                None,
+                "abstained",
+                status.reason,
+            )
+            continue
+        try:
+            effective_run_id = _effective_provider_run_id(connection, row)
+            metrics = _provider_metrics(connection, effective_run_id)
+            relations = _provider_relations(connection, effective_run_id)
+        except (KeyError, TypeError, ValueError, sqlite3.DatabaseError):
+            result[provider_id] = ExternalProviderEvidence(
+                provider_id,
+                tool_run_id,
+                None,
+                "abstained",
+                "external_provider_projection_invalid",
+            )
+            continue
+        result[provider_id] = ExternalProviderEvidence(
+            provider_id,
+            tool_run_id,
+            effective_run_id,
+            "ready",
+            None,
+            findings,
+            metrics,
+            relations,
+        )
+    return result
+
+
 def read_external_provider_finding_ids(
     connection: sqlite3.Connection,
     analysis_run_id: int,
@@ -869,5 +1139,6 @@ __all__ = [
     "publish_external_provider",
     "read_external_evidence_suite",
     "read_external_provider_baselines",
+    "read_external_provider_evidence",
     "read_external_provider_finding_ids",
 ]

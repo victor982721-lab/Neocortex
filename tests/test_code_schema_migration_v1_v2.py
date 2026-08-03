@@ -90,6 +90,14 @@ _CURRENT_CONTENT_QUERIES = (
         "external_run_counters",
         "SELECT * FROM external_run_counters ORDER BY tool_run_id,name",
     ),
+    (
+        "external_metrics",
+        "SELECT * FROM external_metrics ORDER BY tool_run_id,portable_metric_id",
+    ),
+    (
+        "external_relations",
+        "SELECT * FROM external_relations ORDER BY tool_run_id,portable_relation_id",
+    ),
 )
 
 
@@ -381,9 +389,9 @@ def test_v1_to_current_migration_preserves_rows_relations_and_fts(tmp_path: Path
         assert after == before
         assert metadata == {
             "preserved_marker": "keep-me",
-            "schema_version": "3",
+            "schema_version": "4",
         }
-        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 4
         assert migrations[0] == (1, "fixture version one", 11)
         assert migrations[1][0:2] == (
             2,
@@ -414,7 +422,7 @@ def test_v1_to_current_migration_preserves_rows_relations_and_fts(tmp_path: Path
                 AND name IN ('projects','project_memberships','project_edges',
                 'embedding_links','external_tool_runs','external_run_contracts',
                 'external_run_inputs','external_findings','external_run_replays',
-                'external_run_counters')"""
+                'external_run_counters','external_metrics','external_relations')"""
             )
         } == {
             "projects",
@@ -427,6 +435,8 @@ def test_v1_to_current_migration_preserves_rows_relations_and_fts(tmp_path: Path
             "external_findings",
             "external_run_replays",
             "external_run_counters",
+            "external_metrics",
+            "external_relations",
         }
 
         _insert_version_two_relations(connection)
@@ -507,7 +517,8 @@ def test_v2_to_v3_migration_preserves_legacy_external_runs(tmp_path: Path) -> No
             tuple(
                 item
                 for item in _CURRENT_CONTENT_QUERIES
-                if not item[0].startswith("external_run_") and item[0] != "external_findings"
+                if not item[0].startswith("external_run_")
+                and item[0] not in {"external_findings", "external_metrics", "external_relations"}
             ),
         )
 
@@ -519,24 +530,27 @@ def test_v2_to_v3_migration_preserves_legacy_external_runs(tmp_path: Path) -> No
             tuple(
                 item
                 for item in _CURRENT_CONTENT_QUERIES
-                if not item[0].startswith("external_run_") and item[0] != "external_findings"
+                if not item[0].startswith("external_run_")
+                and item[0] not in {"external_findings", "external_metrics", "external_relations"}
             ),
         )
         assert after["external_tool_runs"] == before["external_tool_runs"]
         assert dict(connection.execute("SELECT key,value FROM metadata")) == {
             "preserved_marker": "keep-me",
-            "schema_version": "3",
+            "schema_version": "4",
         }
-        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 4
         assert connection.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
-        ).fetchall() == [(1,), (2,), (3,)]
+        ).fetchall() == [(1,), (2,), (3,), (4,)]
         for table in (
             "external_run_contracts",
             "external_run_inputs",
             "external_findings",
             "external_run_replays",
             "external_run_counters",
+            "external_metrics",
+            "external_relations",
         ):
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
         code_schema.validate_code_schema(connection)
