@@ -639,9 +639,10 @@ def _observations(
         sorted(
             unique.values(),
             key=lambda item: (
+                {"finding": 0, "metric": 1, "relation": 2}[item.evidence_kind],
+                {"error": 0, "warning": 1, "info": 2}.get(item.severity, 3),
                 item.provider_id,
                 item.category,
-                item.evidence_kind,
                 item.observation_id,
             ),
         )

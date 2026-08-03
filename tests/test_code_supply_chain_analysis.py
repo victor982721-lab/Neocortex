@@ -528,6 +528,10 @@ def test_supply_chain_analysis_is_ready_and_replay_stable(tmp_path: Path) -> Non
     assert len({item.observation_id for item in baseline.observations}) == len(
         baseline.observations
     )
+    evidence_kinds = tuple(item.evidence_kind for item in baseline.observations)
+    assert max(index for index, kind in enumerate(evidence_kinds) if kind == "finding") < min(
+        index for index, kind in enumerate(evidence_kinds) if kind == "metric"
+    )
     assert _gate_map(baseline) == {
         "semgrep_invariants": "failed",
         "dependency_declaration_integrity": "failed",
