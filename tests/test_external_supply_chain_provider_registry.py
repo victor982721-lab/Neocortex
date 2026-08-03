@@ -90,11 +90,20 @@ def test_semgrep_and_deptry_use_their_exact_python_domains_and_replay(
     py_file = root / "module.py"
     stub_file = root / "module.pyi"
     pyw_file = root / "window.pyw"
-    for path in (py_file, stub_file, pyw_file):
+    rule_fixture = (
+        root
+        / "tests"
+        / "fixtures"
+        / "semgrep_invariants"
+        / "_04_Nucleo_Operativo"
+        / "external_fixture_provider.py"
+    )
+    rule_fixture.parent.mkdir(parents=True)
+    for path in (py_file, stub_file, pyw_file, rule_fixture):
         path.write_text("VALUE = 1\n", encoding="utf-8")
     files = tuple(
         _file(path, root, version_id)
-        for version_id, path in enumerate((py_file, stub_file, pyw_file), start=1)
+        for version_id, path in enumerate((py_file, stub_file, pyw_file, rule_fixture), start=1)
     )
     monkeypatch.setattr(providers_module, "_package_version", lambda _name: "test-1")
 
@@ -154,7 +163,12 @@ def test_semgrep_and_deptry_use_their_exact_python_domains_and_replay(
 
     deptry = DeptryProjectDependenciesProvider(root, executor=deptry_execute)
     deptry_publication = deptry.run(root, files, baseline=None, scratch_root=scratch)
-    assert deptry_paths == [("module.py",)]
+    assert deptry_paths == [
+        (
+            "module.py",
+            "tests/fixtures/semgrep_invariants/_04_Nucleo_Operativo/external_fixture_provider.py",
+        )
+    ]
     assert deptry_publication.status == "completed"
     assert deptry_publication.counters["dependency_gate_issue_count"] == 0
     deptry_replay = deptry.run(
@@ -164,7 +178,7 @@ def test_semgrep_and_deptry_use_their_exact_python_domains_and_replay(
         scratch_root=scratch,
     )
     assert deptry_replay.execution == "cache_replay"
-    assert deptry_replay.counters["files_verified"] == 1
+    assert deptry_replay.counters["files_verified"] == 2
 
 
 def test_environment_providers_replay_declared_snapshots_with_real_inventory_costs(

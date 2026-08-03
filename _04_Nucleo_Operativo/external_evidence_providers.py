@@ -1806,6 +1806,7 @@ _SEMGREP_REPLAY_LIMITATIONS = (
     "advisory_only_no_mutation_authority",
     "autofix_disabled",
 ) + (("windows_pysemgrep_x509_compatibility",) if os.name == "nt" else ())
+_SEMGREP_RULE_FIXTURE_PREFIX = ("tests", "fixtures", "semgrep_invariants")
 
 
 class SemgrepNeocortexInvariantsProvider:
@@ -1837,7 +1838,8 @@ class SemgrepNeocortexInvariantsProvider:
                 "ruleset_sha256": SEMGREP_RULESET_SHA256,
                 "rule_ids": list(SEMGREP_INVARIANT_RULE_IDS),
                 "configuration": "packaged-local-ruleset",
-                "input": "exact-current-inventory-python-and-stubs",
+                "input": "exact-current-inventory-python-and-stubs-excluding-own-rule-fixtures",
+                "excluded_paths": ["tests/fixtures/semgrep_invariants/**"],
                 "metrics": False,
                 "version_check": False,
                 "autofix": False,
@@ -1849,16 +1851,20 @@ class SemgrepNeocortexInvariantsProvider:
                 tool_version=version,
             ),
             root_identity=external_root_identity(root),
-            execution_strategy="local-rules-staged-batches-v1",
+            execution_strategy="local-rules-staged-batches-v2",
             invalidation_strategy="project_wide",
             memory=_SEMGREP_MEMORY_BYTES,
             loads_project_configuration=False,
-            scope="current-inventory-python-and-stubs",
+            scope="current-inventory-python-and-stubs-excluding-own-rule-fixtures",
         )
 
     @staticmethod
     def _files(files: Sequence[ExternalEvidenceFile]) -> tuple[ExternalEvidenceFile, ...]:
-        return _python_provider_files(files, suffixes=frozenset({".py", ".pyi"}))
+        return tuple(
+            item
+            for item in _python_provider_files(files, suffixes=frozenset({".py", ".pyi"}))
+            if PurePosixPath(item.relative_path).parts[:3] != _SEMGREP_RULE_FIXTURE_PREFIX
+        )
 
     def tool_version(self) -> str | None:
         return self._version
