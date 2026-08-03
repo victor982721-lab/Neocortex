@@ -184,10 +184,10 @@ def _publication(provider_id: str) -> ExternalProviderPublication:
             _metric(
                 provider_id,
                 "symbol",
-                "pkg.a::run",
+                "pkg.a:run:1:2",
                 "cognitive_complexity",
                 7,
-                metadata={"module_id": "pkg.a"},
+                metadata={"module": "pkg.a"},
             ),
         )
     digest = external_provider_result_digest(findings, metrics, relations)
@@ -319,7 +319,8 @@ def test_architecture_analysis_is_ready_and_replay_exact(tmp_path: Path) -> None
     assert modules["pkg.a"].cognitive_complexity_total == 10
     assert modules["pkg.a"].fan_in == 1
     assert modules["pkg.b"].fan_out == 3
-    assert baseline.symbols[0].symbol_id == "pkg.a::run"
+    assert baseline.symbols[0].symbol_id == "pkg.a:run:1:2"
+    assert "pkg.a:run:1:2" not in modules
     assert all(item.execution == "cache_replay" for item in replay.providers)
     assert all(item.source_tool_run_id in {1, 2, 3} for item in replay.providers)
 

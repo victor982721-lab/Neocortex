@@ -551,8 +551,10 @@ def _cyclic_components(
 def _symbol_complexity(metric: _Metric) -> ArchitectureSymbolComplexity | None:
     if metric.subject_kind != "symbol" or metric.name != "cognitive_complexity":
         return None
-    module = metric.provenance.get("module_id")
+    module = metric.provenance.get("module_id") or metric.provenance.get("module")
     module_id = str(module) if isinstance(module, str) and module else ""
+    if not module_id and metric.subject_id.count(":") >= 3:
+        module_id = metric.subject_id.rsplit(":", 3)[0]
     if not module_id and "::" in metric.subject_id:
         module_id = metric.subject_id.split("::", 1)[0]
     if not module_id:
