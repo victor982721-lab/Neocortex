@@ -1289,13 +1289,32 @@ def _resolve_work_package_coverage_scope(
         for item in analysis.symbols
         if item.module_key is not None
         and item.qualified_name is not None
-        and f"{item.module_key}.{item.qualified_name}" == primary_symbol
+        and _coverage_scope_matches_review_symbol(item, primary_symbol)
     )
     if len(aliases) == 1:
         return aliases[0], ""
     if len(aliases) > 1:
         return None, "work_package_target_ambiguous"
     return None, "work_package_target_not_measured"
+
+
+def _coverage_scope_matches_review_symbol(
+    scope: CoverageScopeSummary,
+    primary_symbol: str,
+) -> bool:
+    module_key = scope.module_key
+    qualified_name = scope.qualified_name
+    if module_key is None or qualified_name is None:
+        return False
+    module_prefix = f"{module_key}."
+    canonical_name = (
+        qualified_name
+        if qualified_name.startswith(module_prefix)
+        else f"{module_prefix}{qualified_name}"
+    )
+    if canonical_name == primary_symbol:
+        return True
+    return "." in primary_symbol and canonical_name.endswith(f".{primary_symbol}")
 
 
 def project_work_package_coverage_scope(

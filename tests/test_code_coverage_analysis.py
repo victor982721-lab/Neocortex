@@ -25,6 +25,10 @@ from _04_Nucleo_Operativo.external_evidence_models import (
 SYMBOL = "pkg.mod:target:10:20"
 SECOND_SYMBOL = "pkg.mod:target:30:40"
 TEST_NODEID = "tests/test_mod.py::test_target"
+PACKAGED_MODULE = "_04_Nucleo_Operativo.external_deep_coverage"
+PACKAGED_QUALIFIED_NAME = f"{PACKAGED_MODULE}._normalize"
+PACKAGED_SYMBOL = f"{PACKAGED_MODULE}:{PACKAGED_QUALIFIED_NAME}:984:1200"
+PACKAGED_REVIEW_SYMBOL = "external_deep_coverage._normalize"
 
 
 def _context(
@@ -185,15 +189,22 @@ def _symbol_metrics(
     *,
     start_line: int = 10,
     end_line: int = 20,
+    module_key: str = "pkg.mod",
+    qualified_name: str = "target",
+    relative_path: str = "pkg/mod.py",
+    executable: int = 5,
+    covered: int = 4,
+    branches: int = 2,
+    covered_branches: int = 1,
 ) -> list[ExternalProviderMetric]:
     metadata = {
         **context,
-        "module_key": "pkg.mod",
+        "module_key": module_key,
         "symbol_key": symbol,
-        "qualified_name": "target",
+        "qualified_name": qualified_name,
         "start_line": start_line,
         "end_line": end_line,
-        "relative_path": "pkg/mod.py",
+        "relative_path": relative_path,
         "missing_line_ranges": [[13, 13]],
         "missing_branch_arcs": [[12, 15]],
         "missing_line_ranges_truncated": False,
@@ -203,10 +214,10 @@ def _symbol_metrics(
         "symbol",
         symbol,
         metadata,
-        executable=5,
-        covered=4,
-        branches=2,
-        covered_branches=1,
+        executable=executable,
+        covered=covered,
+        branches=branches,
+        covered_branches=covered_branches,
     )
 
 
@@ -227,6 +238,58 @@ def _relation(symbol: str = SYMBOL) -> ExternalProviderRelation:
             "module_key": "pkg.mod",
             "symbol_key": symbol,
         },
+    )
+
+
+def _packaged_symbol_evidence(
+    *,
+    module_key: str = PACKAGED_MODULE,
+    qualified_name: str = PACKAGED_QUALIFIED_NAME,
+    symbol: str = PACKAGED_SYMBOL,
+) -> ExternalProviderEvidence:
+    context = _context()
+    metrics = [
+        *_run_metrics(context),
+        *_symbol_metrics(
+            context,
+            symbol,
+            start_line=984,
+            end_line=1200,
+            module_key=module_key,
+            qualified_name=qualified_name,
+            relative_path="_04_Nucleo_Operativo/external_deep_coverage.py",
+            executable=44,
+            covered=38,
+            branches=22,
+            covered_branches=17,
+        ),
+    ]
+    relation = ExternalProviderRelation(
+        f"relation:{symbol}",
+        "test_covers_symbol",
+        "symbol",
+        f"pytest-nodeid:{TEST_NODEID}",
+        "symbol",
+        symbol,
+        confidence=1.0,
+        metadata={
+            "test_nodeids": [TEST_NODEID],
+            "lines": [984, 990, 1000],
+            "contexts": [TEST_NODEID],
+            "relative_path": "_04_Nucleo_Operativo/external_deep_coverage.py",
+            "module_key": module_key,
+            "symbol_key": symbol,
+        },
+    )
+    return ExternalProviderEvidence(
+        CODE_COVERAGE_PROVIDER_ID,
+        7,
+        7,
+        "ready",
+        None,
+        (),
+        tuple(metrics),
+        (relation,),
     )
 
 
@@ -305,6 +368,52 @@ def test_work_package_projection_resolves_stable_and_review_identities() -> None
         assert projection.status == "protected"
         assert projection.protecting_tests == (TEST_NODEID,)
         assert projection.gate.status == "passed"
+
+
+def test_work_package_projection_resolves_unique_packaged_qualified_name_suffix() -> None:
+    analysis = analyze_code_coverage(_packaged_symbol_evidence())
+
+    scope = project_work_package_coverage_scope(analysis, PACKAGED_REVIEW_SYMBOL)
+    projection = project_work_package_coverage(analysis, PACKAGED_REVIEW_SYMBOL)
+
+    assert scope is not None
+    assert scope.subject_key == PACKAGED_SYMBOL
+    assert scope.qualified_name == PACKAGED_QUALIFIED_NAME
+    assert round(scope.totals.branch_coverage_percent or 0.0, 2) == 77.27
+    assert scope.protecting_tests == (TEST_NODEID,)
+    assert projection.primary_symbol == PACKAGED_SYMBOL
+    assert projection.status == "protected"
+    assert projection.protecting_tests == (TEST_NODEID,)
+    assert projection.gate.status == "passed"
+
+
+def test_work_package_packaged_qualified_name_suffix_ambiguity_abstains() -> None:
+    evidence = _packaged_symbol_evidence()
+    second_module = "vendor.external_deep_coverage"
+    second_qualified_name = f"{second_module}._normalize"
+    second_symbol = f"{second_module}:{second_qualified_name}:984:1200"
+    evidence = replace(
+        evidence,
+        metrics=(
+            *evidence.metrics,
+            *_symbol_metrics(
+                _context(),
+                second_symbol,
+                start_line=984,
+                end_line=1200,
+                module_key=second_module,
+                qualified_name=second_qualified_name,
+                relative_path="vendor/external_deep_coverage.py",
+            ),
+        ),
+    )
+    analysis = analyze_code_coverage(evidence)
+
+    projection = project_work_package_coverage(analysis, PACKAGED_REVIEW_SYMBOL)
+
+    assert project_work_package_coverage_scope(analysis, PACKAGED_REVIEW_SYMBOL) is None
+    assert projection.status == "not_evaluated"
+    assert projection.gate.reason == "work_package_target_ambiguous"
 
 
 def test_work_package_alias_ambiguity_and_missing_target_abstain() -> None:
