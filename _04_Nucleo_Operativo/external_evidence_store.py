@@ -845,6 +845,31 @@ def _provider_status(
         if counters.get("covered_files", covered) != covered:
             raise ValueError("covered_counter")
         tool_status = str(row["status"])
+        if tool_status == "skipped" and str(row["execution"]) != "cache_replay":
+            reason = "provider_abstained"
+            try:
+                provenance = json.loads(str(row["provenance_json"]))
+                error = provenance.get("error") if isinstance(provenance, dict) else None
+                detail = error.get("reason") if isinstance(error, dict) else None
+                if isinstance(detail, str) and detail:
+                    reason = f"provider_abstained:{detail[:4096]}"
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+            return (
+                replace(
+                    _abstained_provider(
+                        row,
+                        reason,
+                        eligible_files=eligible,
+                        covered_files=covered,
+                        findings=counters.get("findings", 0),
+                        limitations=limitations,
+                        counters=counters,
+                    ),
+                    content_executed=False,
+                ),
+                (),
+            )
         if tool_status not in {"completed", "skipped"}:
             reason = f"provider_{tool_status}"
             if tool_status == "failed":
