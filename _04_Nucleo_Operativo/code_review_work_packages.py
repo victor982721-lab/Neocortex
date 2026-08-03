@@ -18,7 +18,6 @@ from .code_review_models import (
 )
 from .semantic_models import canonical_json, fingerprint_text
 
-
 CODE_REVIEW_PLANNING = "python-maintenance-work-packages-v1"
 CODE_REVIEW_PLANNING_FINDING_LIMIT = 50
 CODE_REVIEW_WORK_PACKAGE_LIMIT = 1
@@ -32,6 +31,13 @@ _ACCEPTANCE_GATES = (
     "no_corrected_or_lost_call_resolutions",
     "full_cache_hit_replay",
     "no_added_ruff_diagnostics",
+    "no_added_ruff_basic_diagnostics",
+    "no_added_ruff_project_diagnostics",
+    "no_added_mypy_errors",
+    "no_added_pyright_errors",
+    "public_type_surface_not_degraded",
+    "type_coverage_not_degraded",
+    "provider_cache_or_rerun_explained",
 )
 _RISK_ORDER = {"unknown": 0, "low": 1, "medium": 2, "high": 3}
 
@@ -217,10 +223,7 @@ def _related_findings(
         candidate = by_id.get(link.target_finding_id)
         if link.source_finding_id != primary.finding_id or candidate is None:
             continue
-        if (
-            candidate.finding_id in recommendation_ids
-            or candidate.source_role != "production"
-        ):
+        if candidate.finding_id in recommendation_ids or candidate.source_role != "production":
             continue
         related.append((candidate, link))
     related.sort(
@@ -339,9 +342,7 @@ def build_code_review_work_packages(
             _member(
                 finding,
                 "contract_guard",
-                "resolved_static_call"
-                if link.depth == 1
-                else "resolved_static_call_via",
+                "resolved_static_call" if link.depth == 1 else "resolved_static_call_via",
                 _link_evidence(link),
             )
             for finding, link in related
@@ -363,10 +364,7 @@ def build_code_review_work_packages(
             members=members,
             members_truncated=members_truncated,
             consumer_module_examples=_ordered_union(
-                tuple(
-                    finding.impact.consumer_module_examples
-                    for finding in package_findings
-                )
+                tuple(finding.impact.consumer_module_examples for finding in package_findings)
             ),
             contracts_to_preserve=_ordered_union(
                 tuple(finding.contracts_to_preserve for finding in package_findings)
@@ -387,9 +385,7 @@ def build_code_review_work_packages(
                 "dynamic_dispatch_is_not_observed",
                 "related_members_require_characterization_before_change",
             ),
-            confidence=(
-                "confirmed_static_relationship" if related else "primary_finding_only"
-            ),
+            confidence=("confirmed_static_relationship" if related else "primary_finding_only"),
         ),
     )
 

@@ -61,18 +61,14 @@ class RuntimeRequirement:
                 raise ValueError(f"{name} cannot be blank")
         if self.extra is not None and not self.extra.strip():
             raise ValueError("extra cannot be blank when present")
-        if self.kind is RequirementKind.PYTHON_DISTRIBUTION:
-            if not self.distribution or not self.module or self.executable is not None:
-                raise ValueError(
-                    "Python requirements need distribution and module only"
-                )
-        elif self.kind is RequirementKind.EXECUTABLE:
-            if (
-                not self.executable
-                or self.distribution is not None
-                or self.module is not None
-            ):
-                raise ValueError("executable requirements need executable only")
+        if self.kind is RequirementKind.PYTHON_DISTRIBUTION and (
+            not self.distribution or not self.module or self.executable is not None
+        ):
+            raise ValueError("Python requirements need distribution and module only")
+        elif self.kind is RequirementKind.EXECUTABLE and (
+            not self.executable or self.distribution is not None or self.module is not None
+        ):
+            raise ValueError("executable requirements need executable only")
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +327,41 @@ CAPABILITY_SPECS: Mapping[str, RuntimeCapabilitySpec] = MappingProxyType(
             ),
             extra="image",
         ),
-        "code": RuntimeCapabilitySpec("code", _with_base()),
+        "code": RuntimeCapabilitySpec(
+            "code",
+            _with_base(
+                _distribution(
+                    "ruff",
+                    "ruff",
+                    "ruff",
+                    required=False,
+                    missing_reason="code_ruff_provider_unavailable",
+                    extra=None,
+                ),
+                _distribution(
+                    "mypy",
+                    "mypy",
+                    "mypy",
+                    required=False,
+                    missing_reason="code_mypy_provider_unavailable",
+                    extra=None,
+                ),
+                _executable(
+                    "node",
+                    "node",
+                    required=False,
+                    missing_reason="code_pyright_node_unavailable",
+                    extra=None,
+                ),
+                _executable(
+                    "pyright",
+                    "pyright",
+                    required=False,
+                    missing_reason="code_pyright_provider_unavailable",
+                    extra=None,
+                ),
+            ),
+        ),
         "semantic": RuntimeCapabilitySpec(
             "semantic",
             _with_base(
@@ -439,9 +469,7 @@ def inspect_runtime_capability(
     except KeyError as exc:
         raise ValueError(f"unknown runtime capability: {capability}") from exc
     find_module = importlib.util.find_spec if module_finder is None else module_finder
-    read_version = (
-        metadata.version if distribution_version is None else distribution_version
-    )
+    read_version = metadata.version if distribution_version is None else distribution_version
     find_executable = shutil.which if executable_finder is None else executable_finder
 
     components: list[RuntimeComponentStatus] = []
@@ -522,10 +550,10 @@ def inspect_runtime_capabilities(
 
 __all__ = (
     "CAPABILITY_SPECS",
-    "CapabilityState",
+    "ROUTE_CAPABILITY_NAMES",
     "RUNTIME_CAPABILITY_PROBE_POLICY",
     "RUNTIME_CAPABILITY_SCHEMA_VERSION",
-    "ROUTE_CAPABILITY_NAMES",
+    "CapabilityState",
     "RequirementKind",
     "RuntimeCapabilitySpec",
     "RuntimeCapabilityStatus",

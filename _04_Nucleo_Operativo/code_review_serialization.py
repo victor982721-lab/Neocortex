@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    external_status_digest_payload,
+)
 from .code_review_models import (
     CODE_REVIEW_SCHEMA,
     CodeReviewCoverage,
@@ -14,10 +18,7 @@ from .code_review_models import (
     CodeReviewWorkPackage,
     RecommendationStatus,
 )
-from .code_external_evidence import (
-    ExternalEvidenceStatus,
-    external_status_digest_payload,
-)
+from .external_evidence_models import ExternalEvidenceSuiteStatus
 from .semantic_models import canonical_json, fingerprint_text
 
 
@@ -36,6 +37,7 @@ def build_code_review_digest(
     work_package_reason: str | None,
     work_packages: tuple[CodeReviewWorkPackage, ...],
     external_evidence: ExternalEvidenceStatus,
+    external_evidence_suite: ExternalEvidenceSuiteStatus,
     limitations: tuple[str, ...],
 ) -> CodeReviewDigest:
     """Hash every decision-bearing field while excluding local database paths."""
@@ -58,11 +60,10 @@ def build_code_review_digest(
             },
             "coverage": asdict(coverage),
             "findings": [asdict(finding) for finding in findings],
-            "recommendations": [
-                asdict(recommendation) for recommendation in recommendations
-            ],
+            "recommendations": [asdict(recommendation) for recommendation in recommendations],
             "work_packages": [asdict(package) for package in work_packages],
             "external_evidence": external_status_digest_payload(external_evidence),
+            "external_evidence_suite": external_evidence_suite.as_payload(),
             "limitations": list(limitations),
         }
     )

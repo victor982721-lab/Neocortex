@@ -8,6 +8,33 @@
 
 ## Resultado actual
 
+El checkpoint vigente es el **Hito 1 de la plataforma multianalizador** en
+`codex/neocortex-self-analysis-platform-v2`. Code schema v3 conserva las
+migraciones v1→v2→v3 y añade contratos, inputs, findings, replay y costos por
+proveedor. `protected` ejecuta `ruff-protected-basic`; `trusted-static` añade
+`ruff-trusted-project`, `mypy-trusted-project` y `pyright-trusted-project` sin
+ejecutar contenido ni autorizar fixes o mutaciones. Status, review v5,
+publication diff v3 y work packages consumen la suite genérica; Mypy y Pyright
+permanecen separados y exponen consenso/discrepancias.
+
+El wheel candidato `0.7.2` autoanalizó el repositorio real sobre estado aislado:
+538 archivos inventariados, 528 candidatos Code, 477 Python cubiertos por cada
+proveedor, 15 571 símbolos, 84 458 referencias, 212 diagnósticos internos y cero
+errores. Publicó 0 findings Ruff protected, 157 Ruff trusted, 356 Mypy y 781
+Pyright. El consenso tipado registró 231 coincidencias, 90 sólo Mypy, 418 sólo
+Pyright, cero contradicciones y cero incomparables. La corrida completa tardó
+84.399 s; el replay exacto tardó 4.879 s, reutilizó 528/528 entradas Code y los
+cuatro proveedores, lanzó cero procesos externos y no cambió ningún hash del
+checkout.
+
+El diff rc22→Hito 1 migra únicamente una copia aislada del baseline a schema v3.
+Ruff protected es comparable mediante la proyección compatible del contrato
+legacy: gate `passed`, cero findings añadidos/resueltos y veredicto
+`equivalent_under_observed_metrics`. Los tres proveedores inexistentes en rc22
+quedan `not_evaluated`, nunca aprobados por ausencia. Review sigue `ready`, con
+10 findings, tres recomendaciones y un paquete cuyo objetivo primario es
+`bounded_subprocess.run_bounded_capture`.
+
 El candidato instalado `rc5` cierra los cinco pasos recomendados sobre estados
 aislados: abstención Semantic/Knowledge por contrato exacto; clon Semantic
 durable, reanudable y sujeto a deadline; lectores Code/Framework que preservan
@@ -137,10 +164,10 @@ completo fue el código del propio repositorio, sobre estado aislado.
 
 - Fuente: `C:\Users\Victor\Neocortex\Repository`.
 - Toda esta continuación se ejecutó con PowerShell 7.6.4 (`pwsh`).
-- Base publicada al iniciar rc22: `main` en
-  `fcb8528d0870aeb17e2ac075df9ba1e37d2fcd80`, idéntico a `origin/main`.
-- El checkout fuente es `0.7.2`. rc22 se desarrolla en
-  `codex/external-code-evidence-ruff-v1`; el identificador final del PR queda en
+- Base publicada al iniciar el Hito 1: `main` en
+  `231e5e4400f3a315db8e10eed8fc99c86786d2ef`, idéntico a `origin/main`.
+- El checkout fuente es `0.7.2`. El Hito 1 se desarrolla en
+  `codex/neocortex-self-analysis-platform-v2`; el identificador final del PR queda en
   la historia de Git/GitHub después de publicarlo. La
   igualdad final entre `main` y `origin/main` se verifica después del merge
   porque el commit no puede autorreferenciar su propio hash desde este handoff.
@@ -302,6 +329,37 @@ reportó con exit `4`. Se ensayaron top-5, top-10 y decaimientos RRF generales;
 ninguno cerró simultáneamente recall y MRR, y todos se revirtieron.
 
 ## Artefactos no promovidos
+
+### Candidato Hito 1 — plataforma multianalizador
+
+- Raíz aislada:
+  `C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-self-analysis-platform-v2-final`.
+- Wheel final:
+  `dist\neocortex_framework-0.7.2-py3-none-any.whl`; instalación nueva en
+  `venv`, `Neocortex 0.7.2`, `pip check` limpio.
+- Runtime del corte: Ruff 0.15.17, Mypy 2.1.0 y Pyright npm 1.1.411 mediante
+  Node 24.18.1. `--code-doctor --code-json` informa disponibles los cuatro
+  proveedores desde el runtime candidato.
+- Estado aceptado: `current-state`; corrida completa `analysis_run_id=6` y
+  replay exacto `analysis_run_id=7`.
+- Full por proveedor, todos con 477/477 y 8 354 960 bytes verificados:
+  Mypy 356 findings, un proceso, 24 606 ms; Pyright 781, un proceso,
+  33 391 ms; Ruff protected cero, diez procesos acotados, 7 464 ms; Ruff
+  trusted 157, diez procesos acotados, 7 451 ms. Los cuatro tuvieron cero
+  timeouts y cero errores.
+- Replay: cuatro cache hits, cero misses, cero procesos, cero bytes staged y
+  digests de resultados idénticos; cada proveedor volvió a verificar los
+  fingerprints de los mismos 8 354 960 bytes. La ruta completa bajó de
+  84.399 s a 4.879 s.
+- Gates: no added Ruff basic/project, Mypy y Pyright `passed`.
+  `public_type_surface_not_degraded` y `type_coverage_not_degraded` permanecen
+  `not_evaluated` porque aún no existe una métrica comparable publicada para
+  esas dimensiones.
+- Evidencia guardada: `code-status-accepted.json`,
+  `code-review-accepted.json`, `code-publication-diff-rc22-final.json`, logs de
+  full/replay y manifests SHA-256 antes/después bajo la raíz candidata.
+- El launcher estable 0.7.1, el estado durable y el corpus personal no se
+  modificaron.
 
 ### Candidato focal `rc22` — evidencia externa Ruff
 
@@ -868,6 +926,15 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Barreras
 
+- Hito 1 multianalizador: 13/13 regresiones de proveedores y 3/3 de publication
+  diff aprobadas; la barrera integrada final del corte obtuvo 102 aprobadas. La barrera
+  Code ampliada alcanzó 335 aprobadas y aisló un defecto del corte, luego cerrado
+  con regresión focal, además del límite estructural preexistente de
+  `knowledge_search_code.py` (907 líneas frente a 900), fuera de los archivos
+  modificados. Ruff y formato quedaron limpios en los Python finales; el wheel
+  instalado, `pip check`, doctor, full real, replay, status, review, diff rc22 y
+  hashes del checkout quedaron verificados. No se presenta la barrera ampliada
+  inicial como suite integral verde.
 - Semantic completo más CLI, Code↔Semantic y extracción Knowledge: `448 passed`.
 - Watcher, cancelación, Framework/status y frontera normal: `96 passed` en la
   barrera final; la ampliada inventario/watcher/imagen aprobó `139 passed`.
@@ -951,34 +1018,28 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Cerrar el paquete que rc22 coloca primero.** Caracterizar antes de editar
-   `bounded_subprocess.run_bounded_capture`; preservar firma, timeout, límites
-   de salida, cleanup de descendientes, memoria, cwd, entorno y stdin. El
-   paquete es de riesgo medio y sólo autoriza esa raíz, no sus consumidores.
-2. **Mantener Semantic Image como paquete siguiente.** Evaluar
-   `semantic_image_index.index_image_embeddings` y usar
-   `semantic_generation_repository._clone_published_members` sólo como guarda
-   contractual. Fijar antes de editar orden de fases, cancelación, completitud,
-   atomicidad transaccional, reintento/reanudación y trabajo acotado.
-3. **Demostrar cada cambio contra rc22.** Usar el work-package planner,
-   repetir autoanálisis y `--code-publication-diff`; exigir retirar el objetivo
-   sin añadir/cambiar hotspots, cero pérdidas/correcciones de resolución, gate
-   Ruff comparable sin diagnósticos nuevos y replay 100 % cache hit.
-4. **Extender paquetes sólo con evidencia.** Aplicar el planner a otros dominios
-   únicamente cuando relaciones de producción confirmadas cambien de verdad la
-   unidad de trabajo; no agrupar por nombre, prefijo o intuición arquitectónica.
-5. **Caracterizar Mypy por separado.** Sólo después del siguiente paquete útil,
-   fijar configuración, plugins, formato estructurado, semántica project-wide y
-   límites antes de decidir si merece otro proveedor. No mezclarlo con Ruff.
-6. **Aplazar Vulture y cualquier borrado.** Su confidence no es probabilidad
-   calibrada y su CLI no ofrece JSON. Antes de integrarlo debe pasar la misma
-   muestra etiquetada, explicar callbacks/registries/contratos y permanecer
-   advisory sin autorización de borrar.
+1. **Publicar el Hito 1.** Commit cohesivo, push, PR listo, checks propios,
+   merge a `main` y verificación `main == origin/main`. Este checkpoint no cierra
+   el objetivo terminal.
+2. **Abrir el Hito 2 desde ese `main`.** Entregar un corte vertical público de
+   arquitectura/imports por módulo. Investigar justo entonces Ruff Analyze y
+   un motor de contratos de imports; elegir por una prueba focal, no por un
+   bake-off global.
+3. **Versionar contratos derivados de la arquitectura real.** Publicar métricas
+   de complejidad cognitiva, fan-in/fan-out, ciclos y dependencias con productor
+   y consumidor reales en status, review, diff y work packages. Detectar
+   complejidad desplazada sin convertir ninguna métrica en probabilidad de
+   defecto.
+4. **Usar el estado publicado como línea base.** El paquete vigente de review es
+   `bounded_subprocess.run_bounded_capture`; el Hito 2 debe conservar sus
+   contratos y enriquecer el paquete con cadenas de imports, módulos y gates de
+   arquitectura. Ejecutar una sola aceptación, replay y diff final del hito.
+5. **Continuar después con Hitos 3–7 en el orden autorizado.** `trusted-deep`,
+   código potencialmente no usado, Semgrep/supply chain, mutación/historia Git y
+   la integración final se abren únicamente cuando su hito anterior esté
+   validado, publicado y fusionado.
 
-Imagen, calibración Semantic, soak del watcher y promoción del launcher siguen
-pendientes, pero quedan detrás del objetivo vigente de mejorar el autoanálisis.
-El estable permanece en 0.7.1 hasta autorización explícita de promoción.
-
-No abrir otra base, ANN, vector DB, pipeline, auditoría integral o corrida live
-para resolver estos pasos. Preservar `Neocortex --all --apply` como interfaz
-cotidiana simplificada después de pilotos y protecciones.
+Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
+autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni
+estado durable vivo. Preservar `Neocortex --all --apply` como interfaz cotidiana
+simplificada después de pilotos y protecciones.

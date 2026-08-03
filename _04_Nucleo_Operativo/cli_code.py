@@ -58,13 +58,12 @@ class _CodeStatusSnapshot:
     counts: dict[str, int]
     latest_run: sqlite3.Row | None
     external_evidence: dict[str, object]
+    external_evidence_suite: dict[str, object]
 
 
 def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
     active_embedding_links = int(
-        connection.execute(
-            "SELECT COUNT(*) FROM embedding_links WHERE active=1"
-        ).fetchone()[0]
+        connection.execute("SELECT COUNT(*) FROM embedding_links WHERE active=1").fetchone()[0]
     )
     current_embedding_links = int(
         connection.execute(
@@ -78,13 +77,9 @@ def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
     )
     return {
         "current_files": int(
-            connection.execute(
-                "SELECT COUNT(*) FROM files WHERE status='current'"
-            ).fetchone()[0]
+            connection.execute("SELECT COUNT(*) FROM files WHERE status='current'").fetchone()[0]
         ),
-        "versions": int(
-            connection.execute("SELECT COUNT(*) FROM file_versions").fetchone()[0]
-        ),
+        "versions": int(connection.execute("SELECT COUNT(*) FROM file_versions").fetchone()[0]),
         "current_symbols": int(
             connection.execute(
                 """SELECT COUNT(*) FROM symbols s JOIN file_versions v
@@ -108,6 +103,13 @@ def _code_status_counts(connection: sqlite3.Connection) -> dict[str, int]:
                 """SELECT COUNT(*) FROM diagnostics d JOIN file_versions v
                 ON v.version_id=d.version_id WHERE v.invalidated_ns IS NULL
                 AND d.source='external:ruff'"""
+            ).fetchone()[0]
+        ),
+        "current_provider_diagnostics": int(
+            connection.execute(
+                """SELECT COUNT(*) FROM diagnostics d JOIN file_versions v
+                ON v.version_id=d.version_id WHERE v.invalidated_ns IS NULL
+                AND d.source LIKE 'external:%' AND d.source<>'external:ruff'"""
             ).fetchone()[0]
         ),
         "projects": int(
@@ -138,6 +140,7 @@ def _latest_code_run(connection: sqlite3.Connection) -> sqlite3.Row | None:
 def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
     from .code_external_evidence import read_external_evidence
     from .code_schema import CODE_SCHEMA_VERSION, validate_code_schema
+    from .external_evidence_store import read_external_evidence_suite
     from .self_analysis_status import quiescent_sqlite_database
 
     with quiescent_sqlite_database(path) as connection:
@@ -160,7 +163,12 @@ def _read_code_status_snapshot(path: Path) -> _CodeStatusSnapshot:
                 enforce_current_runtime=True,
             )[0].as_payload()
         )
-    return _CodeStatusSnapshot(version, counts, latest, external_evidence)
+        suite = read_external_evidence_suite(
+            connection,
+            -1 if latest is None else int(latest["analysis_run_id"]),
+            enforce_current_runtime=True,
+        ).as_payload()
+    return _CodeStatusSnapshot(version, counts, latest, external_evidence, suite)
 
 
 def _read_self_analysis_payload(
@@ -208,6 +216,14 @@ def _emit_missing_code_status(
             "reason": "code_state_missing",
             "provider": "ruff",
         },
+        "external_evidence_suite": {
+            "schema": "neocortex.external-evidence-suite/v1",
+            "profile": "protected",
+            "status": "not_recorded",
+            "providers": [],
+            "type_consensus": {"status": "not_comparable"},
+            "gates": [],
+        },
     }
     _emit(
         payload if json_output else f"CODE_STATUS database={path} exists=false",
@@ -234,6 +250,8 @@ def _emit_code_status(
         "analyzers": analyzers,
         "self_analysis": self_analysis,
         "external_evidence": snapshot.external_evidence,
+        "analysis_profile": snapshot.external_evidence_suite.get("profile"),
+        "external_evidence_suite": snapshot.external_evidence_suite,
     }
     if json_output:
         _emit(payload, json_output=True)
@@ -242,6 +260,20 @@ def _emit_code_status(
         f"CODE_STATUS database={path} schema={snapshot.schema_version} "
         + " ".join(f"{name}={value}" for name, value in snapshot.counts.items())
     )
+    suite = snapshot.external_evidence_suite
+    _print_console_line(
+        f"CODE_PROVIDER_SUITE profile={suite.get('profile')} status={suite.get('status')}"
+    )
+    providers = suite.get("providers")
+    if isinstance(providers, list):
+        for provider in providers:
+            if not isinstance(provider, dict):
+                continue
+            _print_console_line(
+                f"CODE_PROVIDER id={provider.get('provider_id')} "
+                f"status={provider.get('status')} execution={provider.get('execution')} "
+                f"findings={provider.get('findings', 0)} gate={provider.get('gate')}"
+            )
     if latest is not None:
         _print_console_line(
             f"CODE_RUN id={latest['analysis_run_id']} "
@@ -331,15 +363,25 @@ def run_code_review(args: argparse.Namespace) -> int:
             f"diagnostics={external.diagnostics} added={external.added} "
             f"resolved={external.resolved} gate={external.gate}"
         )
+    if result.external_evidence_suite is not None:
+        _print_console_line(
+            f"CODE_REVIEW_PROVIDER_SUITE profile="
+            f"{result.external_evidence_suite.profile} "
+            f"status={result.external_evidence_suite.status}"
+        )
+        for provider in result.external_evidence_suite.providers:
+            _print_console_line(
+                f"CODE_REVIEW_PROVIDER id={provider.provider_id} "
+                f"status={provider.status} findings={provider.findings} "
+                f"gate={provider.gate}"
+            )
     if result.recommendation_status == "abstained":
         _print_console_line(
-            "CODE_REVIEW_RECOMMENDATION status=abstained "
-            f"reason={result.recommendation_reason}"
+            f"CODE_REVIEW_RECOMMENDATION status=abstained reason={result.recommendation_reason}"
         )
     if result.work_package_status == "abstained":
         _print_console_line(
-            "CODE_REVIEW_WORK_PACKAGE status=abstained "
-            f"reason={result.work_package_reason}"
+            f"CODE_REVIEW_WORK_PACKAGE status=abstained reason={result.work_package_reason}"
         )
     for package in result.work_packages:
         _print_console_line(
@@ -443,6 +485,16 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         f"resolved={result.external_evidence.resolved} "
         f"gate={result.external_evidence.gate}"
     )
+    _print_console_line(
+        f"CODE_PUBLICATION_DIFF_PROVIDERS profile={result.analysis_profile} "
+        f"verdict={result.verdict}"
+    )
+    for provider in result.providers:
+        _print_console_line(
+            f"CODE_PUBLICATION_DIFF_PROVIDER id={provider.provider_id} "
+            f"status={provider.status} common={provider.common} "
+            f"added={provider.added} resolved={provider.resolved} gate={provider.gate}"
+        )
     for limitation in result.limitations:
         _print_console_line(f"CODE_PUBLICATION_DIFF_LIMITATION {limitation}")
     return 0
@@ -454,9 +506,11 @@ def run_code_doctor(args: argparse.Namespace) -> int:
     from .code_analyzers import builtin_analyzer_registry
     from .code_external_evidence import RuffEvidenceProvider
     from .code_schema import code_database, validate_code_schema
+    from .external_evidence_providers import provider_tool_versions
 
     path = _state_path(args)
     ruff_version = RuffEvidenceProvider.tool_version()
+    provider_versions = provider_tool_versions()
     report: dict[str, object] = {
         "kind": "code-doctor",
         "database": str(path),
@@ -464,7 +518,7 @@ def run_code_doctor(args: argparse.Namespace) -> int:
         "analyzers": builtin_analyzer_registry().status(),
         "tools": {
             name: shutil.which(name)
-            for name in ("cargo", "rustc", "rust-analyzer", "mypy")
+            for name in ("cargo", "rustc", "rust-analyzer", "mypy", "node", "pyright")
         },
         "external_evidence": {
             "provider": "ruff",
@@ -472,6 +526,15 @@ def run_code_doctor(args: argparse.Namespace) -> int:
             "version": ruff_version,
             "runtime": sys.executable,
             "resolution": "runtime-distribution",
+        },
+        "external_evidence_providers": {
+            provider_id: {
+                "available": version is not None,
+                "version": version,
+                "authority": "advisory",
+                "mutation_authority": False,
+            }
+            for provider_id, version in provider_versions.items()
         },
     }
     if path.is_file():
@@ -504,8 +567,8 @@ def run_code_doctor(args: argparse.Namespace) -> int:
 
 def run_code_search(args: argparse.Namespace) -> int:
     from .code_contracts import CodeSearchQuery
-    from .code_semantic_links import code_semantic_search_availability
     from .code_search import search_code
+    from .code_semantic_links import code_semantic_search_availability
 
     try:
         query = CodeSearchQuery(
@@ -636,8 +699,8 @@ def run_code_reconstruct(args: argparse.Namespace) -> int:
 
 __all__ = [
     "run_code_doctor",
-    "run_code_publication_diff",
     "run_code_projects",
+    "run_code_publication_diff",
     "run_code_reconstruct",
     "run_code_review",
     "run_code_search",

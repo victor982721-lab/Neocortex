@@ -388,7 +388,7 @@ firma cruda de `InventoryExclusionPolicy` se guarda en Dedup v9; Framework y
 watcher usan la firma efectiva versionada que combina esa firma con la de
 `InternalPathsPolicy`.
 
-## Autoanálisis protegido
+## Autoanálisis de código
 
 `FrameworkOrchestrator.run_self_analysis()` es una rama vertical distinta de la
 corrida común. El preflight exige `analyze_only`, raíz/estado disjuntos y
@@ -413,13 +413,22 @@ optimización durable, no un requisito de corrección ni una identidad ficticia
 del fallback.
 
 Code consume directamente el scan publicado con cero `route_candidates`. La
-finalización del recorrido protegido incorpora después evidencia Ruff v1 sobre
-las versiones Python vigentes con fingerprint exacto ya publicado, incluidas
-las parciales. El proveedor usa el intérprete
-del runtime, configuración aislada, archivos explícitos y límites de proceso;
-su fila `external_tool_runs`, la proyección `external:ruff` y el fence de Code
-se confirman atómicamente. Ruff no participa en el processing signature AST y
-un replay exacto no duplica diagnósticos.
+finalización incorpora una plataforma de proveedores sobre las versiones Python
+vigentes con fingerprint exacto, incluidas las parciales. `protected` ejecuta
+Ruff basic aislado; `trusted-static` añade Ruff con configuración versionada del
+proyecto acotada a `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright como productores
+independientes. `I,PT,SIM,UP` se excluyen para que estilo y modernización no
+desplacen la señal de mantenimiento. Cada proveedor conserva
+descriptor, firma de entorno/configuración/comparabilidad, inputs, findings y
+counters normalizados. La suite y el fence de Code se confirman atómicamente;
+los proveedores no participan en el processing signature AST.
+
+El replay exacto valida de nuevo los inputs y enlaza la publicación completa
+mediante `external_run_replays`; no inicia procesos ni duplica findings. Mypy y
+Pyright se mantienen en espacios de evidencia separados y sólo producen un
+resumen de coincidencias/discrepancias cuando ambos tienen cobertura completa.
+La plataforma es advisory, no ejecuta contenido, no aplica fixes y no posee
+autoridad de mutación. `trusted-deep` está reservado, no implementado.
 
 La finalización adquiere una transacción propia y exige exactamente una ruta code
 completada, identidad vigente y ceros en candidatos, `file_actions`,
@@ -757,8 +766,10 @@ Herramientas externas posibles:
 - Tesseract para OCR;
 - FFprobe/FFmpeg para audio y vídeo;
 - qpdf opcional para recuperación estructural PDF;
-- Ruff como evidencia advisory integrada exclusivamente al autoanálisis
-  protegido, sin fixes ni configuración del corpus;
+- Ruff y Mypy como evidencia advisory del autoanálisis, resueltos desde el
+  runtime Python; Ruff usa política basic aislada o política trusted del proyecto;
+- Pyright `1.1.411` como paquete npm aislado junto al runtime, ejecutado mediante
+  Node únicamente en `trusted-static`;
 - FastEmbed y Faster-Whisper para inferencia local.
 
 No se observó `shell=True` en el motor auditado. La presencia de límites no
@@ -768,7 +779,7 @@ equivale a sandbox completo; véase [SECURITY.md](SECURITY.md).
 
 El paquete se construye con setuptools y exige Python `>=3.13,<3.14`. Incluye
 los seis paquetes de producción, `neocortex`, el shim `Orquestador.py` y assets
-de la GUI. La base exacta es `rich` + `ruff` + `xxhash`; `documents`, `audio`,
+de la GUI. La base exacta es `mypy` + `rich` + `ruff` + `xxhash`; `documents`, `audio`,
 `image`, `semantic` y `ui` declaran runtimes opcionales, y `full` es su unión compatible.
 `neocortex.capabilities` inspecciona esa disponibilidad de forma estática; no
 certifica inferencia, caché de modelos ni compatibilidad resuelta.

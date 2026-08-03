@@ -102,7 +102,7 @@ Neocortex --root $Root --route pdf,docx --MaxCount 25 --docx-max-count 25 --stri
 No use una corrida amplia como prueba de instalación. Ayuda, versión y doctors
 son la barrera inicial apropiada.
 
-## Autoanálisis protegido en laboratorio
+## Autoanálisis de código en laboratorio
 
 Use un mini-root sintético y un estado hermano, nunca contenido dentro de la
 raíz analizada:
@@ -115,6 +115,21 @@ $MiniState = Join-Path $Lab 'mini-state'
 Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
 ```
+
+Ese comando usa el perfil `protected`. Para una raíz explícitamente confiable,
+el piloto del perfil estático es:
+
+```powershell
+Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
+```
+
+`trusted-static` ejecuta cuatro proveedores independientes: Ruff basic, Ruff
+con la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright. Las familias
+Ruff `I,PT,SIM,UP` quedan fuera para priorizar defectos y mantenibilidad sobre
+estilo/modernización. No escale si status muestra un
+proveedor `abstained`/`not_recorded`, cobertura incompleta o una limitación que
+impida interpretar el resultado. La falta de Pyright no invalida la evidencia
+Ruff/Mypy, pero deja el consenso de tipos `not_comparable`.
 
 El manifest guarda `Neocortex` como primer elemento de su argv canónico. Antes
 de promover el launcher estable, use la ruta exacta del runtime versionado para
@@ -347,6 +362,12 @@ Neocortex --code-doctor
 - Ruff pertenece al runtime base. `--code-doctor --code-json` debe mostrar su
   distribución y versión desde el mismo intérprete de Neocortex; una copia
   global encontrada en `PATH` no satisface esta capacidad.
+- Mypy también pertenece al runtime base y se ejecuta como módulo del mismo
+  intérprete, con caché efímera propiedad de la corrida.
+- Pyright `1.1.411` se instala como paquete npm aislado junto al runtime y se
+  invoca mediante Node. `--code-doctor --code-json` informa por separado los
+  cuatro proveedores; la corrida incorpora la resolución exacta a su firma de
+  entorno y comparabilidad.
 - La primera transcripción puede descargar el modelo Whisper. Use
   `--audio-local-models-only` para prohibir descargas.
 - Los modelos semánticos sólo se adquieren mediante
@@ -383,9 +404,15 @@ No ejecute una cola operativa grande antes de demostrar en un estado aislado
 incremental. Tests de staging no sustituyen esa prueba end-to-end.
 
 No ejecute manualmente herramientas externas ni descargue modelos para validar
-una instalación básica. `--self-analysis` supervisa por sí mismo su evidencia
-Ruff fija; la validación del wheel debe confirmar que esa dependencia está en el
-runtime.
+una instalación básica. `--self-analysis` supervisa por sí mismo la suite; la
+validación del wheel debe confirmar Ruff y Mypy en la base, y la preparación del
+perfil `trusted-static` debe confirmar Node y el paquete Pyright aislado.
+
+Para probar incrementalidad, ejecute una sola segunda corrida sobre el mismo
+estado y los mismos bytes. En `--code-status --code-json`, cada proveedor listo
+debe declarar `execution=cache_replay`, `process_invocations=0`, `cache_hits=1`
+y contadores de verificación coherentes. El replay verifica inputs; no significa
+que se haya omitido la comprobación de frescura.
 
 ## Cancelación de una corrida normal
 

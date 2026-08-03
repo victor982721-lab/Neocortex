@@ -63,22 +63,32 @@ de un corpus permitido se excluyen. El estado no puede ser igual ni ancestro
 del corpus. Dedup v9 conserva la firma cruda de exclusión y Framework v20 liga
 la firma efectiva que también incorpora las rutas internas.
 
-### Autoanálisis protegido
+### Autoanálisis de código
 
 `--self-analysis` pertenece al nivel **Estado sin mutación del corpus**. Exige
 una raíz y un estado explícitos cuyos árboles sean disjuntos, captura y vuelve
 a verificar sus identidades, fuerza `analyze_only` y sólo admite la ruta
 `code` desde el inventario. Rechaza `--apply`, route-only/resume, rutas MIME,
 catálogo, organización y generated/vendored. El contenido se analiza como
-evidencia no confiable y no se ejecuta. La única herramienta externa integrada
-en esta frontera es el adaptador Ruff v1: recibe exclusivamente el manifest de
-archivos Python ya publicados y abre copias temporales cuyos bytes ya fueron
-verificados, usa configuración aislada, entorno/cwd controlados, `--no-cache` y
-ninguna capacidad de fix. Sus resultados son
-advisory y nunca autorizan mutaciones.
+evidencia no confiable y no se ejecuta. El perfil predeterminado `protected`
+integra sólo Ruff basic: recibe el manifest de archivos Python ya publicados,
+abre copias temporales verificadas, ignora la configuración del proyecto y usa
+entorno/cwd controlados, `--no-cache` y ninguna capacidad de fix.
+
+`trusted-static` es una frontera explícita para una raíz que Victor declara
+confiable. Conserva Ruff basic y permite leer el `pyproject.toml` versionado para
+Ruff proyecto, Mypy y Pyright. El adaptador limita Ruff trusted a
+`E4,E7,E9,F,B,C4,PIE,RUF` y omite `I,PT,SIM,UP`; además rechaza mecanismos que
+amplían la confianza: Ruff `extend`, plugins o `mypy_path`, y rutas externas de
+Pyright. Los cuatro
+proveedores declaran `uses_network=false`, `imports_content=false`,
+`executes_content=false`, `authority=advisory` y
+`mutation_authority=false`. Sus resultados nunca autorizan mutaciones.
+`trusted-deep`, asociado conceptualmente a ejecución confiable, está reservado
+y no tiene superficie CLI ni implementación.
 
 La finalización no confía únicamente en la CLI: Framework v20 impide enlazar
-acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y code v2
+acciones a un run protegido, Dedup v9 exige el scan ligado a su firma y Code v3
 conserva el run analítico. Los owners de mutación reciben
 `CorpusMutationGuard` y el commit exige ceros durables en candidatos, acciones
 y organización. Una identidad cambiada, un árbol intersectante o una frontera
@@ -238,15 +248,19 @@ un fixture no confidencial y aislado.
 
 La ruta `code` analiza texto/AST/estructura y no ejecuta el código observado. El
 analizador Rust vigente es léxico; Cargo y Clippy no se ejecutan como parte del
-contrato actual. Ruff sólo participa en `--self-analysis` bajo el perfil fijo
-`external-ruff-v1`: no descubre archivos, no carga configuración del corpus, no
-importa módulos y no aplica fixes. Ruff sólo abre copias temporales verificadas;
-el flujo integrado las crea bajo el directorio de estado explícito y disjunto,
-nunca bajo la raíz observada aunque `TEMP/TMP` apunten allí. NeoCortex gestiona
-y cierra los handles de cada lectura y, después del proceso, vuelve a abrir y
-comprobar los inputs originales publicados.
-Ningún otro linter, compilador, plugin o script del corpus puede incorporarse
-sin una política explícita de confianza, timeout, recursos, publicación y
+contrato actual. Ruff, Mypy y Pyright sólo participan en `--self-analysis`: no
+descubren archivos, no importan módulos y no aplican fixes. El perfil protected
+no carga configuración del corpus; trusted-static carga únicamente la política
+estática acotada descrita arriba. El flujo crea copias temporales verificadas
+bajo el estado explícito y disjunto, nunca bajo la raíz observada aunque
+`TEMP/TMP` apunten allí. NeoCortex cierra los handles y vuelve a comprobar los
+inputs originales después de cada proceso.
+
+Mypy se invoca con el intérprete aislado y una caché efímera. Pyright `1.1.411`
+se ejecuta mediante Node desde un paquete npm owned junto al runtime; no usa
+`npx`, no descarga herramientas durante la corrida y no ejecuta scripts del
+proyecto. Ningún otro linter, compilador, plugin o script puede incorporarse sin
+una política explícita de confianza, timeout, recursos, publicación y
 proveniencia.
 
 ## Herramientas externas
@@ -258,9 +272,12 @@ NeoCortex puede localizar o usar Tesseract, FFprobe/FFmpeg y qpdf.
 - Registre versión y origen del ejecutable.
 - qpdf es un fallback opcional; su ausencia no debe provocar la ejecución de un
   binario alternativo no confiable.
-- Ruff es una dependencia del runtime de NeoCortex y se invoca con el mismo
-  intérprete (`python -I -m ruff`), nunca mediante un ejecutable encontrado en
-  `PATH` ni una configuración aportada por la raíz analizada.
+- Ruff y Mypy son dependencias base del runtime y se invocan con el mismo
+  intérprete (`python -I -m ...`), nunca mediante ejecutables encontrados en
+  `PATH`.
+- La instalación canónica de Pyright requiere Node y conserva el paquete npm
+  aislado junto al runtime; cualquier resolución alternativa queda incorporada
+  a la firma de entorno y no concede autoridad adicional.
 - No interpole rutas o consultas de usuario dentro de comandos de shell propios.
 
 Los temporales de recuperación deben permanecer en el directorio temporal del
@@ -272,7 +289,7 @@ hijo suspendido y lo asignan por su handle exacto a un Job Object con
 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` antes de reanudarlo. Timeout, desborde de
 stdout/stderr, cancelación o excepción terminan el Job, esperan al proceso
 directo y cierran pipes y handles. Esta contención cubre los descendientes de
-esas fronteras; Ruff añade además un límite de memoria del Job, cwd y entorno
+esas fronteras; los proveedores estáticos añaden límites de memoria, cwd y entorno
 explícitos. Esto no autoriza matar procesos por nombre ni debe atribuirse a un
 callsite que no use esos supervisores.
 

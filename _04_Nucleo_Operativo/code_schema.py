@@ -26,11 +26,10 @@ from .sqlite_schema_contract import (
     validate_sqlite_schema_contract,
 )
 
-
 # region [01] Versioned DDL
 
 
-CODE_SCHEMA_VERSION = 2
+CODE_SCHEMA_VERSION = 3
 
 _V1_DDL = (
     """CREATE TABLE metadata(
@@ -387,6 +386,143 @@ _V2_DDL = (
 )
 
 
+_V3_DDL = (
+    """CREATE TABLE external_run_contracts(
+        tool_run_id INTEGER PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        provider_schema TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source LIKE 'external:%'),
+        profile TEXT NOT NULL CHECK(profile IN (
+            'protected','trusted-static','trusted-deep'
+        )),
+        trust_requirement TEXT NOT NULL CHECK(trust_requirement IN (
+            'untrusted-safe','trusted-static','trusted-execution'
+        )),
+        scope TEXT NOT NULL,
+        observed_root TEXT NOT NULL COLLATE NOCASE,
+        root_identity TEXT NOT NULL,
+        project_configuration_digest TEXT,
+        environment_signature TEXT NOT NULL,
+        input_signature TEXT NOT NULL,
+        comparability_signature TEXT NOT NULL,
+        execution_strategy TEXT NOT NULL,
+        invalidation_strategy TEXT NOT NULL CHECK(invalidation_strategy IN (
+            'file_local','module_closure','dependency_closure',
+            'project_wide','dynamic_suite'
+        )),
+        cache_policy TEXT NOT NULL,
+        execution TEXT NOT NULL CHECK(execution IN (
+            'full','cache_replay','skipped','attempted','unavailable'
+        )),
+        result_digest TEXT,
+        portable_publication_id TEXT NOT NULL,
+        authority TEXT NOT NULL CHECK(authority='advisory'),
+        mutation_authority INTEGER NOT NULL CHECK(mutation_authority=0),
+        loads_project_configuration INTEGER NOT NULL CHECK(
+            loads_project_configuration IN (0,1)
+        ),
+        loads_plugins INTEGER NOT NULL CHECK(loads_plugins IN (0,1)),
+        imports_content INTEGER NOT NULL CHECK(imports_content IN (0,1)),
+        executes_content INTEGER NOT NULL CHECK(executes_content IN (0,1)),
+        uses_network INTEGER NOT NULL CHECK(uses_network IN (0,1)),
+        coverage_complete INTEGER NOT NULL CHECK(coverage_complete IN (0,1)),
+        limitations_json TEXT NOT NULL,
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE
+    ) WITHOUT ROWID""",
+    """CREATE INDEX external_run_contracts_provider_idx
+        ON external_run_contracts(provider_id,profile,tool_run_id DESC)""",
+    """CREATE INDEX external_run_contracts_comparable_idx
+        ON external_run_contracts(
+            provider_id,comparability_signature,tool_run_id DESC
+        )""",
+    """CREATE INDEX external_run_contracts_exact_idx
+        ON external_run_contracts(
+            provider_id,input_signature,tool_run_id DESC
+        )""",
+    """CREATE TABLE external_run_inputs(
+        tool_run_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        portable_input_id TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        eligible INTEGER NOT NULL CHECK(eligible IN (0,1)),
+        covered INTEGER NOT NULL CHECK(covered IN (0,1)),
+        coverage_reason TEXT,
+        size INTEGER NOT NULL CHECK(size>=0),
+        content_digest TEXT NOT NULL,
+        PRIMARY KEY(tool_run_id,portable_input_id),
+        UNIQUE(tool_run_id,version_id),
+        CHECK(covered<=eligible),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id)
+    ) WITHOUT ROWID""",
+    """CREATE INDEX external_run_inputs_coverage_idx
+        ON external_run_inputs(tool_run_id,eligible,covered)""",
+    """CREATE TABLE external_findings(
+        finding_id INTEGER PRIMARY KEY,
+        tool_run_id INTEGER NOT NULL,
+        portable_finding_id TEXT NOT NULL,
+        version_id INTEGER,
+        symbol_id INTEGER,
+        project_id INTEGER,
+        category TEXT NOT NULL,
+        code TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        message TEXT NOT NULL,
+        observation_confirmed INTEGER NOT NULL CHECK(
+            observation_confirmed IN (0,1)
+        ),
+        tool_confidence REAL CHECK(
+            tool_confidence IS NULL OR
+            (tool_confidence>=0.0 AND tool_confidence<=1.0)
+        ),
+        calibrated_confidence REAL CHECK(
+            calibrated_confidence IS NULL OR
+            (calibrated_confidence>=0.0 AND calibrated_confidence<=1.0)
+        ),
+        gate_authority TEXT NOT NULL,
+        mutation_authority INTEGER NOT NULL CHECK(mutation_authority=0),
+        start_line INTEGER,
+        start_column INTEGER,
+        end_line INTEGER,
+        end_column INTEGER,
+        metadata_json TEXT NOT NULL,
+        projected_diagnostic_id INTEGER,
+        UNIQUE(tool_run_id,portable_finding_id),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY(version_id) REFERENCES file_versions(version_id),
+        FOREIGN KEY(symbol_id) REFERENCES symbols(symbol_id),
+        FOREIGN KEY(project_id) REFERENCES projects(project_id),
+        FOREIGN KEY(projected_diagnostic_id) REFERENCES diagnostics(diagnostic_id)
+            ON DELETE SET NULL
+    )""",
+    """CREATE INDEX external_findings_run_idx
+        ON external_findings(tool_run_id,category,severity)""",
+    """CREATE INDEX external_findings_version_idx
+        ON external_findings(version_id,tool_run_id)""",
+    """CREATE TABLE external_run_replays(
+        tool_run_id INTEGER PRIMARY KEY,
+        source_tool_run_id INTEGER NOT NULL,
+        verification_signature TEXT NOT NULL,
+        files_verified INTEGER NOT NULL CHECK(files_verified>=0),
+        bytes_verified INTEGER NOT NULL CHECK(bytes_verified>=0),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE,
+        FOREIGN KEY(source_tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+    ) WITHOUT ROWID""",
+    """CREATE TABLE external_run_counters(
+        tool_run_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        value INTEGER NOT NULL CHECK(value>=0),
+        PRIMARY KEY(tool_run_id,name),
+        FOREIGN KEY(tool_run_id) REFERENCES external_tool_runs(tool_run_id)
+            ON DELETE CASCADE
+    ) WITHOUT ROWID""",
+)
+
+
 # endregion [01]
 
 
@@ -415,13 +551,7 @@ def connect_code_state(
 ) -> sqlite3.Connection:
     """Open code state, optionally refusing creation after initialization."""
 
-    mode = (
-        READONLY_EXISTING
-        if readonly
-        else READWRITE_CREATE
-        if create
-        else READWRITE_EXISTING
-    )
+    mode = READONLY_EXISTING if readonly else READWRITE_CREATE if create else READWRITE_EXISTING
     return connect_sqlite(
         path,
         mode=mode,
@@ -466,9 +596,7 @@ def readonly_code_database(
         raise TypeError("close_connection must be a boolean")
     selected = Path(path)
     sidecars = (Path(f"{selected}-wal"), Path(f"{selected}-shm"))
-    if connect is connect_code_state and not any(
-        os.path.lexists(sidecar) for sidecar in sidecars
-    ):
+    if connect is connect_code_state and not any(os.path.lexists(sidecar) for sidecar in sidecars):
         from .self_analysis_status import quiescent_sqlite_database
 
         with quiescent_sqlite_database(selected) as connection:
@@ -490,6 +618,7 @@ def _execute(connection: sqlite3.Connection, statements: tuple[str, ...]) -> Non
 def _build_current_schema(connection: sqlite3.Connection) -> None:
     _execute(connection, _V1_DDL)
     _execute(connection, _V2_DDL)
+    _execute(connection, _V3_DDL)
 
 
 @lru_cache(maxsize=1)
@@ -518,9 +647,7 @@ def _read_version(connection: sqlite3.Connection) -> int | None:
     ).fetchone()[0]
     if int(objects) == 0:
         return None
-    metadata = connection.execute(
-        "SELECT type FROM sqlite_master WHERE name='metadata'"
-    ).fetchone()
+    metadata = connection.execute("SELECT type FROM sqlite_master WHERE name='metadata'").fetchone()
     if metadata is None or str(metadata[0]) != "table":
         raise RuntimeError("code database contains objects but no metadata table")
     rows = connection.execute(
@@ -575,6 +702,13 @@ def _create_fresh(connection: sqlite3.Connection, applied_ns: int) -> None:
         "probable projects, reconstruction provenance and semantic links",
         applied_ns + 1,
     )
+    _execute(connection, _V3_DDL)
+    _record_migration(
+        connection,
+        3,
+        "normalized multi-provider external code evidence",
+        applied_ns + 2,
+    )
 
 
 def _migrate_one_to_two(connection: sqlite3.Connection, applied_ns: int) -> None:
@@ -583,6 +717,16 @@ def _migrate_one_to_two(connection: sqlite3.Connection, applied_ns: int) -> None
         connection,
         2,
         "probable projects, reconstruction provenance and semantic links",
+        applied_ns,
+    )
+
+
+def _migrate_two_to_three(connection: sqlite3.Connection, applied_ns: int) -> None:
+    _execute(connection, _V3_DDL)
+    _record_migration(
+        connection,
+        3,
+        "normalized multi-provider external code evidence",
         applied_ns,
     )
 
@@ -620,6 +764,9 @@ def initialize_code_state(path: Path) -> None:
                 _create_fresh(connection, applied_ns)
             elif current == 1:
                 _migrate_one_to_two(connection, applied_ns)
+                _migrate_two_to_three(connection, applied_ns + 1)
+            elif current == 2:
+                _migrate_two_to_three(connection, applied_ns)
             else:
                 raise RuntimeError(f"unsupported code migration start: {current}")
             validate_code_schema(connection)
@@ -692,7 +839,7 @@ __all__ = [
     "code_schema_contract",
     "connect_code_state",
     "initialize_code_state",
-    "remove_checkpointed_code_sidecars",
     "readonly_code_database",
+    "remove_checkpointed_code_sidecars",
     "validate_code_schema",
 ]

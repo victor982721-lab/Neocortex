@@ -53,7 +53,7 @@ La METADATA de `0.7.2` separa el cierre de runtime así:
 
 | Selección | Requisitos directos |
 |---|---|
-| base | `rich`, `ruff`, `xxhash` |
+| base | `mypy`, `rich`, `ruff`, `xxhash` |
 | `documents` | `Pillow`, `PyMuPDF`, `pdfminer.six`, `pytesseract` |
 | `audio` | `faster-whisper` |
 | `image` | `Pillow`, `nudenet` |
@@ -61,8 +61,26 @@ La METADATA de `0.7.2` separa el cierre de runtime así:
 | `ui` | `PySide6` |
 | `full` | unión de los cinco extras anteriores |
 
-El wheelhouse sólo resuelve paquetes Python. También se debe preparar y
-validar por separado `ffprobe` en `PATH` para la capacidad `audio`. La ausencia
+El wheelhouse sólo resuelve paquetes Python. Para `trusted-static`, prepare
+además Node y Pyright `1.1.411` como paquete npm aislado dentro del venv del
+runtime, sin añadir dependencias al proyecto analizado:
+
+```powershell
+$Runtime = 'C:\Ruta\VenvValidacion072'
+npm install --prefix "$Runtime\tools\pyright" --ignore-scripts --no-audit --no-fund pyright@1.1.411
+$env:PATH = "C:\Ruta\Node;$env:PATH"
+& "$Runtime\Scripts\Neocortex.exe" --state-directory C:\Ruta\EstadoPrueba --code-doctor --code-json
+```
+
+El resultado esperado queda en
+`$Runtime\tools\pyright\node_modules\pyright`; NeoCortex ejecuta su `index.js`
+mediante Node y registra ambas resoluciones en la firma de entorno. La
+instalación offline debe sustituir el comando npm por un cache/registry local
+autorizado y conservar el tarball, hash y avisos; no se permite red durante el
+autoanálisis.
+
+También se debe preparar y validar por separado `ffprobe` en `PATH` para la
+capacidad `audio`. La ausencia
 de `tesseract` o `qpdf` deja degradadas las funciones OCR/recuperación PDF de
 `documents`, y la ausencia de `tesseract` degrada el OCR documental de
 `image`. El probe estático de capacidades busca estos ejecutables únicamente
@@ -73,9 +91,11 @@ declaran presencia, no validan los rangos de versiones: el resolver hermético y
 `--no-deps` permite comprobar versión y ayuda porque esas rutas de arranque no
 importan engines. No demuestra que `KnowledgeSearchService`, inventario o una
 ruta operativa funcionen: para ello el venv aislado debe contener al menos el
-cierre base de `rich`, `ruff` y `xxhash`. Ruff debe resolverse dentro del mismo
-runtime; una copia global en `PATH` no satisface el autoanálisis. Ningún probe
-de instalación debe cargar o descargar modelos; la disponibilidad de modelos
+cierre base de `mypy`, `rich`, `ruff` y `xxhash`. Ruff y Mypy deben resolverse
+desde el mismo runtime Python. Pyright pertenece a la preparación separada de
+`trusted-static`; su ausencia no impide `protected`, pero deja su proveedor y el
+consenso de tipos degradados. Ningún probe de instalación debe cargar o
+descargar modelos; la disponibilidad de modelos
 se valida después, de forma offline y contra cachés explícitas.
 
 Conserva el wheel y sdist `0.7.2`, su `constraints.txt`, el inventario del

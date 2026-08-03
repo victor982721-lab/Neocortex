@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from .code_external_evidence import (
+    RUFF_CONFIGURATION_SIGNATURE,
     ExternalEvidenceStatus,
     external_status_digest_payload,
     read_external_evidence,
@@ -19,13 +20,24 @@ from .code_schema import (
     readonly_code_database,
     validate_code_schema,
 )
+from .external_evidence_models import (
+    ExternalEvidenceSuiteStatus,
+    ExternalProviderStatus,
+)
+from .external_evidence_store import (
+    read_external_evidence_suite,
+    read_external_provider_finding_ids,
+)
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v2"
-CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = ("neocortex.code-publication-diff/v1",)
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v3"
+CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
+    "neocortex.code-publication-diff/v1",
+    "neocortex.code-publication-diff/v2",
+)
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
+_LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
 CODE_PUBLICATION_DIFF_MAX_CALLS = 250_000
 CODE_PUBLICATION_DIFF_MAX_HOTSPOTS = 20_000
 
@@ -105,6 +117,19 @@ class CodeExternalEvidenceDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeProviderEvidenceDelta:
+    provider_id: str
+    status: Literal["ready", "not_evaluated"]
+    reason: str | None
+    baseline: ExternalProviderStatus | None
+    current: ExternalProviderStatus | None
+    common: int
+    added: int | None
+    resolved: int | None
+    gate: Literal["passed", "failed", "not_evaluated"]
+
+
+@dataclass(frozen=True, slots=True)
 class CodePublicationDiffDigest:
     xxh3_128: str
     xxh3_64_guard: str
@@ -123,6 +148,18 @@ class CodePublicationDiffResult:
     hotspots: CodeHotspotDelta | None
     probable_dead_delta: int | None
     external_evidence: CodeExternalEvidenceDelta | None
+    analysis_profile: str | None
+    providers: tuple[CodeProviderEvidenceDelta, ...]
+    verdict: (
+        Literal[
+            "improved",
+            "regressed",
+            "mixed",
+            "equivalent_under_observed_metrics",
+            "incomparable",
+        ]
+        | None
+    )
     limitations: tuple[str, ...]
     digest: CodePublicationDiffDigest | None
 
@@ -152,6 +189,8 @@ class _Publication:
     hotspots: dict[tuple[str, str], tuple[str, ...]]
     external_evidence: ExternalEvidenceStatus
     external_diagnostic_ids: frozenset[str]
+    external_evidence_suite: ExternalEvidenceSuiteStatus
+    provider_finding_ids: dict[str, frozenset[str]]
 
 
 def _root_hint(connection: sqlite3.Connection) -> Path:
@@ -176,9 +215,7 @@ def _root_hint(connection: sqlite3.Connection) -> Path:
     try:
         root = Path(os.path.commonpath(candidates))
     except ValueError as exc:
-        raise ValueError(
-            "code publication spans incompatible filesystem roots"
-        ) from exc
+        raise ValueError("code publication spans incompatible filesystem roots") from exc
     if not root.is_absolute():
         raise ValueError("code publication root is not absolute")
     return root
@@ -247,9 +284,7 @@ def _read_calls(
     for row in rows:
         relative = _relative_path(row["current_path"], root)
         source_symbol = (
-            None
-            if row["source_qualified_name"] is None
-            else str(row["source_qualified_name"])
+            None if row["source_qualified_name"] is None else str(row["source_qualified_name"])
         )
         target_hint = None if row["target_hint"] is None else str(row["target_hint"])
         key = (
@@ -259,9 +294,7 @@ def _read_calls(
             str(row["name"]),
         )
         if key in calls:
-            raise ValueError(
-                f"duplicate stable call identity in publication: {relative}"
-            )
+            raise ValueError(f"duplicate stable call identity in publication: {relative}")
         calls[key] = _CallSite(
             relative,
             source_symbol,
@@ -343,9 +376,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         validate_code_schema(connection)
         schema_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
         if schema_version != CODE_SCHEMA_VERSION:
-            raise RuntimeError(
-                f"code state schema {schema_version} is unsupported for diff"
-            )
+            raise RuntimeError(f"code state schema {schema_version} is unsupported for diff")
         latest = connection.execute(
             """SELECT analysis_run_id,processing_signature,status FROM analysis_runs
             ORDER BY analysis_run_id DESC LIMIT 1"""
@@ -400,6 +431,15 @@ def _read_publication(state_directory: Path) -> _Publication:
             int(latest["analysis_run_id"]),
             enforce_current_runtime=False,
         )
+        external_suite = read_external_evidence_suite(
+            connection,
+            int(latest["analysis_run_id"]),
+            enforce_current_runtime=False,
+        )
+        provider_ids = read_external_provider_finding_ids(
+            connection,
+            int(latest["analysis_run_id"]),
+        )
     snapshot = CodePublicationSnapshot(
         state_directory=str(state_directory),
         database=str(database),
@@ -420,6 +460,8 @@ def _read_publication(state_directory: Path) -> _Publication:
         hotspots,
         external_evidence,
         external_ids,
+        external_suite,
+        provider_ids,
     )
 
 
@@ -489,9 +531,7 @@ def _hotspot_delta(baseline: _Publication, current: _Publication) -> CodeHotspot
     common_keys = baseline_keys & current_keys
     added = sorted(current_keys - baseline_keys)
     removed = sorted(baseline_keys - current_keys)
-    changed = sorted(
-        key for key in common_keys if baseline.hotspots[key] != current.hotspots[key]
-    )
+    changed = sorted(key for key in common_keys if baseline.hotspots[key] != current.hotspots[key])
     limit = CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT
     return CodeHotspotDelta(
         common=len(common_keys),
@@ -548,9 +588,7 @@ def _external_delta(
         )
     common = baseline.external_diagnostic_ids & current.external_diagnostic_ids
     added = sorted(current.external_diagnostic_ids - baseline.external_diagnostic_ids)
-    resolved = sorted(
-        baseline.external_diagnostic_ids - current.external_diagnostic_ids
-    )
+    resolved = sorted(baseline.external_diagnostic_ids - current.external_diagnostic_ids)
     return CodeExternalEvidenceDelta(
         "ready",
         None,
@@ -565,6 +603,147 @@ def _external_delta(
     )
 
 
+def _legacy_ruff_contract_compatible(
+    provider_id: str,
+    left: ExternalProviderStatus | None,
+    right: ExternalProviderStatus | None,
+) -> bool:
+    return (
+        left is not None
+        and right is not None
+        and provider_id == "ruff-protected-basic"
+        and left.profile == right.profile == "protected"
+        and left.provider_schema == right.provider_schema == "neocortex.ruff-protected-basic/v1"
+        and left.tool_name == right.tool_name == "ruff"
+        and left.tool_version == right.tool_version
+        and (
+            (
+                left.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                and right.comparability_signature.startswith("ruff-protected-basic-comparable-v1:")
+            )
+            or (
+                right.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                and left.comparability_signature.startswith("ruff-protected-basic-comparable-v1:")
+            )
+        )
+    )
+
+
+def _provider_deltas(
+    baseline: _Publication,
+    current: _Publication,
+) -> tuple[CodeProviderEvidenceDelta, ...]:
+    before = {item.provider_id: item for item in baseline.external_evidence_suite.providers}
+    after = {item.provider_id: item for item in current.external_evidence_suite.providers}
+    deltas: list[CodeProviderEvidenceDelta] = []
+    for provider_id in sorted(set(before) | set(after)):
+        left = before.get(provider_id)
+        right = after.get(provider_id)
+        legacy_ruff_compatible = _legacy_ruff_contract_compatible(provider_id, left, right)
+        comparable = (
+            left is not None
+            and right is not None
+            and left.status == "ready"
+            and right.status == "ready"
+            and left.profile == right.profile
+            and left.provider_schema == right.provider_schema
+            and left.tool_version == right.tool_version
+            and (
+                left.comparability_signature == right.comparability_signature
+                or legacy_ruff_compatible
+            )
+        )
+        if not comparable:
+            reasons: list[str] = []
+            if left is None:
+                reasons.append("baseline_provider_missing")
+            elif left.status != "ready":
+                reasons.append(f"baseline_{left.status}:{left.reason}")
+            if right is None:
+                reasons.append("current_provider_missing")
+            elif right.status != "ready":
+                reasons.append(f"current_{right.status}:{right.reason}")
+            if left is not None and right is not None:
+                if left.profile != right.profile:
+                    reasons.append("profile_changed")
+                if left.provider_schema != right.provider_schema:
+                    reasons.append("provider_schema_changed")
+                if left.tool_version != right.tool_version:
+                    reasons.append("tool_version_changed")
+                if (
+                    left.comparability_signature != right.comparability_signature
+                    and not legacy_ruff_compatible
+                ):
+                    reasons.append("comparability_signature_changed")
+            deltas.append(
+                CodeProviderEvidenceDelta(
+                    provider_id,
+                    "not_evaluated",
+                    ";".join(reasons) or "provider_not_comparable",
+                    left,
+                    right,
+                    0,
+                    None,
+                    None,
+                    "not_evaluated",
+                )
+            )
+            continue
+        baseline_ids = baseline.provider_finding_ids.get(provider_id)
+        if baseline_ids is None:
+            baseline_ids = (
+                baseline.external_diagnostic_ids
+                if left.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                else frozenset()
+            )
+        current_ids = current.provider_finding_ids.get(provider_id)
+        if current_ids is None:
+            current_ids = (
+                current.external_diagnostic_ids
+                if right.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
+                else frozenset()
+            )
+        added = current_ids - baseline_ids
+        resolved = baseline_ids - current_ids
+        deltas.append(
+            CodeProviderEvidenceDelta(
+                provider_id,
+                "ready",
+                None,
+                left,
+                right,
+                len(baseline_ids & current_ids),
+                len(added),
+                len(resolved),
+                "passed" if not added else "failed",
+            )
+        )
+    return tuple(deltas)
+
+
+def _provider_verdict(
+    deltas: tuple[CodeProviderEvidenceDelta, ...],
+) -> Literal[
+    "improved",
+    "regressed",
+    "mixed",
+    "equivalent_under_observed_metrics",
+    "incomparable",
+]:
+    comparable = tuple(item for item in deltas if item.status == "ready")
+    if not comparable:
+        return "incomparable"
+    added = sum(item.added or 0 for item in comparable)
+    resolved = sum(item.resolved or 0 for item in comparable)
+    if added and resolved:
+        return "mixed"
+    if added:
+        return "regressed"
+    if resolved:
+        return "improved"
+    return "equivalent_under_observed_metrics"
+
+
 def _digest_payload(
     baseline: CodePublicationSnapshot,
     current: CodePublicationSnapshot,
@@ -572,6 +751,8 @@ def _digest_payload(
     hotspots: CodeHotspotDelta,
     probable_dead_delta: int,
     external_evidence: CodeExternalEvidenceDelta,
+    providers: tuple[CodeProviderEvidenceDelta, ...],
+    verdict: str,
     limitations: tuple[str, ...],
 ) -> CodePublicationDiffDigest:
     def snapshot(value: CodePublicationSnapshot) -> dict[str, object]:
@@ -600,6 +781,8 @@ def _digest_payload(
                 "resolved_examples": list(external_evidence.resolved_examples),
                 "gate": external_evidence.gate,
             },
+            "providers": [asdict(item) for item in providers],
+            "verdict": verdict,
             "limitations": list(limitations),
         }
     )
@@ -627,6 +810,9 @@ def _abstained(
         hotspots=None,
         probable_dead_delta=None,
         external_evidence=None,
+        analysis_profile=None,
+        providers=(),
+        verdict=None,
         limitations=(),
         digest=None,
     )
@@ -658,16 +844,24 @@ def compare_code_publications(
         )
     calls = _call_delta(baseline, current)
     hotspots = _hotspot_delta(baseline, current)
-    probable_dead_delta = (
-        current.snapshot.probable_dead - baseline.snapshot.probable_dead
-    )
+    probable_dead_delta = current.snapshot.probable_dead - baseline.snapshot.probable_dead
     external_evidence = _external_delta(baseline, current)
-    limitations = (
+    providers = _provider_deltas(baseline, current)
+    verdict = _provider_verdict(providers)
+    limitations = [
         "common_calls_require_matching_source_path_byte_range_and_name",
         "dynamic_dispatch_is_not_observed",
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
-    )
+    ]
+    if any(item.status != "ready" for item in providers):
+        limitations.append("provider_verdict_uses_only_comparable_providers")
+    if any(
+        _legacy_ruff_contract_compatible(item.provider_id, item.baseline, item.current)
+        for item in providers
+    ):
+        limitations.append(_LEGACY_RUFF_COMPARABILITY_REASON)
+    frozen_limitations = tuple(limitations)
     digest = _digest_payload(
         baseline.snapshot,
         current.snapshot,
@@ -675,7 +869,9 @@ def compare_code_publications(
         hotspots,
         probable_dead_delta,
         external_evidence,
-        limitations,
+        providers,
+        verdict,
+        frozen_limitations,
     )
     return CodePublicationDiffResult(
         baseline_database=baseline.snapshot.database,
@@ -688,18 +884,22 @@ def compare_code_publications(
         hotspots=hotspots,
         probable_dead_delta=probable_dead_delta,
         external_evidence=external_evidence,
-        limitations=limitations,
+        analysis_profile=current.external_evidence_suite.profile,
+        providers=providers,
+        verdict=verdict,
+        limitations=frozen_limitations,
         digest=digest,
     )
 
 
 __all__ = [
-    "CODE_PUBLICATION_DIFF_SCHEMA",
     "CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS",
+    "CODE_PUBLICATION_DIFF_SCHEMA",
     "CodeCallResolutionChange",
     "CodeCallResolutionDelta",
-    "CodeHotspotDelta",
     "CodeExternalEvidenceDelta",
+    "CodeHotspotDelta",
+    "CodeProviderEvidenceDelta",
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",
     "CodePublicationSnapshot",

@@ -7,16 +7,16 @@ fields instead of promoting a parser or heuristic result to permanent truth.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, Mapping, Protocol, Sequence
+from typing import Literal, Protocol
 
 from _02_Deduplicacion import FileSnapshot
 
 from .route_filters import CandidateSelection
 from .semantic_models import canonical_json, fingerprint_text
-
 
 # region [01] Artifact and evidence vocabulary
 
@@ -252,7 +252,7 @@ class LanguageAnalyzer(Protocol):
     analyzer_version: str
     languages: frozenset[str]
 
-    def analyze(self, source: CodeFileInput, config: "CodeRouteConfig") -> CodeAnalysis:
+    def analyze(self, source: CodeFileInput, config: CodeRouteConfig) -> CodeAnalysis:
         """Analyze one immutable source observation without modifying it."""
 
 
@@ -279,6 +279,7 @@ class CodeRouteConfig:
     complexity_warning: int = 15
     function_lines_warning: int = 200
     external_evidence_root: Path | None = None
+    analysis_profile: Literal["protected", "trusted-static"] = "protected"
     selection: CandidateSelection = field(default_factory=CandidateSelection)
 
     def __post_init__(self) -> None:
@@ -294,6 +295,8 @@ class CodeRouteConfig:
             raise ValueError("code chunk_chars must be between 1024 and 1000000")
         if self.complexity_warning < 1 or self.function_lines_warning < 1:
             raise ValueError("code diagnostic thresholds must be positive")
+        if self.analysis_profile not in {"protected", "trusted-static"}:
+            raise ValueError("code analysis_profile is unsupported")
 
     @property
     def processing_signature(self) -> str:
@@ -307,6 +310,7 @@ class CodeRouteConfig:
                 "include_vendored": self.include_vendored,
                 "complexity_warning": self.complexity_warning,
                 "function_lines_warning": self.function_lines_warning,
+                "analysis_profile": self.analysis_profile,
             }
         )
         return "code-v2:" + fingerprint_text(payload).xxh3_128
@@ -387,9 +391,7 @@ class CodeRelationEndpoint:
             raise ValueError("code relation endpoint version_id must be positive")
         if not self.path:
             raise ValueError("code relation endpoint path cannot be empty")
-        if self.symbol_id is not None and (
-            isinstance(self.symbol_id, bool) or self.symbol_id < 1
-        ):
+        if self.symbol_id is not None and (isinstance(self.symbol_id, bool) or self.symbol_id < 1):
             raise ValueError("code relation endpoint symbol_id must be positive")
         if (self.symbol_id is None) != (self.symbol is None):
             raise ValueError("code relation endpoint symbol fields must be paired")
@@ -513,9 +515,9 @@ __all__ = [
     "CodeAnalysis",
     "CodeChunk",
     "CodeFileInput",
+    "CodeRelationEndpoint",
     "CodeRouteConfig",
     "CodeRouteSummary",
-    "CodeRelationEndpoint",
     "CodeSearchHit",
     "CodeSearchQuery",
     "CodeSearchRelation",

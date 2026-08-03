@@ -110,7 +110,7 @@ inventario. El estado no puede ser igual ni ancestro del corpus. La firma
 efectiva durable combina la firma cruda de exclusión con la firma de rutas
 internas.
 
-### Autoanálisis protegido
+### Autoanálisis de código
 
 El preset `--self-analysis` exige raíz y estado explícitos, fuerza exactamente
 la ruta `code` en modo `analyze_only` y rechaza `--all`, `--apply`,
@@ -122,6 +122,7 @@ $Lab = Join-Path $env:LOCALAPPDATA 'Neocortex\self-analysis\fixtures'
 $MiniRoot = Join-Path $Lab 'mini-root'
 $MiniState = Join-Path $Lab 'mini-state'
 Neocortex --self-analysis --root $MiniRoot --state-directory $MiniState
+Neocortex --self-analysis --analysis-profile trusted-static --root $MiniRoot --state-directory $MiniState
 Neocortex --state-directory $MiniState --code-status --code-json
 Neocortex --state-directory $MiniState --code-review
 ```
@@ -130,11 +131,15 @@ La corrida usa el inventario como entrada directa de code, no crea candidatos
 MIME y sólo completa si candidatos, acciones y organización conservan conteos
 exactos de cero. Su manifest guarda policy/firma, identidades, frescura y los
 argv canónicos `analyze`/`status` como arrays, no como texto de shell.
-Dentro del mismo preset, Ruff observa los Python vigentes publicados por Code
-con fingerprint exacto, incluidos los parseos internos parciales, y excluye los
-generados o vendorizados. Usa perfil aislado `E4,E7,E9,F`, sin configuración del
-proyecto, caché ni fixes. Versiona y publica evidencia advisory; no cambia el
-código ni ejecuta sus módulos.
+`--analysis-profile protected` es el valor predeterminado: Ruff observa los
+Python vigentes publicados por Code con fingerprint exacto y usa la política
+aislada `E4,E7,E9,F`. `trusted-static` conserva ese proveedor y añade Ruff con
+la política acotada `E4,E7,E9,F,B,C4,PIE,RUF`, Mypy y Pyright como ejecuciones
+separadas. Omite `I,PT,SIM,UP` para no convertir estilo, convenciones de tests o
+modernización en el resultado prioritario. Sólo debe usarse con una raíz
+confiable porque lee `pyproject.toml`;
+aun así no importa ni ejecuta sus módulos, no usa red, no aplica fixes y toda la
+evidencia es advisory. `trusted-deep` está reservado y no es una opción vigente.
 
 Si USN no está disponible, el preset hace un full scan portable sin checkpoint
 y publica `journal.status=unavailable`; code puede reutilizar caché, pero el
@@ -147,12 +152,16 @@ Cada propietario exige un snapshot SQLite immutable y sidecar-free. Cualquier
 `-wal`, `-shm` o `-journal` —incluso vacío o desacoplado— junto a
 `code.sqlite3`, `framework.sqlite3` o `dedup.sqlite3`, o una cerca inestable en
 cualquiera de ellas, causa abstención total con código `2` sin tocar el estado.
+La salida añade `analysis_profile` y `external_evidence_suite`: lista cada
+proveedor, versión, ejecución, cobertura, findings, comparabilidad, gate y
+counters; `type_consensus` conserva por separado coincidencias y discrepancias
+Mypy/Pyright.
 
 `--code-review` consume esa publicación sin volver a analizar la raíz. El
-envelope `neocortex.code-review/v4` conserva los campos y significados v2/v3
-—hasta 10 hotspots brutos por defecto y tres recomendaciones `act_now`— y
-declara ambas compatibilidades. Añade `external_evidence` Ruff y el gate
-`no_added_ruff_diagnostics` sin modificar el ranking, además de un `work_package`
+envelope `neocortex.code-review/v5` conserva los campos y significados v2/v3 y
+la proyección Ruff legacy —hasta 10 hotspots brutos por defecto y tres
+recomendaciones `act_now`—. Añade `external_evidence_suite` sin modificar el
+ranking, además de un `work_package`
 determinista con una sola recomendación raíz, guards alcanzados por llamadas
 confirmadas a uno o dos saltos, riesgo agregado, contratos, pasos y gates. El
 pool del planificador siempre es el top 50, independientemente de la vista; no
@@ -167,11 +176,12 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v2`, compatible con v1, informa calls comunes y
+envelope `neocortex.code-publication-diff/v3`, compatible con v1/v2, informa calls comunes y
 exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
-delta meramente descriptivo de `probable_dead`. Cuando ambas publicaciones
-contienen la misma versión/configuración Ruff también informa diagnósticos
-añadidos/resueltos; en otro caso el gate queda `not_evaluated`. Nunca aplica cambios.
+delta meramente descriptivo de `probable_dead`. También compara por separado
+los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
+gate y veredicto agregado; los restantes quedan `not_evaluated` con su
+limitación. Nunca aplica cambios.
 El contrato, la puerta incremental de tres evidencias y el mini-root permitido
 se detallan en [SELF_ANALYSIS.md](SELF_ANALYSIS.md).
 
@@ -256,6 +266,13 @@ eso no convierte el diagnóstico en una operación de reparación.
 `doctor capabilities` comprueba la presencia de dependencias sin cargar
 modelos; los diagnósticos profundos siguen siendo específicos de PDF/OCR,
 audio, código y estado semántico.
+
+`--code-doctor --code-json` proyecta además
+`external_evidence_providers` para `ruff-protected-basic`,
+`ruff-trusted-project`, `mypy-trusted-project` y
+`pyright-trusted-project`, con disponibilidad, versión y autoridad advisory.
+La ausencia de un proveedor trusted degrada ese perfil; no sustituye ni invalida
+por sí sola al proveedor protected.
 
 También son consultas directas las búsquedas y vistas persistidas, por ejemplo:
 

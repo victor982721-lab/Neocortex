@@ -10,7 +10,6 @@ import pytest
 
 from _04_Nucleo_Operativo import code_schema
 
-
 # region [01] Version-one fixture and snapshots
 
 
@@ -71,6 +70,26 @@ _CURRENT_CONTENT_QUERIES = (
         "external_tool_runs",
         "SELECT * FROM external_tool_runs ORDER BY tool_run_id",
     ),
+    (
+        "external_run_contracts",
+        "SELECT * FROM external_run_contracts ORDER BY tool_run_id",
+    ),
+    (
+        "external_run_inputs",
+        "SELECT * FROM external_run_inputs ORDER BY tool_run_id,version_id",
+    ),
+    (
+        "external_findings",
+        "SELECT * FROM external_findings ORDER BY tool_run_id,portable_finding_id",
+    ),
+    (
+        "external_run_replays",
+        "SELECT * FROM external_run_replays ORDER BY tool_run_id",
+    ),
+    (
+        "external_run_counters",
+        "SELECT * FROM external_run_counters ORDER BY tool_run_id,name",
+    ),
 )
 
 
@@ -78,10 +97,7 @@ def _snapshot_rows(
     connection: sqlite3.Connection,
     queries: tuple[tuple[str, str], ...],
 ) -> dict[str, tuple[tuple[object, ...], ...]]:
-    return {
-        name: tuple(tuple(row) for row in connection.execute(query))
-        for name, query in queries
-    }
+    return {name: tuple(tuple(row) for row in connection.execute(query)) for name, query in queries}
 
 
 def _insert_version(
@@ -141,12 +157,8 @@ def _create_version_one_fixture(path: Path) -> None:
         connection.execute("BEGIN IMMEDIATE")
         for statement in code_schema._V1_DDL:
             connection.execute(statement)
-        connection.execute(
-            "INSERT INTO metadata(key,value) VALUES('schema_version','1')"
-        )
-        connection.execute(
-            "INSERT INTO metadata(key,value) VALUES('preserved_marker','keep-me')"
-        )
+        connection.execute("INSERT INTO metadata(key,value) VALUES('schema_version','1')")
+        connection.execute("INSERT INTO metadata(key,value) VALUES('preserved_marker','keep-me')")
         connection.execute(
             """INSERT INTO schema_migrations(version,description,applied_ns)
             VALUES(1,'fixture version one',11)"""
@@ -350,7 +362,7 @@ def _insert_version_two_relations(connection: sqlite3.Connection) -> None:
 # region [02] Migration preservation and rollback
 
 
-def test_v1_to_v2_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> None:
+def test_v1_to_current_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> None:
     database = tmp_path / "code.sqlite3"
     _create_version_one_fixture(database)
     with sqlite3.connect(database) as connection:
@@ -369,15 +381,20 @@ def test_v1_to_v2_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> 
         assert after == before
         assert metadata == {
             "preserved_marker": "keep-me",
-            "schema_version": "2",
+            "schema_version": "3",
         }
-        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 2
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
         assert migrations[0] == (1, "fixture version one", 11)
         assert migrations[1][0:2] == (
             2,
             "probable projects, reconstruction provenance and semantic links",
         )
         assert int(migrations[1][2]) > 0
+        assert migrations[2][0:2] == (
+            3,
+            "normalized multi-provider external code evidence",
+        )
+        assert int(migrations[2][2]) > 0
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute(
             """SELECT source_symbol_id,target_symbol_id,target_version_id
@@ -395,7 +412,9 @@ def test_v1_to_v2_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> 
             for row in connection.execute(
                 """SELECT name FROM sqlite_master WHERE type='table'
                 AND name IN ('projects','project_memberships','project_edges',
-                'embedding_links','external_tool_runs')"""
+                'embedding_links','external_tool_runs','external_run_contracts',
+                'external_run_inputs','external_findings','external_run_replays',
+                'external_run_counters')"""
             )
         } == {
             "projects",
@@ -403,6 +422,11 @@ def test_v1_to_v2_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> 
             "project_edges",
             "embedding_links",
             "external_tool_runs",
+            "external_run_contracts",
+            "external_run_inputs",
+            "external_findings",
+            "external_run_replays",
+            "external_run_counters",
         }
 
         _insert_version_two_relations(connection)
@@ -418,7 +442,7 @@ def test_v1_to_v2_migration_preserves_rows_relations_and_fts(tmp_path: Path) -> 
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_v1_to_v2_migration_failure_rolls_back_ddl_and_data(
+def test_v1_to_current_migration_failure_rolls_back_ddl_and_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -446,8 +470,112 @@ def test_v1_to_v2_migration_failure_rolls_back_ddl_and_data(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall() == [(1,)]
         assert (
+            connection.execute("SELECT name FROM sqlite_master WHERE name='projects'").fetchone()
+            is None
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def _create_version_two_fixture(database: Path) -> None:
+    _create_version_one_fixture(database)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("BEGIN IMMEDIATE")
+        code_schema._execute(connection, code_schema._V2_DDL)
+        code_schema._record_migration(
+            connection,
+            2,
+            "probable projects, reconstruction provenance and semantic links",
+            12,
+        )
+        _insert_version_two_relations(connection)
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def test_v2_to_v3_migration_preserves_legacy_external_runs(tmp_path: Path) -> None:
+    database = tmp_path / "code.sqlite3"
+    _create_version_two_fixture(database)
+    with sqlite3.connect(database) as connection:
+        before = _snapshot_rows(
+            connection,
+            tuple(
+                item
+                for item in _CURRENT_CONTENT_QUERIES
+                if not item[0].startswith("external_run_") and item[0] != "external_findings"
+            ),
+        )
+
+    code_schema.initialize_code_state(database)
+
+    with sqlite3.connect(database) as connection:
+        after = _snapshot_rows(
+            connection,
+            tuple(
+                item
+                for item in _CURRENT_CONTENT_QUERIES
+                if not item[0].startswith("external_run_") and item[0] != "external_findings"
+            ),
+        )
+        assert after["external_tool_runs"] == before["external_tool_runs"]
+        assert dict(connection.execute("SELECT key,value FROM metadata")) == {
+            "preserved_marker": "keep-me",
+            "schema_version": "3",
+        }
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 3
+        assert connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,), (3,)]
+        for table in (
+            "external_run_contracts",
+            "external_run_inputs",
+            "external_findings",
+            "external_run_replays",
+            "external_run_counters",
+        ):
+            assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        code_schema.validate_code_schema(connection)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v2_to_v3_migration_failure_rolls_back_ddl_and_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "code.sqlite3"
+    _create_version_two_fixture(database)
+    monkeypatch.setattr(
+        code_schema,
+        "_V3_DDL",
+        (code_schema._V3_DDL[0], "CREATE TABLE deliberately_incomplete("),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        code_schema.initialize_code_state(database)
+
+    with sqlite3.connect(database) as connection:
+        assert dict(connection.execute("SELECT key,value FROM metadata")) == {
+            "preserved_marker": "keep-me",
+            "schema_version": "2",
+        }
+        assert int(connection.execute("PRAGMA user_version").fetchone()[0]) == 2
+        assert connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall() == [(1,), (2,)]
+        assert (
             connection.execute(
-                "SELECT name FROM sqlite_master WHERE name='projects'"
+                "SELECT COUNT(*) FROM external_tool_runs WHERE tool_run_id=100"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE name='external_run_contracts'"
             ).fetchone()
             is None
         )

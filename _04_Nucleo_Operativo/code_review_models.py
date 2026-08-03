@@ -12,12 +12,13 @@ from .code_review_actionability import (
     Construction,
     SourceRole,
 )
+from .external_evidence_models import ExternalEvidenceSuiteStatus
 
-
-CODE_REVIEW_SCHEMA = "neocortex.code-review/v4"
+CODE_REVIEW_SCHEMA = "neocortex.code-review/v5"
 CODE_REVIEW_COMPATIBLE_SCHEMAS = (
     "neocortex.code-review/v2",
     "neocortex.code-review/v3",
+    "neocortex.code-review/v4",
 )
 
 ReviewStatus = Literal["ready", "abstained"]
@@ -255,15 +256,21 @@ class CodeReviewResult:
     recommendations: tuple[CodeReviewRecommendation, ...]
     work_packages: tuple[CodeReviewWorkPackage, ...]
     external_evidence: ExternalEvidenceStatus | None
+    external_evidence_suite: ExternalEvidenceSuiteStatus | None
     limitations: tuple[str, ...]
     digest: CodeReviewDigest | None
 
     def as_payload(self) -> dict[str, object]:
+        payload = asdict(self)
+        if self.external_evidence is not None:
+            payload["external_evidence"] = self.external_evidence.as_payload()
+        if self.external_evidence_suite is not None:
+            payload["external_evidence_suite"] = self.external_evidence_suite.as_payload()
         return {
             "kind": "code-review",
             "schema": CODE_REVIEW_SCHEMA,
             "compatible_schemas": list(CODE_REVIEW_COMPATIBLE_SCHEMAS),
-            **asdict(self),
+            **payload,
         }
 
 
@@ -274,9 +281,7 @@ def build_code_review_recommendations(
 ) -> tuple[CodeReviewRecommendation, ...]:
     """Select act-now results while preserving the observable raw ranking."""
 
-    selected = tuple(
-        finding for finding in findings if finding.actionability == "act_now"
-    )[:limit]
+    selected = tuple(finding for finding in findings if finding.actionability == "act_now")[:limit]
     return tuple(
         CodeReviewRecommendation(
             recommendation_rank=recommendation_rank,
@@ -302,8 +307,8 @@ __all__ = [
     "CODE_REVIEW_SCHEMA",
     "CodeReviewCaller",
     "CodeReviewCoverage",
-    "CodeReviewDigest",
     "CodeReviewDiagnostic",
+    "CodeReviewDigest",
     "CodeReviewFinding",
     "CodeReviewImpact",
     "CodeReviewRecommendation",
@@ -313,8 +318,8 @@ __all__ = [
     "CodeReviewWorkPackageMember",
     "CodeReviewWorkPackageStep",
     "FindingCategory",
-    "ReviewFreshness",
     "RecommendationStatus",
+    "ReviewFreshness",
     "WorkPackageConfidence",
     "WorkPackageMemberRole",
     "WorkPackagePhase",

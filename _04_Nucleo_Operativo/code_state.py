@@ -7,9 +7,9 @@ import os
 import sqlite3
 import time
 import zlib
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
 
 from _02_Deduplicacion import FileSnapshot
 
@@ -21,16 +21,26 @@ from .code_contracts import (
     DiagnosticRecord,
 )
 from .code_external_evidence import (
+    RUFF_SOURCE,
     ExternalEvidenceBaseline,
     ExternalEvidenceFile,
     ExternalEvidencePublication,
-    RUFF_SOURCE,
     decode_external_baseline,
     external_input_signature,
     read_external_evidence,
     read_external_evidence_files,
 )
 from .code_schema import connect_code_state, initialize_code_state
+from .external_evidence_models import (
+    ExternalEvidenceBundle,
+    ExternalProviderBaseline,
+    ExternalProviderPublication,
+    ProviderDescriptor,
+)
+from .external_evidence_store import (
+    publish_external_provider,
+    read_external_provider_baselines,
+)
 from .route_filters import CandidateSelection
 from .semantic_models import canonical_json, fingerprint_text
 from .sqlite_cancellation import (
@@ -38,7 +48,6 @@ from .sqlite_cancellation import (
     SQLiteCancellationBridge,
     sqlite_cancellation_scope,
 )
-
 
 # region [01] Repository records and helpers
 
@@ -53,6 +62,10 @@ _DERIVED_DIAGNOSTIC_SOURCES = (
     "neocortex-project-graph",
     "neocortex-reference-graph",
     RUFF_SOURCE,
+    "external:ruff-protected-basic",
+    "external:ruff-trusted-project",
+    "external:mypy",
+    "external:pyright",
 )
 
 
@@ -177,9 +190,7 @@ def _validate_optional_raw_fingerprint(
     if len(raw_xxh3_64_guard) != 16 or any(
         character not in "0123456789abcdef" for character in raw_xxh3_64_guard
     ):
-        raise ValueError(
-            "raw_xxh3_64_guard must be 16 lowercase hexadecimal characters"
-        )
+        raise ValueError("raw_xxh3_64_guard must be 16 lowercase hexadecimal characters")
 
 
 def _normalized_project_root(value: str) -> str:
@@ -229,7 +240,7 @@ class CodeState:
     def close(self) -> None:
         self.connection.close()
 
-    def __enter__(self) -> "CodeState":
+    def __enter__(self) -> CodeState:
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
@@ -264,16 +275,49 @@ class CodeState:
         *,
         partial: bool,
         graph_current: bool = False,
-        external_evidence: ExternalEvidencePublication | None = None,
+        external_evidence: (
+            ExternalEvidencePublication
+            | ExternalEvidenceBundle
+            | Sequence[ExternalProviderPublication]
+            | None
+        ) = None,
     ) -> None:
         """Complete one run and optionally publish its graph-completion fence."""
 
         with self.connection:
-            if external_evidence is not None:
+            if isinstance(external_evidence, ExternalEvidencePublication):
                 self._publish_external_evidence(
                     analysis_run_id,
                     external_evidence,
                 )
+            elif isinstance(external_evidence, ExternalEvidenceBundle):
+                provider_ids = tuple(
+                    item.descriptor.provider_id for item in external_evidence.providers
+                )
+                if len(set(provider_ids)) != len(provider_ids):
+                    raise ValueError("external provider suite contains duplicate providers")
+                for publication in external_evidence.providers:
+                    publish_external_provider(
+                        self.connection,
+                        analysis_run_id,
+                        publication,
+                    )
+                if external_evidence.legacy is not None:
+                    self._publish_external_evidence(
+                        analysis_run_id,
+                        external_evidence.legacy,
+                    )
+            elif external_evidence is not None:
+                publications = tuple(external_evidence)
+                provider_ids = tuple(item.descriptor.provider_id for item in publications)
+                if len(set(provider_ids)) != len(provider_ids):
+                    raise ValueError("external provider suite contains duplicate providers")
+                for publication in publications:
+                    publish_external_provider(
+                        self.connection,
+                        analysis_run_id,
+                        publication,
+                    )
             updated = self.connection.execute(
                 """UPDATE analysis_runs SET status=?,completed_ns=?,candidates=?,
                 processed=?,cache_hits=?,errors=?,summary_json=?,error_type=NULL,
@@ -290,9 +334,7 @@ class CodeState:
                 ),
             )
             if updated.rowcount != 1:
-                raise RuntimeError(
-                    "code analysis run completion requires one running owner row"
-                )
+                raise RuntimeError("code analysis run completion requires one running owner row")
             if graph_current and not partial:
                 self.connection.execute(
                     """INSERT INTO metadata(key,value) VALUES(?,?)
@@ -372,6 +414,28 @@ class CodeState:
         ):
             return None, comparable
         return exact, comparable
+
+    def external_provider_baselines(
+        self,
+        *,
+        descriptor: ProviderDescriptor,
+        tool_version: str,
+        root_identity: str,
+        input_signature: str,
+    ) -> tuple[ExternalProviderBaseline | None, ExternalProviderBaseline | None]:
+        """Return exact and comparable normalized baselines for one provider."""
+
+        return read_external_provider_baselines(
+            self.connection,
+            provider_id=descriptor.provider_id,
+            profile=descriptor.profile,
+            tool_version=tool_version,
+            configuration_signature=descriptor.configuration_signature,
+            environment_signature=descriptor.environment_signature,
+            root_identity=root_identity,
+            input_signature=input_signature,
+            comparability_signature=descriptor.comparability_signature,
+        )
 
     def _delete_current_external_diagnostics(self) -> None:
         self.connection.execute(
@@ -464,9 +528,7 @@ class CodeState:
 
     def fail_run(self, analysis_run_id: int, exc: BaseException) -> None:
         status = (
-            "cancelled"
-            if isinstance(exc, (KeyboardInterrupt, CancellationRequested))
-            else "failed"
+            "cancelled" if isinstance(exc, (KeyboardInterrupt, CancellationRequested)) else "failed"
         )
         with self.connection:
             self.connection.execute(
@@ -596,9 +658,7 @@ class CodeState:
         retry_errors: bool,
         raw_xxh3_128: str | None = None,
         raw_xxh3_64_guard: str | None = None,
-        resolve_analyzer_identity: (
-            Callable[[str | None, bool], tuple[str, str]] | None
-        ) = None,
+        resolve_analyzer_identity: (Callable[[str | None, bool], tuple[str, str]] | None) = None,
     ) -> CachedCodeVersion | None:
         """Reuse one current observation under metadata or explicit full validation.
 
@@ -808,9 +868,7 @@ class CodeState:
     ) -> tuple[int, bool]:
         source = analysis.input
         with self.connection:
-            file_id, previous, path_conflicts = self._claim_file(
-                source.snapshot, framework_run_id
-            )
+            file_id, previous, path_conflicts = self._claim_file(source.snapshot, framework_run_id)
             invalidated_ns = self._invalidate_previous(previous, framework_run_id)
             version_id = self._insert_version(
                 file_id=file_id,
@@ -839,9 +897,7 @@ class CodeState:
                 (version_id, file_id),
             )
             if previous is not None and invalidated_ns is not None:
-                self._record_replacement(
-                    previous, version_id, invalidated_ns, framework_run_id
-                )
+                self._record_replacement(previous, version_id, invalidated_ns, framework_run_id)
                 self._insert_relation(
                     previous,
                     version_id,
@@ -877,9 +933,7 @@ class CodeState:
             )
             invalidated_ns = self._invalidate_previous(previous, framework_run_id)
             text_fingerprint = (
-                fingerprint_text(observation.text_excerpt)
-                if observation.text_excerpt
-                else None
+                fingerprint_text(observation.text_excerpt) if observation.text_excerpt else None
             )
             version_id = self._insert_version(
                 file_id=file_id,
@@ -895,9 +949,7 @@ class CodeState:
                 text_truncated=observation.text_truncated,
                 raw_xxh3_128=observation.raw_xxh3_128,
                 raw_xxh3_64_guard=observation.raw_xxh3_64_guard,
-                text_xxh3_128=(
-                    None if text_fingerprint is None else text_fingerprint.xxh3_128
-                ),
+                text_xxh3_128=(None if text_fingerprint is None else text_fingerprint.xxh3_128),
                 text_xxh3_64_guard=(
                     None if text_fingerprint is None else text_fingerprint.xxh3_64_guard
                 ),
@@ -912,9 +964,7 @@ class CodeState:
                 (version_id, file_id),
             )
             if previous is not None and invalidated_ns is not None:
-                self._record_replacement(
-                    previous, version_id, invalidated_ns, framework_run_id
-                )
+                self._record_replacement(previous, version_id, invalidated_ns, framework_run_id)
                 self._insert_relation(
                     previous,
                     version_id,
@@ -1331,9 +1381,7 @@ class CodeState:
                     version_id,
                     proposed,
                     hint.confidence,
-                    _json(
-                        {"manifest_kind": hint.manifest_kind, "evidence": hint.evidence}
-                    ),
+                    _json({"manifest_kind": hint.manifest_kind, "evidence": hint.evidence}),
                 ),
             )
             self.connection.execute(
@@ -1355,25 +1403,22 @@ class CodeState:
 
         cancellation = SQLiteCancellationBridge(cancellation_check)
         cancellation.checkpoint()
-        with sqlite_cancellation_scope(self.connection, cancellation):
-            with self.connection:
-                self._reset_current_derived_graph()
-                self._assign_manifest_roots(framework_run_id)
-                self._infer_incomplete_projects(framework_run_id)
-                self._resolve_symbols_and_dependencies()
-                self._record_duplicate_relations("raw_xxh3_128", "exact_duplicate", 1.0)
-                self._record_duplicate_relations(
-                    "normalized_xxh3_128", "normalized_duplicate", 0.9
-                )
-                self._resolve_membership_conflicts()
-                self._synchronize_current_fts_projects()
-                self._reconcile_project_statuses()
-                self._record_project_edges()
-                self._record_probable_dead_symbols()
-                row = self.connection.execute(
-                    "SELECT COUNT(*) FROM projects WHERE status='current'"
-                ).fetchone()
-                cancellation.checkpoint()
+        with sqlite_cancellation_scope(self.connection, cancellation), self.connection:
+            self._reset_current_derived_graph()
+            self._assign_manifest_roots(framework_run_id)
+            self._infer_incomplete_projects(framework_run_id)
+            self._resolve_symbols_and_dependencies()
+            self._record_duplicate_relations("raw_xxh3_128", "exact_duplicate", 1.0)
+            self._record_duplicate_relations("normalized_xxh3_128", "normalized_duplicate", 0.9)
+            self._resolve_membership_conflicts()
+            self._synchronize_current_fts_projects()
+            self._reconcile_project_statuses()
+            self._record_project_edges()
+            self._record_probable_dead_symbols()
+            row = self.connection.execute(
+                "SELECT COUNT(*) FROM projects WHERE status='current'"
+            ).fetchone()
+            cancellation.checkpoint()
         return int(row[0])
 
     def _reset_current_derived_graph(self) -> None:
@@ -1409,8 +1454,7 @@ class CodeState:
             AND v.invalidated_ns IS NULL"""
         ).fetchall()
         return tuple(
-            (int(row[0]), str(row[1]), str(row[2]), str(Path(str(row[3])).parent))
-            for row in rows
+            (int(row[0]), str(row[1]), str(row[2]), str(Path(str(row[3])).parent)) for row in rows
         )
 
     def _assign_manifest_roots(self, framework_run_id: int) -> None:
@@ -1431,16 +1475,13 @@ class CodeState:
             for item in roots:
                 normalized_root = os.path.normcase(os.path.abspath(item[3]))
                 try:
-                    if (
-                        os.path.commonpath((normalized_path, normalized_root))
-                        == normalized_root
-                    ):
+                    if os.path.commonpath((normalized_path, normalized_root)) == normalized_root:
                         matches.append(item)
                 except ValueError:
                     continue
             if not matches:
                 continue
-            project_id, project_name, _ecosystem, root = max(
+            project_id, _project_name, _ecosystem, root = max(
                 matches,
                 key=lambda item: len(os.path.normcase(os.path.abspath(item[3]))),
             )
@@ -1637,9 +1678,9 @@ class CodeState:
             if path.name.casefold() == "__init__.py":
                 names.add(path.parent.name)
             else:
-                internal_submodules.setdefault(
-                    (path.parent.name, str(module_name)), set()
-                ).add(int(version_id))
+                internal_submodules.setdefault((path.parent.name, str(module_name)), set()).add(
+                    int(version_id)
+                )
             for name in names:
                 if name:
                     internal_modules.setdefault(name, set()).add(int(version_id))
@@ -1971,9 +2012,7 @@ class CodeState:
                 candidates = tuple(
                     (int(row[0]), candidate)
                     for row in batch
-                    for candidate in _relative_import_candidate_paths(
-                        str(row[1]), str(row[2])
-                    )
+                    for candidate in _relative_import_candidate_paths(str(row[1]), str(row[2]))
                 )
                 if candidates:
                     self.connection.executemany(
@@ -2100,9 +2139,7 @@ class CodeState:
                 project_id = int(row[0])
                 proposed_path = str(row[1])
                 normalized_path = proposed_path.casefold()
-                conflict_group = fingerprint_text(
-                    f"{project_id}\0{normalized_path}"
-                ).xxh3_128
+                conflict_group = fingerprint_text(f"{project_id}\0{normalized_path}").xxh3_128
                 self.connection.execute(
                     """UPDATE project_memberships SET selected=0,conflict_group=?
                     WHERE project_id=? AND proposed_path=? COLLATE NOCASE
@@ -2210,9 +2247,7 @@ class CodeState:
         """
 
         if not 1 <= batch_size <= 10_000:
-            raise ValueError(
-                "code missing-state batch_size must be between 1 and 10000"
-            )
+            raise ValueError("code missing-state batch_size must be between 1 and 10000")
         removed = 0
         last_file_id = 0
         while True:

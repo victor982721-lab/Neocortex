@@ -15,8 +15,8 @@ from pathlib import Path
 
 from neocortex.capabilities import (
     CAPABILITY_SPECS,
-    CapabilityState,
     ROUTE_CAPABILITY_NAMES,
+    CapabilityState,
     inspect_runtime_capabilities,
     inspect_runtime_capability,
 )
@@ -24,6 +24,7 @@ from neocortex.capabilities import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 BASE_DEPENDENCIES = (
+    "mypy>=2.1,<3",
     "rich>=15,<16",
     "ruff>=0.15,<0.16",
     "xxhash>=3.8,<4",
@@ -32,7 +33,6 @@ BASE_DEPENDENCIES = (
 DEV_DEPENDENCIES = (
     "build>=1.5,<2",
     "coverage>=7.14,<8",
-    "mypy>=2.1,<3",
     "pytest>=9.1,<10",
     "vulture>=2.16,<3",
 )
@@ -132,8 +132,7 @@ def _version_reader(available_modules: set[str]):
         requirement.distribution: "fixture-version"
         for spec in CAPABILITY_SPECS.values()
         for requirement in spec.requirements
-        if requirement.distribution is not None
-        and requirement.module in available_modules
+        if requirement.distribution is not None and requirement.module in available_modules
     }
 
     def read(distribution: str) -> str:
@@ -153,9 +152,7 @@ def _inspect_with(
     return inspect_runtime_capabilities(
         module_finder=lambda name: object() if name in available_modules else None,
         distribution_version=_version_reader(available_modules),
-        executable_finder=(
-            lambda name: f"C:/fixture/{name}.exe" if name in executables else None
-        ),
+        executable_finder=(lambda name: f"C:/fixture/{name}.exe" if name in executables else None),
     )
 
 
@@ -167,13 +164,17 @@ def test_every_builtin_route_has_one_static_capability_declaration() -> None:
 
 
 def test_missing_optional_runtimes_are_explicitly_unavailable_or_degraded() -> None:
-    statuses = {
-        status.capability: status for status in _inspect_with({"rich", "xxhash"})
-    }
+    statuses = {status.capability: status for status in _inspect_with({"rich", "xxhash"})}
 
     assert statuses["docx"].state is CapabilityState.AVAILABLE
     assert statuses["office"].state is CapabilityState.AVAILABLE
-    assert statuses["code"].state is CapabilityState.AVAILABLE
+    assert statuses["code"].state is CapabilityState.DEGRADED
+    assert statuses["code"].degradation_reasons == (
+        "code_ruff_provider_unavailable",
+        "code_mypy_provider_unavailable",
+        "code_pyright_node_unavailable",
+        "code_pyright_provider_unavailable",
+    )
     assert statuses["pdf"].state is CapabilityState.UNAVAILABLE
     assert "pdf_extractor_unavailable" in statuses["pdf"].degradation_reasons
     assert statuses["audio"].state is CapabilityState.UNAVAILABLE
@@ -187,9 +188,7 @@ def test_missing_optional_runtimes_are_explicitly_unavailable_or_degraded() -> N
 def test_optional_route_components_produce_stable_degradation_reasons() -> None:
     pdf = inspect_runtime_capability(
         "pdf",
-        module_finder=(
-            lambda name: object() if name in {"rich", "xxhash", "fitz"} else None
-        ),
+        module_finder=(lambda name: object() if name in {"rich", "xxhash", "fitz"} else None),
         distribution_version=_version_reader({"rich", "xxhash", "fitz"}),
         executable_finder=lambda _name: None,
     )
@@ -204,9 +203,7 @@ def test_optional_route_components_produce_stable_degradation_reasons() -> None:
 
     image = inspect_runtime_capability(
         "image",
-        module_finder=(
-            lambda name: object() if name in {"rich", "xxhash", "PIL"} else None
-        ),
+        module_finder=(lambda name: object() if name in {"rich", "xxhash", "PIL"} else None),
         distribution_version=_version_reader({"rich", "xxhash", "PIL"}),
         executable_finder=lambda _name: None,
     )

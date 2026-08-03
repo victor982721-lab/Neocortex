@@ -93,7 +93,7 @@ a los archivos vivos.
 | `audio.sqlite3` | `audio_state`, `AudioRoute` | 1 | inventario, documentos, segmentos y FTS de transcripción | `metadata.schema_version` |
 | `image.sqlite3` | `image_state`, `ImageRoute` | 5 | imágenes, estado de extracción/clasificación y metadata | `metadata.schema_version`; migraciones aditivas |
 | `document_catalog.sqlite3` | `document_catalog_schema`, `document_catalog` | **6** | runs, generaciones/staging, publicación por fuente, proyección de documentos, historial y planes de organización | `metadata.schema_version`; migraciones secuenciales |
-| `code.sqlite3` | `code_schema`, `code_state` | 2 | proyectos, runs, archivos/versiones, símbolos, referencias, dependencias, grafo, chunks, FTS y herramientas | metadata + `PRAGMA user_version` + `schema_migrations` exacto |
+| `code.sqlite3` | `code_schema`, `code_state` | 3 | proyectos, runs, archivos/versiones, símbolos, referencias, dependencias, grafo, chunks, FTS y evidencia externa normalizada | metadata + `PRAGMA user_version` + `schema_migrations` exacto; migraciones 1→2→3 y 2→3 |
 | `semantic.sqlite3` | `semantic_schema`, repositorios y servicio semántico | **6** | espacios/modelos, revisiones inmutables, miembros de generación, heads publicados, jobs, payloads, prototipos y evidencia | metadata + `PRAGMA user_version` + `schema_migrations` exacto |
 
 La base del índice MFT es una API auxiliar con ruta elegida por el llamador y
@@ -321,7 +321,7 @@ publica actualmente dentro de una transacción global de finalización; hacer
 batches sin una generación y un puntero publicados no sería una corrección
 segura (`NC-AUD-015`).
 
-El esquema permanece en 2. Un cache hit con ruta exacta actualiza los run IDs de
+El esquema vigente es 3. Un cache hit con ruta exacta actualiza los run IDs de
 presencia/observación sin DML sobre `code_fts`. Una ruta distinta no reutiliza la
 versión: la publicación normal invalida la vigente y crea una sucesora con su
 propio `path_observed`, FTS y evidencia, conservando la versión anterior.
@@ -352,19 +352,34 @@ runtime. Cualquier discrepancia —o una base existente todavía sin fence— fu
 una finalización completa; los estados cacheados `partial` y `error` siguen
 contabilizándose en el nuevo summary.
 
-El schema 2 existente también recibe External Code Evidence v1 sin migración.
-Cada autoanálisis protegido inserta una fila terminal Ruff en
-`external_tool_runs`, ligada al `analysis_run_id`, con versión, firma de
-configuración, tiempos y provenance acotado. Una ejecución completa reemplaza
-únicamente la proyección vigente `diagnostics.source='external:ruff'`; un fallo
-o timeout la retira para que ningún lector confunda evidencia vieja con estado
-actual. El detalle histórico permanece en el provenance bounded de la corrida.
-La fila, la proyección y la finalización del run se confirman en una misma
-transacción. Un input exacto puede reutilizar una de las últimas 128 filas
-`completed` sólo si su configuración, raíz, firma de inputs y proyección vigente
-coinciden; entonces registra un run `skipped/cache_replay` y conserva una sola
-proyección de diagnósticos. Fuera de esa ventana o ante cualquier discrepancia,
-Ruff vuelve a ejecutarse de forma acotada.
+Schema 3 conserva `external_tool_runs` y la proyección Ruff legacy de v2, y
+añade cinco tablas normalizadas:
+
+- `external_run_contracts`: identidad de proveedor, perfil/confianza, raíz,
+  firmas de configuración, entorno, inputs y comparabilidad, estrategia,
+  límites lógicos y declaraciones de autoridad;
+- `external_run_inputs`: versión Code, identidad portable, ruta, digest, tamaño
+  y cobertura de cada input elegible;
+- `external_findings`: identidad portable, owner Code, categoría/regla,
+  severidad, rango, metadata, confianza y enlace opcional a `diagnostics`;
+- `external_run_replays`: ejecución completa reutilizada y firma/conteos de la
+  verificación exacta;
+- `external_run_counters`: contadores no negativos de cobertura, bytes,
+  procesos, salida, tiempo, findings, comparabilidad, caché y errores.
+
+Cada proveedor inserta una fila terminal en `external_tool_runs` y su contrato,
+inputs, findings/counters y proyección `diagnostics.source='external:*'` dentro
+de la transacción que finaliza Code. Un fallo, timeout o proveedor indisponible
+publica su estado terminal y no deja una proyección vieja aparentando frescura;
+no borra las publicaciones válidas de los otros proveedores.
+
+Un input exacto sólo reutiliza una línea base con el mismo proveedor, perfil,
+versión, configuración, entorno, raíz y firma de inputs. El replay registra
+`execution=cache_replay`, vuelve a verificar todos los archivos y bytes, enlaza
+la ejecución completa y no duplica findings ni invoca el proceso externo. La
+lectura recomputa el digest y valida la proyección; cualquier discordancia causa
+abstención fail-closed. Mypy y Pyright permanecen separados; el consenso de
+tipos es una proyección reconstruible, no otra fuente de verdad.
 
 No se añadieron generación, staging ni CAS de head. La transacción global no
 admite cancelación dentro de una sentencia SQLite; los empates de resolución se
@@ -379,7 +394,7 @@ revisiones y miembros por generación y selecciona una generación completa por
 modelo mediante `published_embedding_heads`. La búsqueda oficial sólo consulta
 esos heads; `ready_partial` y `building` no son visibles.
 
-`code.embedding_links` sigue perteneciendo al esquema Code v2 y ahora tiene un
+`code.embedding_links`, introducida en Code v2 y conservada por v3, tiene un
 productor y un consumidor integrados. Tras publicar por completo texto de
 `source_kind=code`, `code-semantic-link-v1` prepara en una tabla TEMP la
 cobertura exacta del head y exige que cada chunk vigente no vacío resuelva por
@@ -1172,7 +1187,7 @@ Antes de aceptar una migración:
 | NC-AUD-012 | corregido para lectores oficiales v6 | heads por modelo, revisiones congeladas y publicación CAS completa |
 | NC-AUD-013 | corregido para lectores oficiales v6 | staging por fuente y proyección/publicación CAS atómica |
 | NC-AUD-014 | corregido parcialmente | planner dry-run keyset protege estado crítico, evidencia semántica y último run completado; la poda dedup exige holds explícitos y conserva dos publicaciones, pero no hay ejecución genérica, cuotas ni poda global |
-| NC-AUD-015 | pendiente reproducido | fastpath estable y reconstrucción fail-closed reducen trabajo repetido, pero esquema 2 sigue no generacional, global, sin reanudación ni cancelación dentro de sentencia; no se fragmentó sin contrato completo |
+| NC-AUD-015 | pendiente reproducido | fastpath estable y reconstrucción fail-closed reducen trabajo repetido, pero esquema 3 sigue no generacional, global, sin reanudación ni cancelación dentro de sentencia; no se fragmentó sin contrato completo |
 | NC-AUD-017 | corregido y revalidado para propietarios oficiales | 37 llamadas directas/21 módulos y 132 adquisiciones/20 factories clasificadas; SQL externo y relaciones no declaradas quedan fuera |
 | NC-AUD-018 | corregido y conservado | migración catálogo se abstiene ante estructura/trigger/objeto desconocido y compara conteos |
 | NC-AUD-019 | corregido estructuralmente | un solo snapshot/conexión; permanecen nueve conteos completos cuyo costo se mide aparte |

@@ -1,0 +1,873 @@
+"""Normalized persistence and read models for external code providers."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from pathlib import Path
+from typing import cast
+
+from .code_external_evidence import (
+    ExternalEvidenceStatus,
+    read_external_evidence,
+)
+from .external_evidence_models import (
+    AnalysisProfile,
+    ExternalEvidenceSuiteStatus,
+    ExternalProviderBaseline,
+    ExternalProviderFinding,
+    ExternalProviderPublication,
+    ExternalProviderStatus,
+    ProviderGateEvaluation,
+    TypeConsensusSummary,
+    external_findings_digest,
+)
+from .semantic_models import canonical_json
+
+_PROVIDER_STATUS_LIMIT = 32
+_FINDING_LIMIT = 10_000
+_COUNTER_LIMIT = 128
+
+
+def _lastrowid(cursor: sqlite3.Cursor) -> int:
+    value = cursor.lastrowid
+    if value is None:
+        raise RuntimeError("external evidence insert returned no row identity")
+    return int(value)
+
+
+def _current_version_exists(connection: sqlite3.Connection, version_id: int) -> bool:
+    row = connection.execute(
+        """SELECT 1 FROM files f JOIN file_versions v
+        ON v.version_id=f.current_version_id
+        WHERE v.version_id=? AND f.status='current' AND v.invalidated_ns IS NULL""",
+        (version_id,),
+    ).fetchone()
+    return row is not None
+
+
+def _delete_provider_projection(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+) -> None:
+    connection.execute(
+        """DELETE FROM diagnostics WHERE source=? AND version_id IN(
+        SELECT v.version_id FROM file_versions v
+        JOIN files f ON f.current_version_id=v.version_id
+        WHERE f.status='current' AND v.invalidated_ns IS NULL)""",
+        (source,),
+    )
+
+
+def _insert_finding_projection(
+    connection: sqlite3.Connection,
+    *,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+    finding: ExternalProviderFinding,
+) -> int:
+    descriptor = publication.descriptor
+    metadata = {
+        "schema": "neocortex.external-diagnostic/v2",
+        "external_tool_run_id": tool_run_id,
+        "external_provider_id": descriptor.provider_id,
+        "external_finding_id": finding.portable_finding_id,
+        "relative_path": finding.relative_path,
+        "category": finding.category,
+        "claim_scope": "tool_reported",
+        "observation_confirmed": finding.observation_confirmed,
+        "tool_confidence": finding.tool_confidence,
+        "calibrated_confidence": finding.calibrated_confidence,
+        "gate_authority": finding.gate_authority,
+        "authority": descriptor.authority,
+        "mutation_authority": False,
+        "fix_available": finding.fix_available,
+        "url": finding.url,
+        "details": dict(finding.metadata),
+    }
+    cursor = connection.execute(
+        """INSERT INTO diagnostics(
+        version_id,source,code,severity,message,tool_name,tool_version,
+        confirmed,confidence,start_line,start_column,end_line,end_column,
+        start_byte,end_byte,metadata_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            finding.version_id,
+            descriptor.source,
+            finding.code,
+            finding.severity,
+            finding.message,
+            descriptor.tool_name,
+            publication.publication.tool_version,
+            int(finding.observation_confirmed),
+            1.0 if finding.tool_confidence is None else finding.tool_confidence,
+            finding.start_line,
+            finding.start_column,
+            finding.end_line,
+            finding.end_column,
+            None,
+            None,
+            canonical_json(metadata),
+        ),
+    )
+    return _lastrowid(cursor)
+
+
+def publish_external_provider(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    publication: ExternalProviderPublication,
+) -> int:
+    """Publish one provider beneath a running Code owner transaction."""
+
+    owner = connection.execute(
+        "SELECT status FROM analysis_runs WHERE analysis_run_id=?",
+        (analysis_run_id,),
+    ).fetchone()
+    if owner is None or str(owner["status"]) != "running":
+        raise RuntimeError("external provider requires one running Code owner")
+    descriptor = publication.descriptor
+    cursor = connection.execute(
+        """INSERT INTO external_tool_runs(
+        analysis_run_id,project_id,tool_name,tool_version,
+        configuration_signature,status,started_ns,completed_ns,provenance_json)
+        VALUES(?,NULL,?,?,?,?,?,?,?)""",
+        (
+            analysis_run_id,
+            descriptor.tool_name,
+            publication.publication.tool_version,
+            descriptor.configuration_signature,
+            publication.publication.status,
+            publication.publication.started_ns,
+            publication.publication.completed_ns,
+            canonical_json(publication.publication.provenance),
+        ),
+    )
+    tool_run_id = _lastrowid(cursor)
+    connection.execute(
+        """INSERT INTO external_run_contracts(
+        tool_run_id,provider_id,provider_schema,source,profile,trust_requirement,scope,
+        observed_root,root_identity,project_configuration_digest,
+        environment_signature,input_signature,comparability_signature,
+        execution_strategy,invalidation_strategy,cache_policy,execution,
+        result_digest,portable_publication_id,authority,mutation_authority,
+        loads_project_configuration,loads_plugins,imports_content,
+        executes_content,uses_network,coverage_complete,limitations_json)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            tool_run_id,
+            descriptor.provider_id,
+            descriptor.provider_schema,
+            descriptor.source,
+            descriptor.profile,
+            descriptor.trust_requirement,
+            descriptor.scope,
+            publication.observed_root,
+            publication.root_identity,
+            descriptor.project_configuration_digest,
+            descriptor.environment_signature,
+            publication.input_signature,
+            descriptor.comparability_signature,
+            descriptor.execution_strategy,
+            descriptor.invalidation_strategy,
+            descriptor.cache_policy,
+            publication.execution,
+            publication.result_digest,
+            publication.portable_publication_id,
+            descriptor.authority,
+            0,
+            int(descriptor.loads_project_configuration),
+            int(descriptor.loads_plugins),
+            int(descriptor.imports_content),
+            int(descriptor.executes_content),
+            int(descriptor.uses_network),
+            int(publication.coverage_complete),
+            json.dumps(
+                list(publication.limitations),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+    )
+    if len(publication.inputs) > 2_000:
+        raise ValueError("external provider input normalization exceeds its bound")
+    for item in publication.inputs:
+        if not _current_version_exists(connection, item.version_id):
+            raise RuntimeError("external provider input version is no longer current")
+        connection.execute(
+            """INSERT INTO external_run_inputs(
+            tool_run_id,version_id,portable_input_id,relative_path,eligible,covered,
+            coverage_reason,size,content_digest) VALUES(?,?,?,?,?,?,?,?,?)""",
+            (
+                tool_run_id,
+                item.version_id,
+                item.portable_input_id,
+                item.relative_path,
+                int(item.eligible),
+                int(item.covered),
+                item.coverage_reason,
+                item.size,
+                item.content_digest,
+            ),
+        )
+    if len(publication.counters) > _COUNTER_LIMIT:
+        raise ValueError("external provider counter normalization exceeds its bound")
+    for name, value in sorted(publication.counters.items()):
+        if not name or not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError("external provider counter is invalid")
+        connection.execute(
+            "INSERT INTO external_run_counters(tool_run_id,name,value) VALUES(?,?,?)",
+            (tool_run_id, name, value),
+        )
+    if publication.replay_source_tool_run_id is not None:
+        if publication.execution != "cache_replay" or not publication.verification_signature:
+            raise ValueError("external provider replay contract is incomplete")
+        connection.execute(
+            """INSERT INTO external_run_replays(
+            tool_run_id,source_tool_run_id,verification_signature,
+            files_verified,bytes_verified) VALUES(?,?,?,?,?)""",
+            (
+                tool_run_id,
+                publication.replay_source_tool_run_id,
+                publication.verification_signature,
+                int(publication.counters.get("files_verified", 0)),
+                int(publication.counters.get("bytes_verified", 0)),
+            ),
+        )
+        return tool_run_id
+    _delete_provider_projection(connection, source=descriptor.source)
+    if publication.publication.status != "completed":
+        return tool_run_id
+    if len(publication.findings) > _FINDING_LIMIT:
+        raise ValueError("external provider findings exceed their bound")
+    if publication.result_digest != external_findings_digest(publication.findings):
+        raise ValueError("external provider result digest is inconsistent")
+    for finding in publication.findings:
+        if not _current_version_exists(connection, finding.version_id):
+            raise RuntimeError("external finding version is no longer current")
+        diagnostic_id = _insert_finding_projection(
+            connection,
+            tool_run_id=tool_run_id,
+            publication=publication,
+            finding=finding,
+        )
+        connection.execute(
+            """INSERT INTO external_findings(
+            tool_run_id,portable_finding_id,version_id,symbol_id,project_id,
+            category,code,severity,message,observation_confirmed,tool_confidence,
+            calibrated_confidence,gate_authority,mutation_authority,start_line,
+            start_column,end_line,end_column,metadata_json,projected_diagnostic_id)
+            VALUES(?,?,?,NULL,NULL,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?)""",
+            (
+                tool_run_id,
+                finding.portable_finding_id,
+                finding.version_id,
+                finding.category,
+                finding.code,
+                finding.severity,
+                finding.message,
+                int(finding.observation_confirmed),
+                finding.tool_confidence,
+                finding.calibrated_confidence,
+                finding.gate_authority,
+                finding.start_line,
+                finding.start_column,
+                finding.end_line,
+                finding.end_column,
+                canonical_json(
+                    {
+                        "url": finding.url,
+                        "fix_available": finding.fix_available,
+                        "details": dict(finding.metadata),
+                    }
+                ),
+                diagnostic_id,
+            ),
+        )
+    return tool_run_id
+
+
+def read_external_provider_baselines(
+    connection: sqlite3.Connection,
+    *,
+    provider_id: str,
+    profile: str,
+    tool_version: str,
+    configuration_signature: str,
+    environment_signature: str,
+    root_identity: str,
+    input_signature: str,
+    comparability_signature: str,
+) -> tuple[ExternalProviderBaseline | None, ExternalProviderBaseline | None]:
+    rows = connection.execute(
+        """SELECT r.tool_run_id,r.tool_version,c.provider_id,c.input_signature,
+        c.comparability_signature,c.result_digest
+        FROM external_tool_runs r JOIN external_run_contracts c
+        ON c.tool_run_id=r.tool_run_id
+        WHERE c.provider_id=? AND c.profile=? AND r.tool_version=?
+        AND r.configuration_signature=? AND c.environment_signature=?
+        AND c.root_identity=? AND r.status='completed'
+        AND c.coverage_complete=1 ORDER BY r.tool_run_id DESC LIMIT 128""",
+        (
+            provider_id,
+            profile,
+            tool_version,
+            configuration_signature,
+            environment_signature,
+            root_identity,
+        ),
+    ).fetchall()
+    exact: ExternalProviderBaseline | None = None
+    comparable: ExternalProviderBaseline | None = None
+    for row in rows:
+        digest = row["result_digest"]
+        if not isinstance(digest, str):
+            continue
+        ids = tuple(
+            str(item[0])
+            for item in connection.execute(
+                """SELECT portable_finding_id FROM external_findings
+                WHERE tool_run_id=? ORDER BY portable_finding_id""",
+                (int(row["tool_run_id"]),),
+            ).fetchall()
+        )
+        baseline = ExternalProviderBaseline(
+            int(row["tool_run_id"]),
+            str(row["provider_id"]),
+            str(row["tool_version"]),
+            str(row["input_signature"]),
+            str(row["comparability_signature"]),
+            digest,
+            ids,
+        )
+        if comparable is None and baseline.comparability_signature == comparability_signature:
+            comparable = baseline
+        if (
+            baseline.comparability_signature == comparability_signature
+            and baseline.input_signature == input_signature
+        ):
+            exact = baseline
+            break
+    return exact, comparable
+
+
+def _counter_map(connection: sqlite3.Connection, tool_run_id: int) -> dict[str, int]:
+    rows = connection.execute(
+        """SELECT name,value FROM external_run_counters
+        WHERE tool_run_id=? ORDER BY name LIMIT ?""",
+        (tool_run_id, _COUNTER_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _COUNTER_LIMIT:
+        raise ValueError("external provider counters exceed their read bound")
+    return {str(row["name"]): int(row["value"]) for row in rows}
+
+
+def _provider_findings(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+) -> tuple[ExternalProviderFinding, ...]:
+    rows = connection.execute(
+        """SELECT f.*,i.relative_path,d.metadata_json AS diagnostic_metadata,
+        d.source AS diagnostic_source,d.tool_name AS diagnostic_tool_name,
+        d.tool_version AS diagnostic_tool_version,d.code AS diagnostic_code,
+        d.severity AS diagnostic_severity,d.message AS diagnostic_message,
+        d.version_id AS diagnostic_version_id,d.start_line AS diagnostic_start_line,
+        d.start_column AS diagnostic_start_column,d.end_line AS diagnostic_end_line,
+        d.end_column AS diagnostic_end_column,c.provider_id AS expected_provider_id,
+        c.source AS expected_source,
+        r.tool_name AS expected_tool_name,r.tool_version AS expected_tool_version
+        FROM external_findings f
+        JOIN external_run_contracts c ON c.tool_run_id=f.tool_run_id
+        JOIN external_tool_runs r ON r.tool_run_id=f.tool_run_id
+        LEFT JOIN external_run_inputs i ON i.tool_run_id=f.tool_run_id
+        AND i.version_id=f.version_id
+        LEFT JOIN diagnostics d ON d.diagnostic_id=f.projected_diagnostic_id
+        WHERE f.tool_run_id=? ORDER BY f.portable_finding_id LIMIT ?""",
+        (tool_run_id, _FINDING_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _FINDING_LIMIT:
+        raise ValueError("external provider findings exceed their read bound")
+    findings: list[ExternalProviderFinding] = []
+    for row in rows:
+        try:
+            metadata = json.loads(str(row["metadata_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("external finding metadata is malformed") from exc
+        if not isinstance(metadata, dict) or row["relative_path"] is None:
+            raise ValueError("external finding owner projection is incomplete")
+        try:
+            diagnostic_metadata = json.loads(str(row["diagnostic_metadata"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("external diagnostic projection metadata is malformed") from exc
+        if not isinstance(diagnostic_metadata, dict):
+            raise ValueError("external diagnostic projection metadata is not an object")
+        expected_projection = (
+            row["diagnostic_source"] == row["expected_source"]
+            and row["diagnostic_tool_name"] == row["expected_tool_name"]
+            and row["diagnostic_tool_version"] == row["expected_tool_version"]
+            and row["diagnostic_code"] == row["code"]
+            and row["diagnostic_severity"] == row["severity"]
+            and row["diagnostic_message"] == row["message"]
+            and row["diagnostic_version_id"] == row["version_id"]
+            and row["diagnostic_start_line"] == row["start_line"]
+            and row["diagnostic_start_column"] == row["start_column"]
+            and row["diagnostic_end_line"] == row["end_line"]
+            and row["diagnostic_end_column"] == row["end_column"]
+            and diagnostic_metadata.get("external_provider_id") == row["expected_provider_id"]
+            and diagnostic_metadata.get("external_finding_id") == row["portable_finding_id"]
+            and diagnostic_metadata.get("mutation_authority") is False
+        )
+        if not expected_projection:
+            raise ValueError("external diagnostic projection is inconsistent")
+        details = metadata.get("details")
+        if not isinstance(details, dict):
+            raise ValueError("external finding details are malformed")
+        findings.append(
+            ExternalProviderFinding(
+                str(row["portable_finding_id"]),
+                int(row["version_id"]),
+                str(row["relative_path"]),
+                str(row["category"]),
+                str(row["code"]),
+                str(row["severity"]),
+                str(row["message"]),
+                bool(row["observation_confirmed"]),
+                None if row["tool_confidence"] is None else float(row["tool_confidence"]),
+                (
+                    None
+                    if row["calibrated_confidence"] is None
+                    else float(row["calibrated_confidence"])
+                ),
+                str(row["gate_authority"]),
+                int(row["start_line"]),
+                int(row["start_column"]),
+                int(row["end_line"]),
+                int(row["end_column"]),
+                metadata.get("url") if isinstance(metadata.get("url"), str) else None,
+                bool(metadata.get("fix_available", False)),
+                details,
+            )
+        )
+    return tuple(findings)
+
+
+def _abstained_provider(
+    row: sqlite3.Row | Mapping[str, object],
+    reason: str,
+    *,
+    eligible_files: int = 0,
+    covered_files: int = 0,
+    findings: int = 0,
+    limitations: tuple[str, ...] = (),
+    counters: Mapping[str, int] | None = None,
+) -> ExternalProviderStatus:
+    return ExternalProviderStatus(
+        str(row["provider_id"]),
+        str(row["provider_schema"]),
+        str(row["profile"]),  # type: ignore[arg-type]
+        str(row["tool_name"]),
+        str(row["tool_version"]),
+        "abstained",
+        reason,
+        str(row["execution"]),
+        eligible_files,
+        covered_files,
+        findings,
+        None,
+        None,
+        False,
+        None,
+        str(row["comparability_signature"]),
+        "not_evaluated",
+        limitations,
+        content_executed=bool(row["executes_content"]),
+        counters={} if counters is None else counters,
+    )
+
+
+def _provider_status(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row | Mapping[str, object],
+) -> tuple[ExternalProviderStatus, tuple[ExternalProviderFinding, ...]]:
+    tool_run_id = int(str(row["tool_run_id"]))
+    try:
+        limitations_value = json.loads(str(row["limitations_json"]))
+        limitations = tuple(str(item) for item in limitations_value)
+        inputs = connection.execute(
+            """SELECT version_id,portable_input_id,relative_path,eligible,covered,
+            coverage_reason,size,content_digest FROM external_run_inputs
+            WHERE tool_run_id=? ORDER BY portable_input_id LIMIT 2001""",
+            (tool_run_id,),
+        ).fetchall()
+        if len(inputs) > 2_000:
+            raise ValueError("input_bound")
+        counters = _counter_map(connection, tool_run_id)
+        eligible = sum(int(item["eligible"]) for item in inputs)
+        covered = sum(int(item["covered"]) for item in inputs)
+        if counters.get("eligible_files", eligible) != eligible:
+            raise ValueError("eligible_counter")
+        if counters.get("covered_files", covered) != covered:
+            raise ValueError("covered_counter")
+        tool_status = str(row["status"])
+        if tool_status not in {"completed", "skipped"}:
+            reason = f"provider_{tool_status}"
+            if tool_status == "failed":
+                try:
+                    provenance = json.loads(str(row["provenance_json"]))
+                    error = provenance.get("error") if isinstance(provenance, dict) else None
+                    detail = error.get("reason") if isinstance(error, dict) else None
+                    if isinstance(detail, str) and detail:
+                        reason = f"provider_failed:{detail[:4096]}"
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+            return (
+                _abstained_provider(
+                    row,
+                    reason,
+                    eligible_files=eligible,
+                    covered_files=covered,
+                    findings=counters.get("findings", 0),
+                    limitations=limitations,
+                    counters=counters,
+                ),
+                (),
+            )
+        effective_run_id = tool_run_id
+        if str(row["execution"]) == "cache_replay":
+            replay = connection.execute(
+                """SELECT source_tool_run_id,files_verified,bytes_verified
+                FROM external_run_replays WHERE tool_run_id=?""",
+                (tool_run_id,),
+            ).fetchone()
+            if replay is None:
+                raise ValueError("replay_missing")
+            effective_run_id = int(replay["source_tool_run_id"])
+            source = connection.execute(
+                """SELECT r.status,c.provider_id,c.result_digest,c.input_signature,
+                c.comparability_signature FROM external_tool_runs r
+                JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+                WHERE r.tool_run_id=?""",
+                (effective_run_id,),
+            ).fetchone()
+            if (
+                source is None
+                or str(source["status"]) != "completed"
+                or str(source["provider_id"]) != str(row["provider_id"])
+                or source["result_digest"] != row["result_digest"]
+                or source["input_signature"] != row["input_signature"]
+                or source["comparability_signature"] != row["comparability_signature"]
+            ):
+                raise ValueError("replay_source_invalid")
+        findings = _provider_findings(connection, effective_run_id)
+        digest = external_findings_digest(findings)
+        if row["result_digest"] != digest:
+            raise ValueError("result_digest")
+        for item in inputs:
+            if not _current_version_exists(connection, int(item["version_id"])):
+                raise ValueError("input_not_current")
+        comparable = counters.get("comparable", 0) == 1
+        added = counters.get("added") if comparable else None
+        resolved = counters.get("resolved") if comparable else None
+        gate = "baseline" if not comparable else "passed" if added == 0 else "failed"
+        status = ExternalProviderStatus(
+            str(row["provider_id"]),
+            str(row["provider_schema"]),
+            str(row["profile"]),  # type: ignore[arg-type]
+            str(row["tool_name"]),
+            str(row["tool_version"]),
+            "ready",
+            None,
+            str(row["execution"]),
+            eligible,
+            covered,
+            len(findings),
+            added,
+            resolved,
+            comparable,
+            digest,
+            str(row["comparability_signature"]),
+            gate,  # type: ignore[arg-type]
+            limitations,
+            content_executed=bool(row["executes_content"]),
+            counters=counters,
+        )
+        return status, findings
+    except (KeyError, TypeError, ValueError, sqlite3.DatabaseError):
+        return _abstained_provider(row, "external_provider_projection_invalid"), ()
+
+
+def _legacy_provider_status(status: ExternalEvidenceStatus) -> ExternalProviderStatus:
+    return ExternalProviderStatus(
+        "ruff-protected-basic",
+        "neocortex.ruff-protected-basic/v1",
+        "protected",
+        "ruff",
+        status.tool_version,
+        status.status,
+        status.reason,
+        status.execution,
+        status.eligible_files,
+        status.covered_files,
+        status.diagnostics,
+        status.added,
+        status.resolved,
+        status.comparable,
+        status.result_digest,
+        status.configuration_signature,
+        status.gate,
+    )
+
+
+def _current_runtime_reason(
+    row: sqlite3.Row | Mapping[str, object],
+) -> str | None:
+    """Return why one historical provider cannot represent the current runtime."""
+
+    from .external_evidence_providers import providers_for_profile
+
+    profile_value = str(row["profile"])
+    if profile_value not in {"protected", "trusted-static"}:
+        return "external_provider_profile_unsupported"
+    try:
+        providers = providers_for_profile(
+            cast(AnalysisProfile, profile_value),
+            Path(str(row["observed_root"])),
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return "external_provider_runtime_probe_failed"
+    provider = next(
+        (item for item in providers if item.descriptor.provider_id == str(row["provider_id"])),
+        None,
+    )
+    if provider is None:
+        return "external_provider_not_registered"
+    version = provider.tool_version()
+    if version is None:
+        return "external_provider_runtime_unavailable"
+    descriptor = provider.descriptor
+    if (
+        version != str(row["tool_version"])
+        or descriptor.provider_schema != str(row["provider_schema"])
+        or descriptor.configuration_signature != str(row["configuration_signature"])
+        or descriptor.environment_signature != str(row["environment_signature"])
+        or descriptor.comparability_signature != str(row["comparability_signature"])
+    ):
+        return "external_provider_runtime_stale"
+    return None
+
+
+def _type_consensus(
+    provider_findings: Mapping[str, Sequence[ExternalProviderFinding]],
+    provider_statuses: Mapping[str, ExternalProviderStatus],
+) -> TypeConsensusSummary:
+    mypy_id = "mypy-trusted-project"
+    pyright_id = "pyright-trusted-project"
+    mypy_status = provider_statuses.get(mypy_id)
+    pyright_status = provider_statuses.get(pyright_id)
+    if (
+        mypy_status is None
+        or pyright_status is None
+        or mypy_status.status != "ready"
+        or pyright_status.status != "ready"
+        or mypy_status.covered_files != mypy_status.eligible_files
+        or pyright_status.covered_files != pyright_status.eligible_files
+    ):
+        return TypeConsensusSummary("not_comparable", not_comparable=1)
+
+    def keys(provider_id: str) -> set[tuple[str, int, str]]:
+        return {
+            (item.relative_path.casefold(), item.start_line, item.category)
+            for item in provider_findings.get(provider_id, ())
+        }
+
+    mypy_keys = keys(mypy_id)
+    pyright_keys = keys(pyright_id)
+    both = mypy_keys & pyright_keys
+    return TypeConsensusSummary(
+        "both_report",
+        both_report=len(both),
+        mypy_only=len(mypy_keys - pyright_keys),
+        pyright_only=len(pyright_keys - mypy_keys),
+    )
+
+
+def _gate_evaluations(
+    statuses: Mapping[str, ExternalProviderStatus],
+) -> tuple[ProviderGateEvaluation, ...]:
+    definitions = (
+        ("ruff-protected-basic", "no_added_ruff_basic_diagnostics"),
+        ("ruff-trusted-project", "no_added_ruff_project_diagnostics"),
+        ("mypy-trusted-project", "no_added_mypy_errors"),
+        ("pyright-trusted-project", "no_added_pyright_errors"),
+    )
+    gates: list[ProviderGateEvaluation] = []
+    for provider_id, gate_name in definitions:
+        status = statuses.get(provider_id)
+        if status is None:
+            gates.append(
+                ProviderGateEvaluation(
+                    gate_name, provider_id, "not_evaluated", "provider_not_recorded"
+                )
+            )
+        elif status.status != "ready":
+            gates.append(
+                ProviderGateEvaluation(
+                    gate_name,
+                    provider_id,
+                    "abstained",
+                    status.reason or "provider_not_ready",
+                )
+            )
+        else:
+            gates.append(
+                ProviderGateEvaluation(
+                    gate_name,
+                    provider_id,
+                    status.gate,
+                    "no_added_findings" if status.gate == "passed" else status.gate,
+                )
+            )
+    for gate_name in ("public_type_surface_not_degraded", "type_coverage_not_degraded"):
+        gates.append(
+            ProviderGateEvaluation(
+                gate_name,
+                "type-consensus",
+                "not_evaluated",
+                "comparable_type_metric_not_recorded",
+            )
+        )
+    return tuple(gates)
+
+
+def read_external_evidence_suite(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    *,
+    enforce_current_runtime: bool,
+) -> ExternalEvidenceSuiteStatus:
+    """Read every normalized provider while preserving the legacy Ruff fallback."""
+
+    rows = connection.execute(
+        """SELECT r.tool_run_id,r.tool_name,r.tool_version,r.status,
+        r.configuration_signature,r.provenance_json,c.* FROM external_tool_runs r
+        JOIN external_run_contracts c ON c.tool_run_id=r.tool_run_id
+        WHERE r.analysis_run_id=? ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
+        (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _PROVIDER_STATUS_LIMIT:
+        return ExternalEvidenceSuiteStatus(
+            "protected",
+            "abstained",
+            (),
+            TypeConsensusSummary("not_comparable", not_comparable=1),
+            (),
+        )
+    latest: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        latest.setdefault(str(row["provider_id"]), row)
+    statuses: list[ExternalProviderStatus] = []
+    findings: dict[str, tuple[ExternalProviderFinding, ...]] = {}
+    for provider_id in sorted(latest):
+        row = latest[provider_id]
+        runtime_reason = (
+            _current_runtime_reason(row)
+            if enforce_current_runtime and str(row["status"]) in {"completed", "skipped"}
+            else None
+        )
+        status, provider_findings = _provider_status(connection, row)
+        if runtime_reason is not None:
+            status = replace(
+                status,
+                status="abstained",
+                reason=runtime_reason,
+                gate="not_evaluated",
+            )
+            provider_findings = ()
+        statuses.append(status)
+        findings[provider_id] = provider_findings
+    if "ruff-protected-basic" not in latest:
+        legacy, _ids, _row = read_external_evidence(
+            connection,
+            analysis_run_id,
+            enforce_current_runtime=enforce_current_runtime,
+        )
+        if legacy.status != "not_recorded":
+            statuses.append(_legacy_provider_status(legacy))
+    statuses.sort(key=lambda item: item.provider_id)
+    status_map = {item.provider_id: item for item in statuses}
+    profile = (
+        "trusted-static"
+        if any(item.profile == "trusted-static" for item in statuses)
+        else "protected"
+    )
+    if not statuses:
+        suite_status = "not_recorded"
+    elif all(item.status == "ready" for item in statuses):
+        suite_status = "ready"
+    elif any(item.status == "ready" for item in statuses):
+        suite_status = "partial"
+    else:
+        suite_status = "abstained"
+    return ExternalEvidenceSuiteStatus(
+        profile,  # type: ignore[arg-type]
+        suite_status,  # type: ignore[arg-type]
+        tuple(statuses),
+        _type_consensus(findings, status_map),
+        _gate_evaluations(status_map),
+    )
+
+
+def read_external_provider_finding_ids(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+) -> dict[str, frozenset[str]]:
+    """Return portable finding identities for each latest normalized provider."""
+
+    rows = connection.execute(
+        """SELECT c.provider_id,r.tool_run_id,c.execution
+        FROM external_tool_runs r JOIN external_run_contracts c
+        ON c.tool_run_id=r.tool_run_id WHERE r.analysis_run_id=?
+        ORDER BY c.provider_id,r.tool_run_id DESC LIMIT ?""",
+        (analysis_run_id, _PROVIDER_STATUS_LIMIT + 1),
+    ).fetchall()
+    if len(rows) > _PROVIDER_STATUS_LIMIT:
+        raise ValueError("external provider identity read exceeds its bound")
+    latest: dict[str, tuple[int, str]] = {}
+    for row in rows:
+        latest.setdefault(
+            str(row["provider_id"]),
+            (int(row["tool_run_id"]), str(row["execution"])),
+        )
+    result: dict[str, frozenset[str]] = {}
+    for provider_id, (tool_run_id, execution) in latest.items():
+        effective = tool_run_id
+        if execution == "cache_replay":
+            replay = connection.execute(
+                "SELECT source_tool_run_id FROM external_run_replays WHERE tool_run_id=?",
+                (tool_run_id,),
+            ).fetchone()
+            if replay is None:
+                result[provider_id] = frozenset()
+                continue
+            effective = int(replay["source_tool_run_id"])
+        ids = connection.execute(
+            """SELECT portable_finding_id FROM external_findings
+            WHERE tool_run_id=? ORDER BY portable_finding_id LIMIT ?""",
+            (effective, _FINDING_LIMIT + 1),
+        ).fetchall()
+        if len(ids) > _FINDING_LIMIT:
+            raise ValueError("external provider identities exceed their bound")
+        result[provider_id] = frozenset(str(item[0]) for item in ids)
+    return result
+
+
+__all__ = [
+    "publish_external_provider",
+    "read_external_evidence_suite",
+    "read_external_provider_baselines",
+    "read_external_provider_finding_ids",
+]

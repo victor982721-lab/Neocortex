@@ -16,6 +16,7 @@ from _02_Deduplicacion import DedupPlan, ScanSummary
 
 from .app_paths import default_state_directory
 from .route_filters import CandidateSelection
+
 # endregion [01]
 
 # region [02] Implementación
@@ -23,15 +24,15 @@ from .route_filters import CandidateSelection
 if TYPE_CHECKING:
     from .audio_models import AudioRouteSummary
     from .code_contracts import CodeRouteSummary
-    from .docx_route import DocxRouteSummary
-    from .image_route import ImageRouteSummary
-    from .office_route import OfficeRouteSummary
-    from .pdf_route import PdfRouteSummary
-    from .global_resources import GlobalResourceSummary
     from .document_organization import (
         OrganizationApplySummary,
         OrganizationPlanSummary,
     )
+    from .docx_route import DocxRouteSummary
+    from .global_resources import GlobalResourceSummary
+    from .image_route import ImageRouteSummary
+    from .office_route import OfficeRouteSummary
+    from .pdf_route import PdfRouteSummary
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,7 @@ class FrameworkConfig:
     root: Path = field(default_factory=Path.home)
     state_directory: Path = field(default_factory=default_state_directory)
     self_analysis: bool = False
+    analysis_profile: Literal["protected", "trusted-static"] = "protected"
     corpus_access_mode: Literal["normal", "analyze_only"] = "normal"
     apply_actions: bool = False
     preview_group_limit: int = 0

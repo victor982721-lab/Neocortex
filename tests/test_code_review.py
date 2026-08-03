@@ -51,19 +51,12 @@ from _04_Nucleo_Operativo.semantic_models import (
     fingerprint_text,
 )
 
-
 PROCESSING_SIGNATURE = "code-review-fixture-v1"
 ACTIONABILITY_FIXTURE = (
-    Path(__file__).parent
-    / "fixtures"
-    / "code_review"
-    / "rc6_top10_actionability_v1.json"
+    Path(__file__).parent / "fixtures" / "code_review" / "rc6_top10_actionability_v1.json"
 )
 REPRESENTATIVE_ACTIONABILITY_FIXTURE = (
-    Path(__file__).parent
-    / "fixtures"
-    / "code_review"
-    / "rc11_top40_actionability_v2.json"
+    Path(__file__).parent / "fixtures" / "code_review" / "rc11_top40_actionability_v2.json"
 )
 
 
@@ -81,9 +74,7 @@ def _fixture_score(label: dict[str, object]) -> int:
         else (10_000 * int(function_lines["value"])) // int(function_lines["threshold"])
     )
     impact_bp = 250 * min(int(label["resolved_static_callers"]), 20)
-    return (
-        max(complexity_bp, length_bp) + min(complexity_bp, length_bp) // 4 + impact_bp
-    )
+    return max(complexity_bp, length_bp) + min(complexity_bp, length_bp) // 4 + impact_bp
 
 
 def test_rc6_top10_actionability_fixture_is_reproducible() -> None:
@@ -91,9 +82,7 @@ def test_rc6_top10_actionability_fixture_is_reproducible() -> None:
     labels = payload["labels"]
 
     assert payload["schema"] == "neocortex-code-review-actionability-fixture-v1"
-    assert payload["source"]["ground_truth_status"] == (
-        "provisional_not_human_validated"
-    )
+    assert payload["source"]["ground_truth_status"] == ("provisional_not_human_validated")
     assert [label["rank"] for label in labels] == list(range(1, 11))
     assert len({(label["path"], label["symbol"]) for label in labels}) == 10
     assert all(_fixture_score(label) == label["score_basis_points"] for label in labels)
@@ -111,21 +100,13 @@ def _representative_score(label: dict[str, object], ranking: str) -> int:
     assert isinstance(signals, dict)
     complexity = signals["complexity"]
     function_lines = signals["function_lines"]
-    complexity_bp = (
-        0 if complexity is None else (10_000 * int(complexity[0])) // int(complexity[1])
-    )
+    complexity_bp = 0 if complexity is None else (10_000 * int(complexity[0])) // int(complexity[1])
     length_bp = (
-        0
-        if function_lines is None
-        else (10_000 * int(function_lines[0])) // int(function_lines[1])
+        0 if function_lines is None else (10_000 * int(function_lines[0])) // int(function_lines[1])
     )
     impact_bp = 250 * min(int(signals["resolved_static_callers"]), 20)
     if ranking == "baseline":
-        return (
-            max(complexity_bp, length_bp)
-            + min(complexity_bp, length_bp) // 4
-            + impact_bp
-        )
+        return max(complexity_bp, length_bp) + min(complexity_bp, length_bp) // 4 + impact_bp
     assert ranking == "candidate"
     return complexity_bp + length_bp // 4 + impact_bp
 
@@ -153,16 +134,12 @@ def _precision_triplet(
 
 
 def test_rc11_top40_actionability_fixture_measures_ranking_v2() -> None:
-    payload = json.loads(
-        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
-    )
+    payload = json.loads(REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8"))
     labels = payload["labels"]
     summary = payload["review_summary"]
 
     assert payload["schema"] == "neocortex-code-review-actionability-fixture-v2"
-    assert payload["source"]["ground_truth_status"] == (
-        "provisional_not_human_validated"
-    )
+    assert payload["source"]["ground_truth_status"] == ("provisional_not_human_validated")
     assert payload["source"]["sample_strategy"] == "union_of_v1_and_v2_top40"
     assert len(labels) == summary["sample_size"] == 41
     assert len({(label["path"], label["symbol"]) for label in labels}) == 41
@@ -173,12 +150,8 @@ def test_rc11_top40_actionability_fixture_measures_ranking_v2() -> None:
     assert sum(label["label"] == "actionable" for label in labels) == 24
     assert sum(label["label"] == "defer" for label in labels) == 17
     for label in labels:
-        assert label["baseline"]["score_basis_points"] == _representative_score(
-            label, "baseline"
-        )
-        assert label["candidate"]["score_basis_points"] == _representative_score(
-            label, "candidate"
-        )
+        assert label["baseline"]["score_basis_points"] == _representative_score(label, "baseline")
+        assert label["candidate"]["score_basis_points"] == _representative_score(label, "candidate")
 
     baseline = _ranked_fixture_labels(labels, "baseline")
     candidate = _ranked_fixture_labels(labels, "candidate")
@@ -211,9 +184,7 @@ def _fixture_actionability_input(
         symbol=str(label["symbol"]),
         root=None,
         complexity_ratio_basis_points=(
-            0
-            if complexity is None
-            else (10_000 * int(complexity[0])) // int(complexity[1])
+            0 if complexity is None else (10_000 * int(complexity[0])) // int(complexity[1])
         ),
         length_ratio_basis_points=(
             0
@@ -230,19 +201,14 @@ def _fixture_actionability_input(
 
 
 def test_actionability_gate_preserves_provisional_rc11_labels() -> None:
-    payload = json.loads(
-        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
-    )
+    payload = json.loads(REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8"))
     labels = payload["labels"]
     assessed = [
         (label, assess_code_review_actionability(_fixture_actionability_input(label)))
         for label in labels
     ]
 
-    assert all(
-        assessment.construction == label["construction"]
-        for label, assessment in assessed
-    )
+    assert all(assessment.construction == label["construction"] for label, assessment in assessed)
     assert all(
         (assessment.actionability == "act_now") == (label["label"] == "actionable")
         for label, assessment in assessed
@@ -255,9 +221,7 @@ def test_actionability_gate_preserves_provisional_rc11_labels() -> None:
 
 
 def test_actionability_gate_selects_rc14_first_prudent_candidate() -> None:
-    payload = json.loads(
-        REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8")
-    )
+    payload = json.loads(REPRESENTATIVE_ACTIONABILITY_FIXTURE.read_text(encoding="utf-8"))
     rc14_top_10 = sorted(
         (
             label
@@ -287,14 +251,14 @@ def test_actionability_gate_selects_rc14_first_prudent_candidate() -> None:
 
 @pytest.mark.parametrize(
     ("path", "root", "expected"),
-    (
+    [
         (r"C:\repo\package\service.py", None, "production"),
         (r"C:\repo\tests\test_service.py", None, "test"),
         ("/repo/tests/fixtures/sample.py", None, "fixture"),
         ("/repo/tools/inspect_state.py", None, "tool"),
         ("/repo/compatibility/legacy_reader.py", None, "compatibility"),
         ("/tools/repository/package/service.py", "/tools/repository", "production"),
-    ),
+    ],
 )
 def test_source_roles_are_portable(
     path: str,
@@ -585,9 +549,7 @@ def _build_state(
             partial=False,
             graph_current=True,
             external_evidence=(
-                _external_publication(state, state_directory)
-                if external_evidence
-                else None
+                _external_publication(state, state_directory) if external_evidence else None
             ),
         )
         checkpoint_code_wal(state.connection)
@@ -645,11 +607,11 @@ def test_review_ranks_confirmed_hotspots_deterministically_with_diversity(
 
     assert first.status == "ready"
     assert first_json == second_json
-    assert first.as_payload()["schema"] == "neocortex.code-review/v4"
-    assert "neocortex.code-review/v3" in first.as_payload()["compatible_schemas"]
+    assert first.as_payload()["schema"] == "neocortex.code-review/v5"
     assert first.as_payload()["compatible_schemas"] == [
         "neocortex.code-review/v2",
         "neocortex.code-review/v3",
+        "neocortex.code-review/v4",
     ]
     assert len(first.findings) == 10
     assert len(expanded.findings) == 11
@@ -726,6 +688,9 @@ def test_review_exposes_advisory_ruff_evidence_and_package_gate(
     assert payload["external_evidence"]["mutation_authority"] is False
     assert "ruff_external_evidence_baseline_only" in result.limitations
     assert "no_added_ruff_diagnostics" in result.work_packages[0].acceptance_gates
+    assert "no_added_mypy_errors" in result.work_packages[0].acceptance_gates
+    assert "no_added_pyright_errors" in result.work_packages[0].acceptance_gates
+    assert "provider_cache_or_rerun_explained" in result.work_packages[0].acceptance_gates
 
 
 def test_work_package_planning_uses_the_fixed_pool_not_the_output_limit(
@@ -760,9 +725,7 @@ def test_work_package_planning_uses_the_fixed_pool_not_the_output_limit(
     limited = review_code_state(state_directory, limit=1)
     planning_view = review_code_state(state_directory, limit=50)
     expected = next(
-        finding
-        for finding in planning_view.findings
-        if finding.actionability == "act_now"
+        finding for finding in planning_view.findings if finding.actionability == "act_now"
     )
 
     assert limited.findings[0].actionability == "characterize_first"
@@ -772,7 +735,7 @@ def test_work_package_planning_uses_the_fixed_pool_not_the_output_limit(
     assert limited.work_packages[0].primary_symbol == expected.symbol
 
 
-@pytest.mark.parametrize("limit", (0, 51, True))
+@pytest.mark.parametrize("limit", [0, 51, True])
 def test_review_rejects_an_unbounded_calibration_limit(
     tmp_path: Path,
     limit: object,
@@ -840,9 +803,7 @@ def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
     assert result.status == "ready"
     assert result.findings == ()
     assert result.recommendation_status == "abstained"
-    assert result.recommendation_reason == (
-        "no_act_now_candidate_within_bounded_findings"
-    )
+    assert result.recommendation_reason == ("no_act_now_candidate_within_bounded_findings")
     assert result.recommendations == ()
     assert result.work_package_status == "abstained"
     assert result.work_package_reason == (
@@ -852,9 +813,7 @@ def test_review_with_zero_hotspots_is_ready_and_does_not_mutate_state(
     assert result.coverage is not None
     assert result.coverage.candidate_hotspots == 0
     assert result.digest is not None
-    assert (
-        tuple(sorted(path.name for path in state_directory.iterdir())) == before_files
-    )
+    assert tuple(sorted(path.name for path in state_directory.iterdir())) == before_files
     assert _digest(database) == before_digest
     assert not Path(f"{database}-wal").exists()
     assert not Path(f"{database}-shm").exists()
