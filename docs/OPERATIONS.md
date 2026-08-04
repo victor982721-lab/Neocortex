@@ -359,6 +359,12 @@ Neocortex --root $Root --state-directory $State --route code --route-only --cand
 Neocortex --root $Root --state-directory $State --resume-run 40
 ```
 
+La selección pública predeterminada es `--code-scope projects`: el inventario
+sigue cubriendo el corpus compartido, pero Code sólo consume árboles con un
+manifiesto de proyecto y omite dependencias, caches y outputs. Use
+`--code-scope broad` únicamente cuando se quiera analizar deliberadamente
+código suelto fuera de proyectos.
+
 Sin `--candidate-run`, se examina el owner durable más reciente de la raíz
 exacta y se exige modo `normal`; una discrepancia falla sin retroceder a un run
 histórico por tener candidatos. Cero candidatos sólo se

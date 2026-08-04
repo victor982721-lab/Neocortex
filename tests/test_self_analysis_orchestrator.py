@@ -111,6 +111,7 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
         lambda config: replace(config, organization_root=Path("organization")),
         lambda config: replace(config, code_include_generated=True),
         lambda config: replace(config, code_include_vendored=True),
+        lambda config: replace(config, code_candidate_scope="broad"),
         lambda config: replace(
             config,
             selection=CandidateSelection.from_values(paths=("source.py",)),

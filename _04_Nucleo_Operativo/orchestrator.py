@@ -216,6 +216,8 @@ class FrameworkOrchestrator:
             raise ValueError("self-analysis cannot enable catalog or organization work")
         if self.config.code_include_generated or self.config.code_include_vendored:
             raise ValueError("self-analysis requires generated and vendored exclusions")
+        if self.config.code_candidate_scope != "projects":
+            raise ValueError("self-analysis requires project-scoped Code selection")
 
         access_policy = CorpusAccessPolicy.capture("analyze_only", root)
         state_layout = initialize_authorized_state_directory(
@@ -1043,6 +1045,9 @@ class FrameworkOrchestrator:
                     "code_max_file_bytes": self.config.code_max_file_bytes,
                     "code_max_documents": self.config.code_max_documents,
                     "code_cache_validation": self.config.code_cache_validation,
+                    "code_candidate_scope": self.config.code_candidate_scope,
+                    "code_include_generated": self.config.code_include_generated,
+                    "code_include_vendored": self.config.code_include_vendored,
                     "apply_actions": self.config.apply_actions,
                     "excluded_paths": [str(path) for path in excluded_paths],
                     "inventory_exclusion_signature": inventory_policy.signature,

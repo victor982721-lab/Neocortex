@@ -52,17 +52,27 @@ def register_code_arguments(
         help="metadata is incremental-fast; full rechecks exact bytes before reuse",
     )
     code.add_argument(
+        "--code-scope",
+        dest="code_candidate_scope",
+        choices=("projects", "broad"),
+        default="projects",
+        help=(
+            "projects admits only detected project trees; broad restores the "
+            "legacy profile-wide textual selection"
+        ),
+    )
+    code.add_argument(
         "--code-generated",
         dest="code_include_generated",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="retain generated artifacts in structural analysis",
     )
     code.add_argument(
         "--code-vendored",
         dest="code_include_vendored",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="retain vendored artifacts in structural analysis",
     )
     code.add_argument(

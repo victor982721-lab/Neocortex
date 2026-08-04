@@ -34,6 +34,7 @@ from _03_Progreso import (
 
 from .cancellation import CancellationRequested, CancellationToken
 from .code_analyzers import AnalyzerRegistry, builtin_analyzer_registry
+from .code_candidate_scope import ProjectCandidateScope, is_project_marker
 from .code_contracts import (
     AnalysisStatus,
     ArtifactClassification,
@@ -310,6 +311,24 @@ class CodeRoute:
             return True
         normalized = os.path.normcase(os.path.abspath(path))
         return normalized in self._selected_paths
+
+    def _discover_project_scope(self) -> ProjectCandidateScope | None:
+        """Derive one immutable project boundary from the shared inventory."""
+
+        if self.config.candidate_scope != "projects" or self._selected_paths:
+            return None
+
+        def inventory_paths() -> Iterable[str]:
+            for snapshot in self.dedup_index.snapshots(self.scan_id):
+                self.cancellation.checkpoint()
+                yield snapshot.path
+
+        return ProjectCandidateScope.discover(
+            inventory_paths(),
+            include_generated=self.config.include_generated,
+            include_vendored=self.config.include_vendored,
+            explicit_roots=self.config.explicit_project_roots,
+        )
 
     def _candidate_admission(self, snapshot: FileSnapshot) -> AbstractContextManager[None]:
         if self.memory_gate is None:
@@ -890,12 +909,28 @@ class CodeRoute:
                     self.processing_signature,
                 )
                 self._emit(0)
+                project_scope = self._discover_project_scope()
+                if project_scope is not None:
+                    counters["project_scope_enabled"] = 1
+                    counters["project_roots"] = project_scope.root_count
                 for snapshot in self.dedup_index.snapshots(self.scan_id):
                     self.cancellation.checkpoint()
-                    if not likely_code_candidate(snapshot.path) or not self._selected_path(
-                        snapshot.path
-                    ):
+                    if (
+                        not likely_code_candidate(snapshot.path)
+                        and not is_project_marker(snapshot.path)
+                    ) or not self._selected_path(snapshot.path):
                         continue
+                    if project_scope is not None:
+                        decision = project_scope.decision(snapshot.path)
+                        if decision != "admit":
+                            counter = {
+                                "outside_project": "outside_project_skips",
+                                "dependency": "dependency_skips",
+                                "generated": "generated_scope_skips",
+                                "cache": "cache_skips",
+                            }[decision]
+                            counters[counter] += 1
+                            continue
                     if not state.matches_selection(snapshot, self.config.selection):
                         continue
                     if (

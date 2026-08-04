@@ -261,6 +261,13 @@ def _print_code_report(result) -> None:
         return
     print(
         f"code_candidates={summary.candidates} "
+        f"code_project_scope="
+        f"{'projects' if summary.project_scope_enabled else 'broad'} "
+        f"code_project_roots={summary.project_roots} "
+        f"code_outside_project_skips={summary.outside_project_skips} "
+        f"code_dependency_skips={summary.dependency_skips} "
+        f"code_generated_scope_skips={summary.generated_scope_skips} "
+        f"code_cache_skips={summary.cache_skips} "
         f"code_processed={summary.processed} "
         f"code_cache_hits={summary.cache_hits} "
         f"code_symbols={summary.symbols} "

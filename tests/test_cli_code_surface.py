@@ -74,6 +74,8 @@ def _expected_boolean_optional(
     negative_option: str,
     destination: str,
     help_text: str,
+    *,
+    default: bool = True,
 ) -> tuple[object, ...]:
     return (
         (option, negative_option),
@@ -81,7 +83,7 @@ def _expected_boolean_optional(
         "BooleanOptionalAction",
         0,
         None,
-        True,
+        default,
         None,
         None,
         None,
@@ -136,17 +138,29 @@ EXPECTED_CODE_ACTIONS = (
         choices=("metadata", "full"),
         help_text=("metadata is incremental-fast; full rechecks exact bytes before reuse"),
     ),
+    _expected_store(
+        "--code-scope",
+        "code_candidate_scope",
+        default="projects",
+        choices=("projects", "broad"),
+        help_text=(
+            "projects admits only detected project trees; broad restores the "
+            "legacy profile-wide textual selection"
+        ),
+    ),
     _expected_boolean_optional(
         "--code-generated",
         "--no-code-generated",
         "code_include_generated",
         "retain generated artifacts in structural analysis",
+        default=False,
     ),
     _expected_boolean_optional(
         "--code-vendored",
         "--no-code-vendored",
         "code_include_vendored",
         "retain vendored artifacts in structural analysis",
+        default=False,
     ),
     _expected_flag(
         "--retry-code-errors",
@@ -301,6 +315,9 @@ EXPECTED_CODE_HELP = (
     "  --code-cache-validation {metadata,full}\n"
     "                        metadata is incremental-fast; full rechecks exact\n"
     "                        bytes before reuse\n"
+    "  --code-scope {projects,broad}\n"
+    "                        projects admits only detected project trees; broad\n"
+    "                        restores the legacy profile-wide textual selection\n"
     "  --code-generated, --no-code-generated\n"
     "                        retain generated artifacts in structural analysis\n"
     "  --code-vendored, --no-code-vendored\n"

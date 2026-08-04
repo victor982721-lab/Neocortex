@@ -79,6 +79,7 @@ def framework_config_from_args(args: argparse.Namespace) -> FrameworkConfig:
         code_chunk_chars=args.code_chunk_chars,
         code_retry_errors=args.retry_code_errors,
         code_cache_validation=args.code_cache_validation,
+        code_candidate_scope=args.code_candidate_scope,
         code_include_generated=args.code_include_generated,
         code_include_vendored=args.code_include_vendored,
         code_complexity_warning=args.code_complexity_warning,

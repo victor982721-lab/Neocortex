@@ -42,7 +42,7 @@ from _04_Nucleo_Operativo.route_registry import (
 def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
     assert ApplicationConfig is FrameworkConfig
     application_fields = fields(ApplicationConfig)
-    assert len(application_fields) == 130
+    assert len(application_fields) == 131
     assert {item.name for item in application_fields} >= {
         "analysis_profile",
         "deep_test_selectors",
@@ -53,6 +53,7 @@ def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
         "deep_mutation_symbol",
         "deep_mutation_max_mutants",
         "deep_mutation_timeout_seconds",
+        "code_candidate_scope",
         "deep_mutation_time_budget_seconds",
     }
     base = Path("synthetic-application-config")
@@ -103,6 +104,9 @@ def test_default_code_projection_uses_current_canonical_paths() -> None:
     expected = CodeRouteConfig(
         state_path=Path("canonical-code-state") / "code.sqlite3",
         dedup_path=Path("canonical-code-state") / "dedup.sqlite3",
+        candidate_scope="projects",
+        include_generated=False,
+        include_vendored=False,
     )
 
     assert requested.code_database == Path("requested-code-state") / "code.sqlite3"
@@ -126,6 +130,7 @@ def test_code_projection_preserves_every_override_and_signature_input() -> None:
         code_chunk_chars=4_096,
         code_retry_errors=True,
         code_cache_validation="full",
+        code_candidate_scope="broad",
         code_include_generated=False,
         code_include_vendored=False,
         code_complexity_warning=23,
@@ -140,6 +145,7 @@ def test_code_projection_preserves_every_override_and_signature_input() -> None:
         chunk_chars=4_096,
         retry_errors=True,
         cache_validation="full",
+        candidate_scope="broad",
         include_generated=False,
         include_vendored=False,
         complexity_warning=23,

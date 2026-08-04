@@ -36,6 +36,15 @@ entra implícitamente en esa etapa: el estado histórico contiene 4.89 millones
 de chunks Code y mezclarlo volvería a bloquear la publicación documental. Para
 un corpus Code deliberado se usa `--all --semantic-source code`.
 
+La ruta Code usa `--code-scope projects` de forma predeterminada: descubre
+raíces por manifiestos de proyecto (`pyproject.toml`, `package.json`,
+`Cargo.toml`, soluciones de Visual Studio y equivalentes) y sólo admite
+artefactos dentro de esas raíces. Dependencias instaladas, caches y salidas de
+build quedan fuera; `--code-generated` y `--code-vendored` son inclusiones
+deliberadas. `--code-scope broad` conserva únicamente como override explícito
+la selección textual histórica de todo el perfil. La salida informa raíces y
+descartes por causa para que la cobertura no quede implícita.
+
 ## Topología canónica por usuario
 
 La fuente, el runtime y el estado ocupan árboles separados:
