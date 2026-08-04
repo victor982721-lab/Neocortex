@@ -1,12 +1,40 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, corte `relocation-aware publication diff` publicado
-> mediante el PR #22.
+> Actualizado: 2026-08-03, corte integrado `--all` → Semantic validado en wheel
+> candidato instalado.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
+
+`Neocortex --all` ejecuta las seis rutas y, si acciones y organización no
+reportan errores, avanza Semantic textual sobre PDF, DOCX, XLSX, PPTX, ODT y
+audio. El preset integrado usa límites duros y reanudables de 100 000 items,
+1 000 000 de jobs y 172 800 segundos. Una truncación limpia conserva progreso y
+exit `0`; errores o estado stale conservan exit `2`. La acción directa
+`--semantic-index` mantiene su contrato estricto de exit `2` ante truncación.
+
+Code queda fuera de Semantic implícito. La inspección read-only del estado vivo
+encontró 5 133 824 chunks/jobs y cero embeddings publicados; Code aporta
+4 890 200 chunks, aproximadamente 95 %, frente a 243 624 de documentos y audio.
+El usuario aún puede seleccionarlo deliberadamente con
+`--all --semantic-source code`. Así se conserva Code↔Semantic sin hacer que la
+publicación documental cotidiana herede la generación histórica patológica.
+
+El piloto instalado sobre 20 PDF sintéticos publicó 40/40 embeddings, cero
+errores y una generación `ready`. El replay exacto tuvo 20/20 cache hits,
+`new_jobs=0`, `embedded=0` y otro head `ready` por clon de los 40 miembros. Una
+consulta textual completa devolvió cinco hits útiles con exit `0`. La aceptación
+final rc2 repitió el replay en 6.764 s mediante el ejecutable instalado.
+
+El wheel rc2 está en
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-all-semantic-20260803-rc2\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 594 631 bytes, 298 miembros, ZIP íntegro y SHA-256
+`210BA7CA2A29ADD460ACCB4D559F2AA3C1C275A79480FEE4003773066959F451`.
+Los cuatro módulos de producción modificados son byte-idénticos entre fuente y
+wheel; `pip check` está limpio, `doctor capabilities --json` reporta las ocho
+capacidades disponibles y el preset instalado confirmó `100000/1000000/172800`.
 
 El corte publica `neocortex.code-publication-diff/v9`, compatible con v1-v8, y
 clasifica como `relocated` un finding Mypy/Pyright cuyo path, categoría, código,
@@ -1361,22 +1389,30 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Usar el siguiente work package publicado.** Caracterizar y reducir
+1. **Ejecutar la corrida real solicitada.** Iniciar el rc2 instalado con
+   `Neocortex --all`, sin `--apply`, sobre la raíz y estado canónicos. La corrida
+   en segundo plano no se inició: el gate externo exigió una aprobación nueva y
+   explícita después de informar que puede escribir estado durable durante hasta
+   48 horas. No sustituirla por otra ruta ni reanudar la generación Code vieja.
+2. **Consumir la publicación, no sólo observar progreso.** Al terminar, comprobar
+   `--semantic-status` y consultas representativas en modo textual; registrar
+   head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
+   repetir el mismo `--all`: la generación es durable y reanudable.
+3. **Retomar el siguiente work package publicado.** Caracterizar y reducir
    `cli_validation.apply_self_analysis_preset` con sus pruebas CLI/self-analysis
    existentes. El selector deep actual protege Coverage, no ese objetivo: elegir
    primero los node ids reales que lo ejercitan y conservar preset, argv y
    compatibilidad pública exactos.
-2. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
+4. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
    Diff ya separa relocations, pero los findings realmente `added/resolved` aún
    exponen conteos y no ejemplos tipados públicos. Esta aceptación necesitó una
    lectura diagnóstica interna para localizar cuatro additions; si el siguiente
    paquete falla ese gate, añadir ejemplos acotados y consultables antes de
    seguir corrigiendo código.
-3. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
+5. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
    34-71 s; una proyección publicada de consultas es trabajo futuro justificable,
    pero no invalida la entrega funcional actual.
 
 Imagen, calibración Semantic y soak del watcher quedan detrás del programa de
-autoanálisis. El launcher estable permanece en 0.7.1; no procesar corpus ni
-estado durable vivo. Preservar `Neocortex --all --apply` como interfaz cotidiana
+autoanálisis. Preservar `Neocortex --all --apply` como interfaz cotidiana
 simplificada después de pilotos y protecciones.

@@ -189,10 +189,10 @@ def _validate_semantic_values(args: argparse.Namespace) -> None:
         raise SystemExit("--semantic-max-new-jobs must be between 1 and 100000000")
     if (
         not math.isfinite(args.semantic_time_budget_seconds)
-        or not 0.001 <= args.semantic_time_budget_seconds <= 86_400.0
+        or not 0.001 <= args.semantic_time_budget_seconds <= 172_800.0
     ):
         raise SystemExit(
-            "--semantic-time-budget-seconds must be finite and between 0.001 and 86400"
+            "--semantic-time-budget-seconds must be finite and between 0.001 and 172800"
         )
     if (
         not 64 * 1024
@@ -211,6 +211,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
     semantic_actions = len(
         selected_direct_operations(args, family=DirectOperationFamily.SEMANTIC)
     )
+    integrated_all = bool(args.all)
     code_semantic_search = bool(
         args.code_search is not None
         and any(
@@ -242,15 +243,25 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
     code_search_options = (
         {"semantic_model_cache", "semantic_threads"} if code_semantic_search else set()
     )
-    unsupported_without_semantic_action = (
-        optional_names.intersection(explicit) - code_search_options
+    integrated_all_options = {
+        "semantic_source",
+        "semantic_text_profile",
+        "semantic_model_cache",
+        "semantic_threads",
+        "semantic_max_items",
+        "semantic_max_new_jobs",
+        "semantic_time_budget_seconds",
+    }
+    unsupported_without_semantic_action = optional_names.intersection(explicit) - (
+        code_search_options | (integrated_all_options if integrated_all else set())
     )
     if not semantic_actions and unsupported_without_semantic_action:
         raise SystemExit("semantic options require one semantic direct action")
-    text_scope = args.semantic_index in {"text", "all"} or args.semantic_plan in {
-        "text",
-        "all",
-    }
+    text_scope = (
+        integrated_all
+        or args.semantic_index in {"text", "all"}
+        or args.semantic_plan in {"text", "all"}
+    )
     if args.semantic_source is not None and not text_scope:
         raise SystemExit(
             "--semantic-source requires semantic text/all planning or indexing"
@@ -285,7 +296,11 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         "semantic_max_new_jobs",
         "semantic_time_budget_seconds",
     }
-    if index_only.intersection(explicit) and args.semantic_index is None:
+    if (
+        index_only.intersection(explicit)
+        and args.semantic_index is None
+        and not integrated_all
+    ):
         raise SystemExit("semantic index budget options require --semantic-index")
     model_actions = bool(
         args.semantic_prepare_models
@@ -293,6 +308,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         or args.semantic_search is not None
         or args.semantic_classify is not None
         or code_semantic_search
+        or integrated_all
     )
     if {"semantic_model_cache", "semantic_threads"}.intersection(
         explicit
@@ -305,6 +321,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         or args.semantic_plan is not None
         or args.semantic_search is not None
         or args.semantic_classify is not None
+        or integrated_all
     ):
         raise SystemExit(
             "--semantic-text-profile requires semantic plan, index, search, or classify"

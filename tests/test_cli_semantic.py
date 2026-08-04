@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from _04_Nucleo_Operativo.cli_app import dispatch_direct
+from _04_Nucleo_Operativo.cli_semantic import run_integrated_all_semantic_index
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
 from _04_Nucleo_Operativo.semantic_config import COMPACT_TEXT_MODEL_ID
@@ -306,6 +307,10 @@ def test_semantic_cli_defaults_are_offline_bounded_and_quality_first() -> None:
         ),
         (
             ["--semantic-index", "text", "--semantic-time-budget-seconds", "nan"],
+            "--semantic-time-budget-seconds must be finite",
+        ),
+        (
+            ["--semantic-index", "text", "--semantic-time-budget-seconds", "172801"],
             "--semantic-time-budget-seconds must be finite",
         ),
         (
@@ -710,6 +715,67 @@ def test_semantic_index_reports_budget_truncation_as_nonzero(
     output = capsys.readouterr().out
     assert "truncated=1" in output
     assert "truncation_reason=max_items" in output
+
+
+def test_all_advances_document_semantic_without_broad_code_by_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    (tmp_path / "code.sqlite3").touch()
+    args = build_parser().parse_args(["--all", "--state-directory", str(tmp_path)])
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=_index_result(
+            tmp_path,
+            ("pdf",),
+            pending=1,
+            truncated=True,
+            truncation_reason="time_budget",
+        ),
+    ) as operation:
+        assert run_integrated_all_semantic_index(args) == 0
+
+    kwargs = operation.call_args.kwargs
+    assert kwargs["source_kinds"] == ("pdf",)
+    assert kwargs["work_budget"].max_items == 100_000
+    assert kwargs["work_budget"].max_new_jobs == 1_000_000
+    output = capsys.readouterr().out
+    assert "SEMANTIC_ALL status=starting sources=pdf" in output
+    assert "code_explicit=0" in output
+    assert "truncated=1" in output
+
+
+def test_all_accepts_explicit_code_semantic_selection(tmp_path: Path) -> None:
+    (tmp_path / "code.sqlite3").touch()
+    args = build_parser().parse_args(
+        [
+            "--all",
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-source",
+            "code",
+            "--semantic-time-budget-seconds",
+            "3600",
+        ]
+    )
+    validate_arguments(args)
+    with (
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+            return_value=_index_result(tmp_path, ("code",)),
+        ) as operation,
+        patch(
+            "_04_Nucleo_Operativo.code_semantic_links."
+            "current_code_embedding_link_counts",
+            return_value=(0, 0),
+        ),
+    ):
+        assert run_integrated_all_semantic_index(args) == 0
+
+    assert operation.call_args.kwargs["source_kinds"] == ("code",)
+    assert operation.call_args.kwargs["work_budget"].deadline is not None
 
 
 def test_semantic_index_without_available_text_cache_fails_explicitly(

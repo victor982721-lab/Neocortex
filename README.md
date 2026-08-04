@@ -29,6 +29,13 @@ el comando cotidiano integrado que haga todo lo soportado y aplique sólo
 acciones seguras. Las etapas aún no conectadas deben integrarse al comando, no
 convertirse en trabajo manual para Victor.
 
+Después de esa validación, `Neocortex --all` también avanza y publica Semantic
+textual a partir de los caches durables de PDF, DOCX, XLSX, PPTX, ODT y audio.
+Usa límites reanudables de 100 000 items, 1 000 000 de jobs y 48 horas. Code no
+entra implícitamente en esa etapa: el estado histórico contiene 4.89 millones
+de chunks Code y mezclarlo volvería a bloquear la publicación documental. Para
+un corpus Code deliberado se usa `--all --semantic-source code`.
+
 ## Topología canónica por usuario
 
 La fuente, el runtime y el estado ocupan árboles separados:
