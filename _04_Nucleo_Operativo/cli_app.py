@@ -86,6 +86,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
     actions = getattr(result, "actions", None)
     if (actions is not None and actions.errors) or has_organization_errors(result):
         return 2
+    semantic_exit_code = 0
+    if args.all:
+        from .cli_semantic import run_integrated_all_semantic_index
+
+        semantic_exit_code = run_integrated_all_semantic_index(args)
+    if semantic_exit_code != 0:
+        return 2
     if args.strict_exit_codes and has_strict_route_errors(result):
         return 2
     return 0

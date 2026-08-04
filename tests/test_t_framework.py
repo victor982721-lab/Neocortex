@@ -80,6 +80,9 @@ class CommandLineTests(unittest.TestCase):
         self.assertFalse(args.retry_image_errors)
         self.assertFalse(args.retry_code_errors)
         self.assertEqual(args.image_document_ocr, "auto")
+        self.assertEqual(args.semantic_max_items, 100_000)
+        self.assertEqual(args.semantic_max_new_jobs, 1_000_000)
+        self.assertEqual(args.semantic_time_budget_seconds, 172_800.0)
         self.assertIsNone(args.global_memory_budget_mb)
         self.assertIsNone(args.global_min_free_memory_mb)
         self.assertIsNone(args.global_min_free_commit_mb)
@@ -328,9 +331,7 @@ class OrchestratorTests(unittest.TestCase):
     def test_state_directory_cannot_equal_inventory_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            orchestrator = FrameworkOrchestrator(
-                FrameworkConfig(root=root, state_directory=root)
-            )
+            orchestrator = FrameworkOrchestrator(FrameworkConfig(root=root, state_directory=root))
             with self.assertRaisesRegex(ValueError, "cannot equal or contain"):
                 orchestrator._effective_excluded_paths(root)
 
@@ -619,9 +620,7 @@ class OrchestratorTests(unittest.TestCase):
             with FrameworkState(database):
                 pass
             connection = sqlite3.connect(database)
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(initial_runs)")
-            }
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(initial_runs)")}
             version = connection.execute(
                 "SELECT value FROM metadata WHERE key='schema_version'"
             ).fetchone()[0]
@@ -644,9 +643,7 @@ class OrchestratorTests(unittest.TestCase):
             connection = sqlite3.connect(database)
             tables = {
                 row[0]
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
             connection.close()
             self.assertIn("run_events", tables)
@@ -657,9 +654,7 @@ class OrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "framework.sqlite3"
             with FrameworkState(database) as state:
-                run_id = state.begin_initial_run(
-                    Path(directory), JournalCursor("C:", 1, 0)
-                )
+                run_id = state.begin_initial_run(Path(directory), JournalCursor("C:", 1, 0))
                 state.cancel_initial_run(run_id)
                 status, completed_ns = state._connection.execute(
                     "SELECT status,completed_ns FROM initial_runs WHERE run_id=?",
@@ -729,9 +724,7 @@ class OrchestratorTests(unittest.TestCase):
                 (corpus / "created.bin").write_bytes(b"created")
                 target = journal.capture(corpus.drive)
 
-                result = reconcile_usn_window(
-                    index, scan.scan_id, corpus, start, target
-                )
+                result = reconcile_usn_window(index, scan.scan_id, corpus, start, target)
                 snapshots = list(index.snapshots(scan.scan_id))
 
             by_name = {Path(item.path).name: item for item in snapshots}
@@ -794,9 +787,7 @@ class OrchestratorTests(unittest.TestCase):
                     "SELECT inventory_mode FROM initial_runs ORDER BY run_id"
                 )
             ]
-            event_count = connection.execute(
-                "SELECT COUNT(*) FROM run_events"
-            ).fetchone()[0]
+            event_count = connection.execute("SELECT COUNT(*) FROM run_events").fetchone()[0]
             connection.close()
             self.assertEqual(modes, ["full", "incremental", "incremental"])
             self.assertGreaterEqual(event_count, 9)

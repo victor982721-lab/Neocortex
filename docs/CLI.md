@@ -91,6 +91,15 @@ Después de aprobar cada ruta y su proyección se acepta una lista separada por
 comas o `--all`. `--all` no se combina con `--route` ni con operaciones
 directas de consulta o diagnóstico.
 
+La corrida `--all` ejecuta primero las seis rutas y, si no hubo errores de
+acciones u organización, avanza Semantic textual sobre los caches disponibles
+de PDF, DOCX, XLSX, PPTX, ODT y audio. Sus límites integrados son 100 000 items,
+1 000 000 de jobs y 172 800 segundos. Una truncación limpia se informa como
+progreso reanudable y conserva exit `0`; errores o estado stale conservan exit
+`2`. Code sólo participa cuando se selecciona expresamente con
+`--semantic-source code`, para no reintroducir inventarios de millones de chunks
+en la publicación documental cotidiana.
+
 ## Modos de ejecución
 
 ### Corrida integrada
@@ -490,12 +499,15 @@ anterior a esta política mantiene la búsqueda corporal y declara
 | `--semantic-max-new-jobs N` | `1500` | Jobs durables nuevos o reactivados por cambio de fingerprint; replay exacto no consume el límite. |
 | `--semantic-time-budget-seconds N` | `900` | Deadline monotónico compartido por texto, imagen y OCR. |
 
-Estas opciones sólo se admiten con `--semantic-index`. Agotar un límite produce
+Estas opciones se admiten con `--semantic-index` y también permiten acotar la
+etapa integrada de `--all`. En una acción directa, agotar un límite produce
 `truncated=1`, conserva la generación sin publicar y devuelve `2`; no constituye
-una corrida completa ni autoriza escalar. Un replay exacto sigue enumerando y
-reconciliando O(n) miembros para detectar cambios, aunque no cree jobs, clone el
-head ni haga inferencia. Si existen altas, bajas o cambios, el sucesor todavía
-materializa la base en O(n).
+una corrida completa ni autoriza escalar. En `--all`, la misma truncación limpia
+es progreso durable reanudable y no convierte en fallida una corrida cuyas rutas
+sí terminaron; errores o estado stale siguen devolviendo `2`. Un replay exacto
+sigue enumerando y reconciliando O(n) miembros para detectar cambios, aunque no
+cree jobs, clone el head ni haga inferencia. Si existen altas, bajas o cambios,
+el sucesor todavía materializa la base en O(n).
 
 Cuando `--semantic-source code` termina una publicación textual completa, el
 servicio sincroniza el puente Code↔Semantic antes de devolver éxito. Una

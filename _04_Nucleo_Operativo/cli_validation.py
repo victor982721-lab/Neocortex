@@ -42,6 +42,12 @@ ALL_PRESET = {
     "ocr": "auto",
     "pdf_cache_validation": "metadata",
     "image_document_ocr": "auto",
+    # One unattended run must leave useful Semantic progress instead of
+    # stopping after the historical 50-item pilot defaults.  The integrated
+    # stage still has a hard two-day ceiling and a durable job ceiling.
+    "semantic_max_items": 100_000,
+    "semantic_max_new_jobs": 1_000_000,
+    "semantic_time_budget_seconds": 172_800.0,
 }
 
 _SELF_ANALYSIS_UNUSED_PREFIXES = (
@@ -751,7 +757,7 @@ def _validate_organization_operations(
 
 
 def _validate_direct_operations(args: argparse.Namespace) -> None:
-    explicit = set(getattr(args, "_explicit_options", ()))
+    explicit: set[str] = set(getattr(args, "_explicit_options", ()))
     validate_knowledge_arguments(args)
     _validate_direct_operation_selection(args)
     validate_capabilities_arguments(args)

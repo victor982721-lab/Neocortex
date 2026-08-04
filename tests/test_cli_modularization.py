@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import runpy
 import unittest
+from types import SimpleNamespace
 from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
@@ -93,6 +94,29 @@ class OrchestratorShimTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 130)
         self.assertIn("Ejecución cancelada por el usuario.", stderr.getvalue())
+
+    def test_all_runs_integrated_semantic_after_framework(self) -> None:
+        result = SimpleNamespace(actions=None)
+        with (
+            patch("_04_Nucleo_Operativo.cli_app.run_framework", return_value=result),
+            patch("_04_Nucleo_Operativo.cli_reporting.print_reports"),
+            patch(
+                "_04_Nucleo_Operativo.cli_reporting.has_organization_errors",
+                return_value=False,
+            ),
+            patch(
+                "_04_Nucleo_Operativo.cli_reporting.has_strict_route_errors",
+                return_value=False,
+            ),
+            patch(
+                "_04_Nucleo_Operativo.cli_semantic.run_integrated_all_semantic_index",
+                return_value=0,
+            ) as semantic,
+        ):
+            self.assertEqual(main(["--all"]), 0)
+
+        semantic.assert_called_once()
+        self.assertTrue(semantic.call_args.args[0].all)
 
 
 # endregion [03]

@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from _04_Nucleo_Operativo.cli_app import dispatch_direct
+from _04_Nucleo_Operativo.cli_semantic import run_integrated_all_semantic_index
 from _04_Nucleo_Operativo.cli_parser import build_parser
 from _04_Nucleo_Operativo.cli_validation import validate_arguments
 from _04_Nucleo_Operativo.semantic_config import COMPACT_TEXT_MODEL_ID
@@ -52,9 +53,7 @@ def _safe_state_write_policies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    internal_policy = disjoint_internal_paths_policy(
-        tmp_path.parent / f"{tmp_path.name}-policy"
-    )
+    internal_policy = disjoint_internal_paths_policy(tmp_path.parent / f"{tmp_path.name}-policy")
     protected_policy = ProtectedContentPolicy.capture(())
     monkeypatch.setattr(
         "_04_Nucleo_Operativo.internal_paths.canonical_internal_paths_policy",
@@ -77,9 +76,7 @@ def _generation(
             generation_id=7,
             model_signature="model-signature",
             processing_signature="pipeline-signature",
-            status=(
-                "ready" if not pending and not errors and not stale else "ready_partial"
-            ),
+            status=("ready" if not pending and not errors and not stale else "ready_partial"),
             pending=pending,
             leased=0,
             done=3,
@@ -309,6 +306,10 @@ def test_semantic_cli_defaults_are_offline_bounded_and_quality_first() -> None:
             "--semantic-time-budget-seconds must be finite",
         ),
         (
+            ["--semantic-index", "text", "--semantic-time-budget-seconds", "172801"],
+            "--semantic-time-budget-seconds must be finite",
+        ),
+        (
             ["--semantic-status", "--semantic-max-items", "10"],
             "semantic index budget options require --semantic-index",
         ),
@@ -486,9 +487,7 @@ def test_semantic_prepare_rejects_protected_missing_state_before_mkdir_or_lock(
     validate_arguments(args)
 
     with (
-        patch(
-            "_04_Nucleo_Operativo.semantic_service.prepare_semantic_models"
-        ) as operation,
+        patch("_04_Nucleo_Operativo.semantic_service.prepare_semantic_models") as operation,
         patch("_04_Nucleo_Operativo.locking.FrameworkRunLock") as lock,
     ):
         assert dispatch_direct(args) == 2
@@ -535,9 +534,7 @@ def test_semantic_writes_reject_existing_protected_state_before_lock(
         "_04_Nucleo_Operativo.protected_content.canonical_protected_content_policy",
         lambda: protected_policy,
     )
-    args = build_parser().parse_args(
-        ("--state-directory", str(state_directory), *command)
-    )
+    args = build_parser().parse_args(("--state-directory", str(state_directory), *command))
     validate_arguments(args)
 
     with (
@@ -637,8 +634,7 @@ def test_semantic_index_reports_published_code_link_coverage(
             return_value=_index_result(tmp_path, ("code",)),
         ),
         patch(
-            "_04_Nucleo_Operativo.code_semantic_links."
-            "current_code_embedding_link_counts",
+            "_04_Nucleo_Operativo.code_semantic_links.current_code_embedding_link_counts",
             return_value=(4, 3),
         ),
     ):
@@ -712,6 +708,66 @@ def test_semantic_index_reports_budget_truncation_as_nonzero(
     assert "truncation_reason=max_items" in output
 
 
+def test_all_advances_document_semantic_without_broad_code_by_default(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / "pdf.sqlite3").touch()
+    (tmp_path / "code.sqlite3").touch()
+    args = build_parser().parse_args(["--all", "--state-directory", str(tmp_path)])
+    validate_arguments(args)
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=_index_result(
+            tmp_path,
+            ("pdf",),
+            pending=1,
+            truncated=True,
+            truncation_reason="time_budget",
+        ),
+    ) as operation:
+        assert run_integrated_all_semantic_index(args) == 0
+
+    kwargs = operation.call_args.kwargs
+    assert kwargs["source_kinds"] == ("pdf",)
+    assert kwargs["work_budget"].max_items == 100_000
+    assert kwargs["work_budget"].max_new_jobs == 1_000_000
+    output = capsys.readouterr().out
+    assert "SEMANTIC_ALL status=starting sources=pdf" in output
+    assert "code_explicit=0" in output
+    assert "truncated=1" in output
+
+
+def test_all_accepts_explicit_code_semantic_selection(tmp_path: Path) -> None:
+    (tmp_path / "code.sqlite3").touch()
+    args = build_parser().parse_args(
+        [
+            "--all",
+            "--state-directory",
+            str(tmp_path),
+            "--semantic-source",
+            "code",
+            "--semantic-time-budget-seconds",
+            "3600",
+        ]
+    )
+    validate_arguments(args)
+    with (
+        patch(
+            "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+            return_value=_index_result(tmp_path, ("code",)),
+        ) as operation,
+        patch(
+            "_04_Nucleo_Operativo.code_semantic_links.current_code_embedding_link_counts",
+            return_value=(0, 0),
+        ),
+    ):
+        assert run_integrated_all_semantic_index(args) == 0
+
+    assert operation.call_args.kwargs["source_kinds"] == ("code",)
+    assert operation.call_args.kwargs["work_budget"].deadline is not None
+
+
 def test_semantic_index_without_available_text_cache_fails_explicitly(
     tmp_path,
     capsys,
@@ -721,16 +777,11 @@ def test_semantic_index_without_available_text_cache_fails_explicitly(
     )
     validate_arguments(args)
 
-    with patch(
-        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings"
-    ) as operation:
+    with patch("_04_Nucleo_Operativo.semantic_service.index_text_embeddings") as operation:
         assert dispatch_direct(args) == 2
 
     operation.assert_not_called()
-    assert (
-        "no durable PDF, DOCX, Office, audio or code text cache"
-        in capsys.readouterr().out
-    )
+    assert "no durable PDF, DOCX, Office, audio or code text cache" in capsys.readouterr().out
 
 
 def test_semantic_index_deadline_failure_returns_two(

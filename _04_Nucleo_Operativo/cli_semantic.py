@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 __all__ = [
+    "run_integrated_all_semantic_index",
     "run_semantic_classify",
     "run_semantic_evidence",
     "run_semantic_index",
@@ -45,11 +46,7 @@ def _semantic_text_model(profile: str):
         multilingual_text_model,
     )
 
-    return (
-        compact_multilingual_text_model()
-        if profile == "compact"
-        else multilingual_text_model()
-    )
+    return compact_multilingual_text_model() if profile == "compact" else multilingual_text_model()
 
 
 def _validate_semantic_state_write(
@@ -69,9 +66,7 @@ def _validate_semantic_state_write(
     from .semantic_service import SEMANTIC_DATABASE_NAME
 
     database_paths = (
-        state_sqlite_mutation_paths(state_directory / SEMANTIC_DATABASE_NAME)
-        if database
-        else ()
+        state_sqlite_mutation_paths(state_directory / SEMANTIC_DATABASE_NAME) if database else ()
     )
     validate_authorized_state_path(
         state_directory,
@@ -142,9 +137,7 @@ def run_semantic_status(args: argparse.Namespace) -> int:
     if not status.exists:
         print(f"SEMANTIC_STATUS exists=0 database={database}")
         return 0
-    counts = ",".join(
-        f"{name}:{value}" for name, value in sorted(status.counts.items())
-    )
+    counts = ",".join(f"{name}:{value}" for name, value in sorted(status.counts.items()))
     print(
         f"SEMANTIC_STATUS exists=1 schema={status.schema_version} "
         f"counts={counts or '-'} database={database}"
@@ -316,7 +309,11 @@ def run_semantic_prepare_models(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_semantic_index(args: argparse.Namespace) -> int:
+def run_semantic_index(
+    args: argparse.Namespace,
+    *,
+    incomplete_is_error: bool = True,
+) -> int:
     """Incrementally embed durable route state without authorizing downloads."""
 
     from .locking import FrameworkRunLock
@@ -394,7 +391,15 @@ def run_semantic_index(args: argparse.Namespace) -> int:
     failed = False
     for scope, result in results:
         _print_semantic_index_result(scope, result)
-        failed = failed or not result.complete
+        scope_failed = not result.complete
+        if (
+            not incomplete_is_error
+            and result.truncated
+            and result.errors == 0
+            and result.stale == 0
+        ):
+            scope_failed = False
+        failed = failed or scope_failed
     for (
         generation_id,
         model_signature,
@@ -409,6 +414,43 @@ def run_semantic_index(args: argparse.Namespace) -> int:
             "calibration=uncalibrated_similarity"
         )
     return 2 if failed else 0
+
+
+def run_integrated_all_semantic_index(args: argparse.Namespace) -> int:
+    """Advance bounded document embeddings after the six ``--all`` routes.
+
+    Broad code inventories can contain millions of chunks, so Code remains an
+    explicit ``--semantic-source code`` choice.  The default integrated stage
+    prioritizes durable document/audio caches and treats a bounded truncation as
+    resumable progress rather than as a failed framework run.
+    """
+
+    if not args.all:
+        raise ValueError("integrated Semantic indexing requires --all")
+    from .semantic_sources import TEXT_SOURCE_KINDS, semantic_source_database
+
+    integrated_args = argparse.Namespace(**vars(args))
+    integrated_args.semantic_index = "text"
+    if args.semantic_source is None:
+        integrated_args.semantic_source = tuple(
+            source_kind
+            for source_kind in TEXT_SOURCE_KINDS
+            if source_kind != "code"
+            and semantic_source_database(args.state_directory, source_kind).is_file()
+        )
+    selected_sources = tuple(integrated_args.semantic_source or ())
+    if not selected_sources:
+        print("SEMANTIC_ALL status=skipped reason=no_document_or_audio_text_cache")
+        return 0
+    print(
+        "SEMANTIC_ALL status=starting "
+        f"sources={','.join(selected_sources)} "
+        f"max_items={args.semantic_max_items} "
+        f"max_new_jobs={args.semantic_max_new_jobs} "
+        f"time_budget_seconds={args.semantic_time_budget_seconds:g} "
+        f"code_explicit={int('code' in selected_sources)}"
+    )
+    return run_semantic_index(integrated_args, incomplete_is_error=False)
 
 
 def run_semantic_search(args: argparse.Namespace) -> int:
@@ -448,13 +490,9 @@ def run_semantic_search(args: argparse.Namespace) -> int:
             if isinstance(calibration, dict) and calibrated_abstained
             else None
         )
-        reason = (
-            semantic_ranking.unavailable_reason or semantic_ranking.cutoff_reason or "-"
-        )
+        reason = semantic_ranking.unavailable_reason or semantic_ranking.cutoff_reason or "-"
         cutoff_score = (
-            "-"
-            if semantic_ranking.cutoff_score is None
-            else f"{semantic_ranking.cutoff_score:.6f}"
+            "-" if semantic_ranking.cutoff_score is None else f"{semantic_ranking.cutoff_score:.6f}"
         )
         next_cursor = semantic_ranking.next_cursor or "-"
         _print_console_line(
@@ -487,8 +525,7 @@ def run_semantic_search(args: argparse.Namespace) -> int:
     )
     for rank, hit in enumerate(result.fused, start=1):
         evidence = ",".join(
-            f"{value.ranking}:{value.rank}:{value.raw_score:.6f}:"
-            f"{value.contribution:.6f}"
+            f"{value.ranking}:{value.rank}:{value.raw_score:.6f}:{value.contribution:.6f}"
             for value in hit.fused.evidence
         )
         _print_console_line(
