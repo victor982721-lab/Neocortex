@@ -27,6 +27,7 @@ from _04_Nucleo_Operativo.external_semgrep_invariants import (
     SemgrepInvariantExecution,
 )
 from _04_Nucleo_Operativo.external_supply_chain_audit import (
+    PIP_AUDIT_LIMITATIONS,
     InstalledPackageCounters,
     InstalledPackageInventoryExecution,
     PipAuditCounters,
@@ -192,12 +193,7 @@ def test_environment_providers_replay_declared_snapshots_with_real_inventory_cos
         "_installed_distribution_signature",
         lambda **_kwargs: "installed-environment:fixture",
     )
-    pip_limitations = (
-        "known_vulnerability_feed_is_a_point_in_time_snapshot",
-        "absence_of_a_report_is_not_proof_of_security",
-        "package_reachability_and_runtime_exposure_are_not_assessed",
-        "advisory_only_no_fix_or_mutation_authority",
-    )
+    pip_limitations = PIP_AUDIT_LIMITATIONS
     pip_provider = PipAuditKnownVulnerabilitiesProvider(root)
 
     def execute_pip_audit(environment: dict[str, str]) -> PipAuditExecution:

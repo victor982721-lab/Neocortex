@@ -80,10 +80,11 @@ _PACKAGE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?
 _REQUIREMENT_NAME_PATTERN = re.compile(r"^\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)")
 _PIP_AUDIT_VERSION_PATTERN = re.compile(r"^2\.10\.\d+(?:[A-Za-z0-9.+-]*)?$")
 
-_PIP_AUDIT_LIMITATIONS = (
+PIP_AUDIT_LIMITATIONS = (
     "known_vulnerability_feed_is_a_point_in_time_snapshot",
     "absence_of_a_report_is_not_proof_of_security",
     "package_reachability_and_runtime_exposure_are_not_assessed",
+    "duplicate_advisory_rows_are_merged_by_casefolded_id_with_alias_and_fix_union",
     "advisory_only_no_fix_or_mutation_authority",
 )
 _INVENTORY_LIMITATIONS = (
@@ -105,6 +106,13 @@ class PipAuditCounters:
     vulnerable_packages: int
     vulnerabilities: int
     aliases: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PipAuditVulnerability:
+    vulnerability_id: str
+    aliases: tuple[str, ...]
+    fix_versions: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -404,6 +412,54 @@ def _bounded_text_list(value: object, *, label: str, maximum_items: int) -> tupl
     return tuple(sorted(items, key=str.casefold))
 
 
+def _deduplicated_pip_audit_vulnerabilities(
+    raw_vulnerabilities: list[object],
+) -> tuple[_PipAuditVulnerability, ...]:
+    ids_by_key: defaultdict[str, set[str]] = defaultdict(set)
+    aliases_by_key: defaultdict[str, set[str]] = defaultdict(set)
+    fixes_by_key: defaultdict[str, set[str]] = defaultdict(set)
+    for raw_vulnerability in raw_vulnerabilities:
+        vulnerability = _required_mapping(raw_vulnerability, label="pip-audit vulnerability")
+        vulnerability_id = _required_text(
+            vulnerability.get("id"), label="pip-audit vulnerability id", maximum=256
+        )
+        vulnerability_key = vulnerability_id.casefold()
+        ids_by_key[vulnerability_key].add(vulnerability_id)
+        aliases_by_key[vulnerability_key].update(
+            _bounded_text_list(
+                vulnerability.get("aliases", []),
+                label="pip-audit aliases",
+                maximum_items=_MAX_ALIASES_PER_VULNERABILITY,
+            )
+        )
+        fixes_by_key[vulnerability_key].update(
+            _bounded_text_list(
+                vulnerability.get("fix_versions", []),
+                label="pip-audit fix versions",
+                maximum_items=_MAX_FIX_VERSIONS_PER_VULNERABILITY,
+            )
+        )
+
+    merged: list[_PipAuditVulnerability] = []
+    for vulnerability_key in sorted(ids_by_key):
+        aliases = aliases_by_key[vulnerability_key]
+        fixes = fixes_by_key[vulnerability_key]
+        if len(aliases) > _MAX_ALIASES_PER_VULNERABILITY:
+            raise ValueError("pip-audit aliases exceeds its merged bound")
+        if len(fixes) > _MAX_FIX_VERSIONS_PER_VULNERABILITY:
+            raise ValueError("pip-audit fix versions exceeds its merged bound")
+        merged.append(
+            _PipAuditVulnerability(
+                vulnerability_id=min(
+                    ids_by_key[vulnerability_key], key=lambda value: (value.casefold(), value)
+                ),
+                aliases=tuple(sorted(aliases, key=lambda value: (value.casefold(), value))),
+                fix_versions=tuple(sorted(fixes, key=lambda value: (value.casefold(), value))),
+            )
+        )
+    return tuple(merged)
+
+
 def execute_pip_audit_known_vulnerabilities(
     environment: Mapping[str, str],
     *,
@@ -501,6 +557,7 @@ def execute_pip_audit_known_vulnerabilities(
     seen_packages: set[str] = set()
     packages_audited = packages_skipped = vulnerable_packages = 0
     vulnerability_count = alias_count = 0
+    raw_vulnerability_rows = 0
     for raw_package in payload:
         package = _required_mapping(raw_package, label="pip-audit package")
         raw_name = _required_text(package.get("name"), label="pip-audit package name", maximum=256)
@@ -530,10 +587,12 @@ def execute_pip_audit_known_vulnerabilities(
         raw_vulnerabilities = _required_list(
             package.get("vulns"), label="pip-audit vulnerabilities"
         )
-        if vulnerability_count + len(raw_vulnerabilities) > _MAX_VULNERABILITIES:
+        raw_vulnerability_rows += len(raw_vulnerabilities)
+        if raw_vulnerability_rows > _MAX_VULNERABILITIES:
             raise ValueError("pip-audit vulnerability count exceeds its bound")
+        vulnerabilities = _deduplicated_pip_audit_vulnerabilities(raw_vulnerabilities)
         packages_audited += 1
-        if raw_vulnerabilities:
+        if vulnerabilities:
             vulnerable_packages += 1
         package_metadata = {
             **common_metadata,
@@ -556,31 +615,15 @@ def execute_pip_audit_known_vulnerabilities(
                     subject_key=subject_key,
                     category="known_vulnerability",
                     name="known_vulnerability_count",
-                    value=len(raw_vulnerabilities),
+                    value=len(vulnerabilities),
                     metadata=package_metadata,
                 ),
             )
         )
-        seen_vulnerabilities: set[str] = set()
-        for raw_vulnerability in raw_vulnerabilities:
-            vulnerability = _required_mapping(raw_vulnerability, label="pip-audit vulnerability")
-            vulnerability_id = _required_text(
-                vulnerability.get("id"), label="pip-audit vulnerability id", maximum=256
-            )
-            vulnerability_key = vulnerability_id.casefold()
-            if vulnerability_key in seen_vulnerabilities:
-                raise ValueError("pip-audit output contains a duplicate package vulnerability")
-            seen_vulnerabilities.add(vulnerability_key)
-            aliases = _bounded_text_list(
-                vulnerability.get("aliases", []),
-                label="pip-audit aliases",
-                maximum_items=_MAX_ALIASES_PER_VULNERABILITY,
-            )
-            fix_versions = _bounded_text_list(
-                vulnerability.get("fix_versions", []),
-                label="pip-audit fix versions",
-                maximum_items=_MAX_FIX_VERSIONS_PER_VULNERABILITY,
-            )
+        for vulnerability in vulnerabilities:
+            vulnerability_id = vulnerability.vulnerability_id
+            aliases = vulnerability.aliases
+            fix_versions = vulnerability.fix_versions
             vulnerability_count += 1
             alias_count += len(aliases)
             advisory_key = f"advisory:{vulnerability_id}"
@@ -661,7 +704,7 @@ def execute_pip_audit_known_vulnerabilities(
         len(completed.stderr),
         1,
         PIP_AUDIT_USES_NETWORK,
-        _PIP_AUDIT_LIMITATIONS,
+        PIP_AUDIT_LIMITATIONS,
     )
 
 
@@ -1522,6 +1565,7 @@ __all__ = [
     "INSTALLED_PACKAGE_PROVIDER_ID",
     "INSTALLED_PACKAGE_PROVIDER_SCHEMA",
     "INSTALLED_PACKAGE_USES_NETWORK",
+    "PIP_AUDIT_LIMITATIONS",
     "PIP_AUDIT_PROVIDER_ID",
     "PIP_AUDIT_PROVIDER_SCHEMA",
     "PIP_AUDIT_SERVICE",

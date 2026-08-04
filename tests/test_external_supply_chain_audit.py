@@ -173,6 +173,46 @@ def test_pip_audit_is_bounded_no_fix_and_normalizes_advisories(
     assert all(item.metadata["mutation_authority"] is False for item in result.relations)
 
 
+def test_pip_audit_merges_duplicate_advisory_rows_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = json.loads(_pip_payload())
+    payload["dependencies"][0]["vulns"].append(
+        {
+            "id": "pysec-2026-1",
+            "aliases": ["GHSA-aaaa-bbbb-cccc", "CVE-2026-0002"],
+            "fix_versions": ["1.2", "1.1"],
+        }
+    )
+
+    monkeypatch.setattr(audit.importlib.metadata, "version", lambda _name: "2.10.1")
+    monkeypatch.setattr(
+        audit,
+        "run_bounded_capture",
+        lambda arguments, **_kwargs: subprocess.CompletedProcess(
+            arguments, 1, json.dumps(payload).encode(), b"2 vulnerabilities"
+        ),
+    )
+
+    result = audit.execute_pip_audit_known_vulnerabilities({}, observed_at=_OBSERVED)
+
+    assert result.counters == audit.PipAuditCounters(3, 2, 1, 1, 2, 3)
+    assert _metric(result, "package:demo-pkg", "known_vulnerability_count").value == 2
+    advisory = _metric(result, "package:demo-pkg", "known_vulnerability:PYSEC-2026-1")
+    assert advisory.metadata["aliases"] == [
+        "CVE-2026-0001",
+        "CVE-2026-0002",
+        "GHSA-aaaa-bbbb-cccc",
+    ]
+    assert advisory.metadata["fix_versions"] == ["1.1", "1.2"]
+    assert len(result.relations) == 2
+    assert len({item.portable_metric_id for item in result.metrics}) == len(result.metrics)
+    assert (
+        "duplicate_advisory_rows_are_merged_by_casefolded_id_with_alias_and_fix_union"
+        in result.limitations
+    )
+
+
 def test_pip_audit_accepts_clean_exit_and_rejects_failure_and_bounds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

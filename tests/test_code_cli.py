@@ -645,7 +645,17 @@ def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
         digest=SimpleNamespace(xxh3_128="digest"),
         analysis_profile="full",
         verdict="mixed",
-        providers=(),
+        providers=(
+            SimpleNamespace(
+                provider_id="mypy-trusted-project",
+                status="ready",
+                common=1,
+                added=0,
+                resolved=0,
+                relocated=2,
+                gate="passed",
+            ),
+        ),
         architecture=architecture,
         test_coverage=CoverageComparison(
             status="comparable",
@@ -694,6 +704,10 @@ def test_code_publication_diff_human_surfaces_bounded_architecture_delta(
     assert "CODE_PUBLICATION_DIFF_COVERAGE status=comparable line_delta=1.5" in output
     assert "covered_lines_delta=2 missing_lines_delta=-1" in output
     assert output.count("CODE_PUBLICATION_DIFF_COVERAGE_GATE ") == 2
+    assert (
+        "CODE_PUBLICATION_DIFF_PROVIDER id=mypy-trusted-project status=ready common=1 "
+        "added=0 resolved=0 relocated=2 gate=passed"
+    ) in output
 
 
 def test_semantic_cli_accepts_code_as_an_explicit_text_source() -> None:

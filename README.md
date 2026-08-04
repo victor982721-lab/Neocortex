@@ -354,12 +354,15 @@ descriptivo y separado. Un snapshot full completado sin USN se etiqueta
 causa abstención con código `2`.
 
 `--code-publication-diff` publica el envelope
-`neocortex.code-publication-diff/v8`, compatible con v1-v7, y compara dos
+`neocortex.code-publication-diff/v9`, compatible con v1-v8, y compara dos
 publicaciones Code completadas sin escribirlas. Informa calls comunes,
 resoluciones nuevas/corregidas/perdidas,
 hotspots añadidos o retirados, el delta no calibrado de `probable_dead` y los
 hallazgos añadidos/resueltos por proveedor cuando sus firmas de comparabilidad
-coinciden. Añade deltas de métricas por módulo, contratos, ciclos y complejidad
+coinciden. Para Mypy y Pyright separa además los findings `relocated` cuando
+ruta, categoría, código, severidad, mensaje y metadata permanecen idénticos y
+sólo cambia el rango; conserva multiplicidad y posiciones exactas sin fallar el
+gate. Añade deltas de métricas por módulo, contratos, ciclos y complejidad
 desplazada cuando ambas publicaciones son comparables. Para `trusted-deep`
 compara cobertura de líneas y ramas sólo si coinciden la suite, alcance,
 configuración y herramientas; de otro modo la dimensión queda
@@ -372,8 +375,8 @@ de mutación sólo cuando coincide su alcance. El veredicto
 agregado siempre conserva las limitaciones parciales y nunca transforma el
 delta en autorización de borrado.
 Exige bases quiescentes, limita la enumeración y conserva ejemplos en `--code-json`.
-Los cambios de rango aparecen como sitios exclusivos, no como una mejora o
-regresión inventada.
+Un cambio semántico real continúa apareciendo como añadido/resuelto y conserva
+la autoridad del gate.
 
 #### Consulta unificada de la publicación
 

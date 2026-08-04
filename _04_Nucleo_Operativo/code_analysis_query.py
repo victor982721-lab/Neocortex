@@ -632,10 +632,59 @@ def _extract_diff(payload: Mapping[str, object]) -> list[dict[str, object]]:
                 providers=(provider_id,),
                 categories=("provider_delta", "external_provider"),
                 statuses=statuses,
-                deltas=_delta_words(provider, "added", "resolved"),
-                facts=_facts(provider, "common", "added", "resolved", "gate", "reason"),
+                deltas=_delta_words(provider, "added", "resolved", "relocated"),
+                facts=_facts(
+                    provider,
+                    "common",
+                    "added",
+                    "resolved",
+                    "relocated",
+                    "gate",
+                    "reason",
+                ),
             )
         )
+        for relocation_index, relocation in enumerate(
+            _mapping_items(provider.get("relocation_examples"))
+        ):
+            relocation_id = _first_text(
+                relocation,
+                "current_finding_id",
+                "baseline_finding_id",
+            ) or str(relocation_index)
+            records.append(
+                _record(
+                    record_type="provider_finding_relocation",
+                    record_id=relocation_id,
+                    source_path=(f"providers[{index}].relocation_examples[{relocation_index}]"),
+                    providers=(provider_id,),
+                    categories=(
+                        "finding_relocation",
+                        _first_text(relocation, "category") or "finding",
+                    ),
+                    modules=_module_values(relocation),
+                    statuses=("ready",),
+                    deltas=("relocated",),
+                    facts=_facts(
+                        relocation,
+                        "baseline_finding_id",
+                        "current_finding_id",
+                        "path",
+                        "category",
+                        "code",
+                        "severity",
+                        "message",
+                        "baseline_start_line",
+                        "baseline_start_column",
+                        "baseline_end_line",
+                        "baseline_end_column",
+                        "current_start_line",
+                        "current_start_column",
+                        "current_end_line",
+                        "current_end_column",
+                    ),
+                )
+            )
     architecture = _mapping(payload.get("architecture"))
     if architecture is not None:
         for index, module in enumerate(_mapping_items(architecture.get("modules"))):

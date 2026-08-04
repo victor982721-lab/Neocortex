@@ -1705,7 +1705,8 @@ def run_code_publication_diff(args: argparse.Namespace) -> int:
         _print_console_line(
             f"CODE_PUBLICATION_DIFF_PROVIDER id={provider.provider_id} "
             f"status={provider.status} common={provider.common} "
-            f"added={provider.added} resolved={provider.resolved} gate={provider.gate}"
+            f"added={provider.added} resolved={provider.resolved} "
+            f"relocated={provider.relocated} gate={provider.gate}"
         )
     _emit_code_publication_architecture(result.architecture)
     coverage_delta = asdict(result.test_coverage)

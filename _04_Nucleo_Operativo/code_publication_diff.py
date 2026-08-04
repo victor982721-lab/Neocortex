@@ -45,16 +45,19 @@ from .code_schema import (
 )
 from .external_evidence_models import (
     ExternalEvidenceSuiteStatus,
+    ExternalProviderFinding,
     ExternalProviderStatus,
+    normalize_external_finding_message,
 )
 from .external_evidence_store import (
     read_external_evidence_suite,
+    read_external_provider_findings,
     read_external_provider_finding_ids,
 )
 from .self_analysis_status import require_sqlite_sidecars_absent
 from .semantic_models import canonical_json, fingerprint_text
 
-CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v8"
+CODE_PUBLICATION_DIFF_SCHEMA = "neocortex.code-publication-diff/v9"
 CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v1",
     "neocortex.code-publication-diff/v2",
@@ -63,9 +66,11 @@ CODE_PUBLICATION_DIFF_COMPATIBLE_SCHEMAS = (
     "neocortex.code-publication-diff/v5",
     "neocortex.code-publication-diff/v6",
     "neocortex.code-publication-diff/v7",
+    "neocortex.code-publication-diff/v8",
 )
 CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT = 20
 _LEGACY_RUFF_COMPARABILITY_REASON = "legacy_ruff_contract_compatibility_projection"
+_RELOCATION_AWARE_PROVIDER_IDS = frozenset({"mypy-trusted-project", "pyright-trusted-project"})
 CODE_PUBLICATION_DIFF_MAX_CALLS = 250_000
 CODE_PUBLICATION_DIFF_MAX_HOTSPOTS = 20_000
 CODE_PUBLICATION_DIFF_MAX_MODULES = 50_000
@@ -152,6 +157,27 @@ class CodeExternalEvidenceDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeProviderFindingRelocation:
+    """One typed finding whose semantic evidence stayed exact but moved."""
+
+    baseline_finding_id: str
+    current_finding_id: str
+    path: str
+    category: str
+    code: str
+    severity: str
+    message: str
+    baseline_start_line: int
+    baseline_start_column: int
+    baseline_end_line: int
+    baseline_end_column: int
+    current_start_line: int
+    current_start_column: int
+    current_end_line: int
+    current_end_column: int
+
+
+@dataclass(frozen=True, slots=True)
 class CodeProviderEvidenceDelta:
     provider_id: str
     status: Literal["ready", "not_evaluated"]
@@ -162,6 +188,8 @@ class CodeProviderEvidenceDelta:
     added: int | None
     resolved: int | None
     gate: Literal["passed", "failed", "not_evaluated"]
+    relocated: int | None = None
+    relocation_examples: tuple[CodeProviderFindingRelocation, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,6 +479,7 @@ class _Publication:
     external_diagnostic_ids: frozenset[str]
     external_evidence_suite: ExternalEvidenceSuiteStatus
     provider_finding_ids: dict[str, frozenset[str]]
+    provider_findings: dict[str, tuple[ExternalProviderFinding, ...]]
     architecture: CodeArchitectureAnalysis
     test_coverage: CodeCoverageAnalysis
     unused_analysis: CodeUnusedAnalysis
@@ -705,6 +734,11 @@ def _read_publication(state_directory: Path) -> _Publication:
             connection,
             int(latest["analysis_run_id"]),
         )
+        provider_findings = read_external_provider_findings(
+            connection,
+            int(latest["analysis_run_id"]),
+            provider_ids=_RELOCATION_AWARE_PROVIDER_IDS,
+        )
         architecture = read_code_architecture_analysis(
             connection,
             int(latest["analysis_run_id"]),
@@ -752,6 +786,7 @@ def _read_publication(state_directory: Path) -> _Publication:
         external_ids,
         external_suite,
         provider_ids,
+        provider_findings,
         architecture,
         test_coverage,
         unused_analysis,
@@ -926,6 +961,106 @@ def _legacy_ruff_contract_compatible(
     )
 
 
+def _finding_location(finding: ExternalProviderFinding) -> tuple[int, int, int, int]:
+    return (
+        finding.start_line,
+        finding.start_column,
+        finding.end_line,
+        finding.end_column,
+    )
+
+
+def _finding_semantic_key(provider_id: str, finding: ExternalProviderFinding) -> str:
+    return canonical_json(
+        {
+            "path": finding.relative_path,
+            "category": finding.category,
+            "code": finding.code,
+            "severity": finding.severity,
+            "message": normalize_external_finding_message(provider_id, finding.message),
+            "observation_confirmed": finding.observation_confirmed,
+            "tool_confidence": finding.tool_confidence,
+            "calibrated_confidence": finding.calibrated_confidence,
+            "gate_authority": finding.gate_authority,
+            "url": finding.url,
+            "fix_available": finding.fix_available,
+            "metadata": dict(finding.metadata),
+            "mutation_authority": finding.mutation_authority,
+        }
+    )
+
+
+def _typed_finding_relocations(
+    provider_id: str,
+    baseline_findings: tuple[ExternalProviderFinding, ...],
+    current_findings: tuple[ExternalProviderFinding, ...],
+    baseline_ids: frozenset[str],
+    current_ids: frozenset[str],
+) -> tuple[
+    tuple[CodeProviderFindingRelocation, ...],
+    frozenset[str],
+    frozenset[str],
+]:
+    if {item.portable_finding_id for item in baseline_findings} != baseline_ids or {
+        item.portable_finding_id for item in current_findings
+    } != current_ids:
+        return (), frozenset(), frozenset()
+    baseline_groups: dict[str, list[ExternalProviderFinding]] = {}
+    current_groups: dict[str, list[ExternalProviderFinding]] = {}
+    for finding in baseline_findings:
+        if finding.portable_finding_id not in current_ids:
+            baseline_groups.setdefault(_finding_semantic_key(provider_id, finding), []).append(
+                finding
+            )
+    for finding in current_findings:
+        if finding.portable_finding_id not in baseline_ids:
+            current_groups.setdefault(_finding_semantic_key(provider_id, finding), []).append(
+                finding
+            )
+    relocations: list[CodeProviderFindingRelocation] = []
+    relocated_baseline_ids: set[str] = set()
+    relocated_current_ids: set[str] = set()
+    for key in sorted(set(baseline_groups) & set(current_groups)):
+        before_group = sorted(
+            baseline_groups[key],
+            key=lambda item: (*_finding_location(item), item.portable_finding_id),
+        )
+        after_group = sorted(
+            current_groups[key],
+            key=lambda item: (*_finding_location(item), item.portable_finding_id),
+        )
+        for before, after in zip(before_group, after_group, strict=False):
+            if _finding_location(before) == _finding_location(after):
+                continue
+            relocated_baseline_ids.add(before.portable_finding_id)
+            relocated_current_ids.add(after.portable_finding_id)
+            if len(relocations) < CODE_PUBLICATION_DIFF_EXAMPLE_LIMIT:
+                relocations.append(
+                    CodeProviderFindingRelocation(
+                        before.portable_finding_id,
+                        after.portable_finding_id,
+                        before.relative_path,
+                        before.category,
+                        before.code,
+                        before.severity,
+                        normalize_external_finding_message(provider_id, before.message),
+                        before.start_line,
+                        before.start_column,
+                        before.end_line,
+                        before.end_column,
+                        after.start_line,
+                        after.start_column,
+                        after.end_line,
+                        after.end_column,
+                    )
+                )
+    return (
+        tuple(relocations),
+        frozenset(relocated_baseline_ids),
+        frozenset(relocated_current_ids),
+    )
+
+
 def _provider_deltas(
     baseline: _Publication,
     current: _Publication,
@@ -1001,8 +1136,23 @@ def _provider_deltas(
                 if right.comparability_signature == RUFF_CONFIGURATION_SIGNATURE
                 else frozenset()
             )
-        added = current_ids - baseline_ids
-        resolved = baseline_ids - current_ids
+        relocation_examples: tuple[CodeProviderFindingRelocation, ...] = ()
+        relocated_baseline_ids: frozenset[str] = frozenset()
+        relocated_current_ids: frozenset[str] = frozenset()
+        relocated: int | None = None
+        if provider_id in _RELOCATION_AWARE_PROVIDER_IDS:
+            relocation_examples, relocated_baseline_ids, relocated_current_ids = (
+                _typed_finding_relocations(
+                    provider_id,
+                    baseline.provider_findings.get(provider_id, ()),
+                    current.provider_findings.get(provider_id, ()),
+                    baseline_ids,
+                    current_ids,
+                )
+            )
+            relocated = len(relocated_baseline_ids)
+        added = current_ids - baseline_ids - relocated_current_ids
+        resolved = baseline_ids - current_ids - relocated_baseline_ids
         deltas.append(
             CodeProviderEvidenceDelta(
                 provider_id,
@@ -1014,6 +1164,8 @@ def _provider_deltas(
                 len(added),
                 len(resolved),
                 "passed" if not added else "failed",
+                relocated,
+                relocation_examples,
             )
         )
     return tuple(deltas)
@@ -1882,6 +2034,7 @@ def compare_code_publications(
         "probable_dead_is_count_only_uncalibrated_evidence",
         "diff_is_observational_and_never_authorizes_code_or_corpus_mutation",
         "provider_verdict_excludes_architecture_test_coverage_unused_supply_chain_and_engineering_gates",
+        "typed_relocation_requires_identical_path_category_code_severity_message_and_metadata",
         "unused_analysis_is_advisory_and_never_authorizes_deletion_or_mutation",
         "supply_chain_delta_is_multidimensional_and_has_no_aggregate_score",
         "supply_chain_evidence_is_advisory_and_never_authorizes_mutation",
@@ -1962,6 +2115,7 @@ __all__ = [
     "CodeHotspotDelta",
     "CodeModuleArchitectureDelta",
     "CodeProviderEvidenceDelta",
+    "CodeProviderFindingRelocation",
     "CodePublicationDiffDigest",
     "CodePublicationDiffResult",
     "CodePublicationSnapshot",

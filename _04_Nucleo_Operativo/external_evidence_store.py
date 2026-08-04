@@ -28,6 +28,7 @@ from .external_evidence_models import (
     TypeConsensusSummary,
     external_finding_identity,
     external_provider_result_digest,
+    normalize_external_finding_message,
 )
 from .semantic_models import canonical_json
 
@@ -38,6 +39,35 @@ _RELATION_LIMIT = 250_000
 _COUNTER_LIMIT = 128
 _ProviderStatusGate = Literal["passed", "failed", "baseline", "not_evaluated"]
 _SuiteStatus = Literal["ready", "partial", "abstained", "not_recorded"]
+
+
+def _portable_provider_findings(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    provider_id: str,
+) -> tuple[ExternalProviderFinding, ...]:
+    findings = _normalized_provider_findings(connection, tool_run_id)
+    if provider_id != "pyright-trusted-project":
+        return findings
+    normalized = (
+        replace(
+            item,
+            portable_finding_id=external_finding_identity(
+                provider_id,
+                relative_path=item.relative_path,
+                category=item.category,
+                code=item.code,
+                message=item.message,
+                start_line=item.start_line,
+                start_column=item.start_column,
+                end_line=item.end_line,
+                end_column=item.end_column,
+            ),
+            message=normalize_external_finding_message(provider_id, item.message),
+        )
+        for item in findings
+    )
+    return tuple(sorted(normalized, key=lambda item: item.portable_finding_id))
 
 
 def _portable_finding_ids(
@@ -54,22 +84,9 @@ def _portable_finding_ids(
         if len(rows) > _FINDING_LIMIT:
             raise ValueError("external provider identities exceed their bound")
         return tuple(str(item[0]) for item in rows)
-    findings = _normalized_provider_findings(connection, tool_run_id)
     return tuple(
-        sorted(
-            external_finding_identity(
-                provider_id,
-                relative_path=item.relative_path,
-                category=item.category,
-                code=item.code,
-                message=item.message,
-                start_line=item.start_line,
-                start_column=item.start_column,
-                end_line=item.end_line,
-                end_column=item.end_column,
-            )
-            for item in findings
-        )
+        item.portable_finding_id
+        for item in _portable_provider_findings(connection, tool_run_id, provider_id)
     )
 
 
@@ -1376,10 +1393,45 @@ def read_external_provider_finding_ids(
     return result
 
 
+def read_external_provider_findings(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    *,
+    provider_ids: Collection[str] | None = None,
+) -> dict[str, tuple[ExternalProviderFinding, ...]]:
+    """Return bounded finding details for selected latest normalized providers."""
+
+    rows = _provider_run_rows(connection, analysis_run_id, provider_ids)
+    if len(rows) > _PROVIDER_STATUS_LIMIT:
+        raise ValueError("external provider finding read exceeds its provider bound")
+    latest: dict[str, sqlite3.Row] = {}
+    for row in rows:
+        latest.setdefault(str(row["provider_id"]), row)
+    result: dict[str, tuple[ExternalProviderFinding, ...]] = {}
+    for provider_id, row in sorted(latest.items()):
+        effective = int(row["tool_run_id"])
+        if str(row["execution"]) == "cache_replay":
+            replay = connection.execute(
+                "SELECT source_tool_run_id FROM external_run_replays WHERE tool_run_id=?",
+                (effective,),
+            ).fetchone()
+            if replay is None:
+                result[provider_id] = ()
+                continue
+            effective = int(replay["source_tool_run_id"])
+        result[provider_id] = _portable_provider_findings(
+            connection,
+            effective,
+            provider_id,
+        )
+    return result
+
+
 __all__ = [
     "publish_external_provider",
     "read_external_evidence_suite",
     "read_external_provider_baselines",
     "read_external_provider_evidence",
     "read_external_provider_finding_ids",
+    "read_external_provider_findings",
 ]
