@@ -261,6 +261,13 @@ def _print_code_report(result) -> None:
         return
     print(
         f"code_candidates={summary.candidates} "
+        f"code_project_scope="
+        f"{'projects' if summary.project_scope_enabled else 'broad'} "
+        f"code_project_roots={summary.project_roots} "
+        f"code_outside_project_skips={summary.outside_project_skips} "
+        f"code_dependency_skips={summary.dependency_skips} "
+        f"code_generated_scope_skips={summary.generated_scope_skips} "
+        f"code_cache_skips={summary.cache_skips} "
         f"code_processed={summary.processed} "
         f"code_cache_hits={summary.cache_hits} "
         f"code_symbols={summary.symbols} "
@@ -326,10 +333,7 @@ def print_reports(result, args: argparse.Namespace) -> None:
         _print_global_resource_report(result)
         return
     if hasattr(result, "source_run_id"):
-        print(
-            f"run_id={result.run_id} mode=route-only "
-            f"source_run_id={result.source_run_id}"
-        )
+        print(f"run_id={result.run_id} mode=route-only source_run_id={result.source_run_id}")
         _print_pdf_report(result)
         _print_docx_report(result)
         _print_image_report(result)

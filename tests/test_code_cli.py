@@ -130,6 +130,7 @@ def test_code_route_configuration_is_translated_without_eager_analyzers(
     assert config.code_max_file_bytes == 2_000_000
     assert config.code_max_documents == 7
     assert config.code_cache_validation == "full"
+    assert config.code_candidate_scope == "projects"
     assert not config.code_include_generated
     assert not config.code_include_vendored
 

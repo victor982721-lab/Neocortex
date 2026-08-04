@@ -144,9 +144,7 @@ class FrameworkOrchestrator:
         suffix = descriptions[outcome]
         with self._progress_lock:
             active = tuple(
-                event
-                for key, event in self._active_progress.items()
-                if key[0] == route_name
+                event for key, event in self._active_progress.items() if key[0] == route_name
             )
             for event in active:
                 terminal = ProgressEvent(
@@ -206,16 +204,13 @@ class FrameworkOrchestrator:
             or self.config.resume_run_id is not None
             or self.config.selection.active
         ):
-            raise ValueError(
-                "self-analysis cannot use route-only or selection controls"
-            )
-        if (
-            self.config.document_catalog_enabled
-            or self.config.organization_root is not None
-        ):
+            raise ValueError("self-analysis cannot use route-only or selection controls")
+        if self.config.document_catalog_enabled or self.config.organization_root is not None:
             raise ValueError("self-analysis cannot enable catalog or organization work")
         if self.config.code_include_generated or self.config.code_include_vendored:
             raise ValueError("self-analysis requires generated and vendored exclusions")
+        if self.config.code_candidate_scope != "projects":
+            raise ValueError("self-analysis requires project-scoped Code selection")
 
         access_policy = CorpusAccessPolicy.capture("analyze_only", root)
         state_layout = initialize_authorized_state_directory(
@@ -258,17 +253,13 @@ class FrameworkOrchestrator:
         state_directory = Path(os.path.abspath(state_directory))
         try:
             lexical_key = os.path.normcase(os.fspath(state_directory))
-            physical_key = os.path.normcase(
-                os.path.abspath(os.path.realpath(state_directory))
-            )
+            physical_key = os.path.normcase(os.path.abspath(os.path.realpath(state_directory)))
             if lexical_key != physical_key:
                 raise ValueError(
                     "self-analysis state_directory cannot use an alias or reparse path"
                 )
             if path_trees_intersect(access_policy.root, state_directory):
-                raise ValueError(
-                    "self-analysis root and state directory must remain disjoint"
-                )
+                raise ValueError("self-analysis root and state directory must remain disjoint")
             if not require_state:
                 observed_state_identity = None
             else:
@@ -276,10 +267,7 @@ class FrameworkOrchestrator:
                     "analyze_only",
                     state_directory,
                 )
-                if (
-                    os.path.normcase(os.fspath(observed_state_identity.root))
-                    != lexical_key
-                ):
+                if os.path.normcase(os.fspath(observed_state_identity.root)) != lexical_key:
                     raise ValueError("self-analysis state_directory is not canonical")
                 if expected_state_identity is not None and (
                     observed_state_identity.root_device_id,
@@ -815,25 +803,17 @@ class FrameworkOrchestrator:
                 if not isinstance(code_processing_signature, str) or not (
                     code_processing_signature
                 ):
-                    raise RuntimeError(
-                        "self-analysis code route returned no effective signature"
-                    )
+                    raise RuntimeError("self-analysis code route returned no effective signature")
                 reconciliation = inventory.reconciliation
-                journal_after = (
-                    None if reconciliation is None else reconciliation.cursor
-                )
+                journal_after = None if reconciliation is None else reconciliation.cursor
                 if (journal_after is None) != (journal_before is None):
-                    raise RuntimeError(
-                        "self-analysis inventory returned partial journal evidence"
-                    )
+                    raise RuntimeError("self-analysis inventory returned partial journal evidence")
                 if (
                     journal_after is not None
                     and journal_before is not None
                     and journal_after.journal_id != journal_before.journal_id
                 ):
-                    raise RuntimeError(
-                        "the USN journal changed during protected self-analysis"
-                    )
+                    raise RuntimeError("the USN journal changed during protected self-analysis")
                 self._revalidate_self_analysis_boundary(
                     access_policy,
                     internal_paths_policy,
@@ -980,9 +960,7 @@ class FrameworkOrchestrator:
         boundary.verify()
         emit_progress(
             self.progress,
-            ProgressEvent(
-                "framework", "prepare", "Ejecución preparada", 1, 1, "fase", True
-            ),
+            ProgressEvent("framework", "prepare", "Ejecución preparada", 1, 1, "fase", True),
         )
 
         with FrameworkState(self.config.framework_database) as state:
@@ -1023,19 +1001,11 @@ class FrameworkOrchestrator:
                 {
                     "route": self.config.route,
                     "selected_routes": list(self.selected_routes),
-                    "global_memory_budget_bytes": (
-                        self.config.global_memory_budget_bytes
-                    ),
-                    "global_min_free_memory_bytes": (
-                        self.config.global_min_free_memory_bytes
-                    ),
-                    "global_min_free_commit_bytes": (
-                        self.config.global_min_free_commit_bytes
-                    ),
+                    "global_memory_budget_bytes": (self.config.global_memory_budget_bytes),
+                    "global_min_free_memory_bytes": (self.config.global_min_free_memory_bytes),
+                    "global_min_free_commit_bytes": (self.config.global_min_free_commit_bytes),
                     "global_cpu_slots": self.config.global_cpu_slots,
-                    "global_max_cpu_load_percent": (
-                        self.config.global_max_cpu_load_percent
-                    ),
+                    "global_max_cpu_load_percent": (self.config.global_max_cpu_load_percent),
                     "global_resource_wait_timeout_seconds": (
                         self.config.global_resource_wait_timeout_seconds
                     ),
@@ -1043,12 +1013,13 @@ class FrameworkOrchestrator:
                     "code_max_file_bytes": self.config.code_max_file_bytes,
                     "code_max_documents": self.config.code_max_documents,
                     "code_cache_validation": self.config.code_cache_validation,
+                    "code_candidate_scope": self.config.code_candidate_scope,
+                    "code_include_generated": self.config.code_include_generated,
+                    "code_include_vendored": self.config.code_include_vendored,
                     "apply_actions": self.config.apply_actions,
                     "excluded_paths": [str(path) for path in excluded_paths],
                     "inventory_exclusion_signature": inventory_policy.signature,
-                    "internal_paths_signature": (
-                        boundary.internal_paths_policy.signature
-                    ),
+                    "internal_paths_signature": (boundary.internal_paths_policy.signature),
                     "inventory_policy_signature": boundary.effective_signature,
                     "document_catalog_enabled": (self.config.document_catalog_enabled),
                     "document_taxonomy_path": (
@@ -1064,16 +1035,12 @@ class FrameworkOrchestrator:
                         if self.config.organization_root is None
                         else str(self.config.organization_root)
                     ),
-                    "organization_min_confidence": (
-                        self.config.organization_min_confidence
-                    ),
+                    "organization_min_confidence": (self.config.organization_min_confidence),
                     "image_workers": self.config.image_workers,
                     "image_max_file_bytes": self.config.image_max_file_bytes,
                     "image_max_documents": self.config.image_max_documents,
                     "image_memory_budget_bytes": self.config.image_memory_budget_bytes,
-                    "image_worker_timeout_seconds": (
-                        self.config.image_worker_timeout_seconds
-                    ),
+                    "image_worker_timeout_seconds": (self.config.image_worker_timeout_seconds),
                     "pdf_max_file_bytes": self.config.pdf_max_file_bytes,
                     "pdf_max_documents": self.config.pdf_max_documents,
                     "pdf_workers": self.config.pdf_workers,
@@ -1097,15 +1064,9 @@ class FrameworkOrchestrator:
                     "office_max_file_bytes": self.config.office_max_file_bytes,
                     "office_max_documents": self.config.office_max_documents,
                     "office_max_text_chars": self.config.office_max_text_chars,
-                    "office_memory_budget_bytes": (
-                        self.config.office_memory_budget_bytes
-                    ),
-                    "office_min_free_memory_bytes": (
-                        self.config.office_min_free_memory_bytes
-                    ),
-                    "office_min_free_commit_bytes": (
-                        self.config.office_min_free_commit_bytes
-                    ),
+                    "office_memory_budget_bytes": (self.config.office_memory_budget_bytes),
+                    "office_min_free_memory_bytes": (self.config.office_min_free_memory_bytes),
+                    "office_min_free_commit_bytes": (self.config.office_min_free_commit_bytes),
                     "audio_model_name": self.config.audio_model_name,
                     "audio_device": self.config.audio_device,
                     "audio_compute_type": self.config.audio_compute_type,
@@ -1113,15 +1074,9 @@ class FrameworkOrchestrator:
                     "audio_include_video": self.config.audio_include_video,
                     "audio_max_file_bytes": self.config.audio_max_file_bytes,
                     "audio_max_documents": self.config.audio_max_documents,
-                    "audio_max_duration_seconds": (
-                        self.config.audio_max_duration_seconds
-                    ),
-                    "audio_memory_budget_bytes": (
-                        self.config.audio_memory_budget_bytes
-                    ),
-                    "audio_worker_memory_bytes": (
-                        self.config.audio_worker_memory_bytes
-                    ),
+                    "audio_max_duration_seconds": (self.config.audio_max_duration_seconds),
+                    "audio_memory_budget_bytes": (self.config.audio_memory_budget_bytes),
+                    "audio_worker_memory_bytes": (self.config.audio_worker_memory_bytes),
                 },
             )
             try:
@@ -1165,10 +1120,7 @@ class FrameworkOrchestrator:
                         publish_portable_checkpoint=True,
                     )
                     boundary.verify()
-                    if (
-                        inventory.inventory_policy_signature
-                        != inventory_policy.signature
-                    ):
+                    if inventory.inventory_policy_signature != inventory_policy.signature:
                         raise RuntimeError(
                             "inventory result escaped its effective exclusion boundary"
                         )
@@ -1229,24 +1181,12 @@ class FrameworkOrchestrator:
                         run_id=run_id,
                         scan_id=scan.scan_id,
                     )
-                    pdf_summary = cast(
-                        "PdfRouteSummary | None", route_results.get("pdf")
-                    )
-                    docx_summary = cast(
-                        "DocxRouteSummary | None", route_results.get("docx")
-                    )
-                    office_summary = cast(
-                        "OfficeRouteSummary | None", route_results.get("office")
-                    )
-                    audio_summary = cast(
-                        "AudioRouteSummary | None", route_results.get("audio")
-                    )
-                    image_summary = cast(
-                        "ImageRouteSummary | None", route_results.get("image")
-                    )
-                    code_summary = cast(
-                        "CodeRouteSummary | None", route_results.get("code")
-                    )
+                    pdf_summary = cast("PdfRouteSummary | None", route_results.get("pdf"))
+                    docx_summary = cast("DocxRouteSummary | None", route_results.get("docx"))
+                    office_summary = cast("OfficeRouteSummary | None", route_results.get("office"))
+                    audio_summary = cast("AudioRouteSummary | None", route_results.get("audio"))
+                    image_summary = cast("ImageRouteSummary | None", route_results.get("image"))
+                    code_summary = cast("CodeRouteSummary | None", route_results.get("code"))
                     image_summary = self._apply_explicit_adult_images(
                         action_runner,
                         image_summary,
@@ -1265,21 +1205,15 @@ class FrameworkOrchestrator:
                     )
                     if self.selected_routes:
                         actions = action_runner.cleanup_empty_directories(plan, actions)
-                journal_after = (
-                    None if reconciliation is None else reconciliation.cursor
-                )
+                journal_after = None if reconciliation is None else reconciliation.cursor
                 if (journal_after is None) != (journal_before is None):
-                    raise RuntimeError(
-                        "normal inventory returned partial journal evidence"
-                    )
+                    raise RuntimeError("normal inventory returned partial journal evidence")
                 if (
                     journal_after is not None
                     and journal_before is not None
                     and journal_after.journal_id != journal_before.journal_id
                 ):
-                    raise RuntimeError(
-                        "the USN journal changed during the initial framework run"
-                    )
+                    raise RuntimeError("the USN journal changed during the initial framework run")
                 boundary.verify()
                 state.set_run_phase(run_id, "finalize")
                 transient_rows_pruned = state.prune_route_candidates((run_id,))
@@ -1329,9 +1263,7 @@ class FrameworkOrchestrator:
 
         emit_progress(
             self.progress,
-            ProgressEvent(
-                "framework", "complete", "Etapa previa completada", 1, 1, "fase", True
-            ),
+            ProgressEvent("framework", "complete", "Etapa previa completada", 1, 1, "fase", True),
         )
         return InitialRunResult(
             run_id=run_id,
@@ -1410,16 +1342,9 @@ class FrameworkOrchestrator:
         source_root, scan_id = state.source_run_inventory(source_run_id)
         normalized_source = self._normalized_root(source_root)
         if normalized_source != self._normalized_root(requested_root):
-            raise ValueError(
-                f"source run {source_run_id} belongs to another corpus root"
-            )
-        if (
-            state.source_inventory_policy_signature(source_run_id)
-            != boundary.effective_signature
-        ):
-            raise ValueError(
-                f"source run {source_run_id} has an incompatible inventory policy"
-            )
+            raise ValueError(f"source run {source_run_id} belongs to another corpus root")
+        if state.source_inventory_policy_signature(source_run_id) != boundary.effective_signature:
+            raise ValueError(f"source run {source_run_id} has an incompatible inventory policy")
         persisted_policy = state.corpus_mutation_guard(source_run_id).policy
         expected_identity = (
             boundary.access_policy.root_device_id,
@@ -1432,9 +1357,7 @@ class FrameworkOrchestrator:
             persisted_policy.root_birthtime_ns,
         )
         if persisted_policy.mode != "normal" or persisted_identity != expected_identity:
-            raise ValueError(
-                f"source run {source_run_id} belongs to a replaced corpus root"
-            )
+            raise ValueError(f"source run {source_run_id} belongs to a replaced corpus root")
         if scan_id is None:
             evidence = state.recorded_inventory_evidence(source_run_id)
             target_scan_id = evidence.scan_id
@@ -1451,12 +1374,9 @@ class FrameworkOrchestrator:
                 checkpoint is None
                 or not checkpoint.valid
                 or checkpoint.scan_id != target_scan_id
-                or checkpoint.inventory_policy_signature
-                != boundary.exclusion_policy.signature
+                or checkpoint.inventory_policy_signature != boundary.exclusion_policy.signature
             ):
-                raise ValueError(
-                    f"source run {source_run_id} has no compatible durable checkpoint"
-                )
+                raise ValueError(f"source run {source_run_id} has no compatible durable checkpoint")
             dedup_index.require_scan_inventory_policy_signature(
                 target_scan_id,
                 boundary.exclusion_policy.signature,
@@ -1469,20 +1389,14 @@ class FrameworkOrchestrator:
         if persisted_root_identity != self._root_identity(requested_root):
             raise ValueError(f"scan {target_scan_id} belongs to a replaced corpus root")
         if persisted_files != summary.files_seen:
-            raise ValueError(
-                f"scan {target_scan_id} has inconsistent durable file counts"
-            )
+            raise ValueError(f"scan {target_scan_id} has inconsistent durable file counts")
         candidate_rows: int | None = None
         if evidence is not None:
             if summary.files_seen != evidence.files:
-                raise ValueError(
-                    f"scan {target_scan_id} does not match its durable event evidence"
-                )
+                raise ValueError(f"scan {target_scan_id} does not match its durable event evidence")
             candidate_rows = state.route_candidate_run_count(source_run_id)
         elif not state.has_durable_routing_snapshot(source_run_id):
-            raise ValueError(
-                f"source run {source_run_id} has no published routing snapshot"
-            )
+            raise ValueError(f"source run {source_run_id} has no published routing snapshot")
         boundary.verify()
         state.mark_abandoned_runs()
         state.mark_abandoned_actions()
@@ -1522,20 +1436,16 @@ class FrameworkOrchestrator:
                 source_run_id, expected_source_scan_id = latest_inventory
             if self.config.resume_run_id is not None and not self.selected_routes:
                 resumable = state.resumable_route_names(source_run_id)
-                unknown = tuple(
-                    name for name in resumable if name not in self.route_registry
-                )
+                unknown = tuple(name for name in resumable if name not in self.route_registry)
                 if unknown:
                     raise ValueError(
-                        "resume source references unavailable routes: "
-                        + ", ".join(unknown)
+                        "resume source references unavailable routes: " + ", ".join(unknown)
                     )
                 self.selected_routes = resumable
             if not self.selected_routes:
                 raise ValueError(f"run {source_run_id} has no resumable content routes")
             route_input_sources = {
-                name: self.route_registry[name].input_source
-                for name in self.selected_routes
+                name: self.route_registry[name].input_source for name in self.selected_routes
             }
             candidate_backed_routes = tuple(
                 name
@@ -1554,9 +1464,7 @@ class FrameworkOrchestrator:
                 boundary,
                 expected_source_scan_id,
             )
-            run_kind = (
-                "resume" if self.config.resume_run_id is not None else "route_only"
-            )
+            run_kind = "resume" if self.config.resume_run_id is not None else "route_only"
             boundary.verify()
             run_id = state.begin_operational_run(
                 root,
@@ -1564,9 +1472,7 @@ class FrameworkOrchestrator:
                 source_run_id=source_run_id,
             )
             copied = (
-                state.copy_route_candidates(source_run_id, run_id)
-                if candidate_backed_routes
-                else 0
+                state.copy_route_candidates(source_run_id, run_id) if candidate_backed_routes else 0
             )
             heartbeat = RunHeartbeat(
                 self.config.framework_database,
@@ -1581,9 +1487,7 @@ class FrameworkOrchestrator:
                 {
                     "root": str(root),
                     "source_run_id": source_run_id,
-                    "inventory_exclusion_signature": (
-                        boundary.exclusion_policy.signature
-                    ),
+                    "inventory_exclusion_signature": (boundary.exclusion_policy.signature),
                     "inventory_policy_signature": boundary.effective_signature,
                     "candidate_rows": copied,
                     "source_candidate_rows": source_candidate_rows,
@@ -1605,9 +1509,7 @@ class FrameworkOrchestrator:
                         "failed_pages_only": (self.config.selection.failed_pages_only),
                     },
                     "pdf_timeout_mode": self.config.pdf_timeout_mode,
-                    "pdf_document_timeout_seconds": (
-                        self.config.pdf_document_timeout_seconds
-                    ),
+                    "pdf_document_timeout_seconds": (self.config.pdf_document_timeout_seconds),
                     "pdf_max_document_timeout_seconds": (
                         self.config.pdf_max_document_timeout_seconds
                     ),

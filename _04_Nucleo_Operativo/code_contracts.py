@@ -508,11 +508,13 @@ class CodeRouteConfig:
     chunk_chars: int = 12_000
     retry_errors: bool = False
     cache_validation: Literal["metadata", "full"] = "metadata"
+    candidate_scope: Literal["projects", "broad"] = "broad"
     include_generated: bool = True
     include_vendored: bool = True
     complexity_warning: int = 15
     function_lines_warning: int = 200
     external_evidence_root: Path | None = None
+    explicit_project_roots: tuple[Path, ...] = ()
     analysis_profile: Literal["protected", "trusted-static", "trusted-deep"] = "protected"
     selection: CandidateSelection = field(default_factory=CandidateSelection)
     deep_test_selectors: tuple[str, ...] = ()
@@ -534,10 +536,14 @@ class CodeRouteConfig:
             raise ValueError("code max_documents must be positive")
         if self.cache_validation not in {"metadata", "full"}:
             raise ValueError("code cache_validation must be metadata or full")
+        if self.candidate_scope not in {"projects", "broad"}:
+            raise ValueError("code candidate_scope must be projects or broad")
         if not 1024 <= self.chunk_chars <= 1_000_000:
             raise ValueError("code chunk_chars must be between 1024 and 1000000")
         if self.complexity_warning < 1 or self.function_lines_warning < 1:
             raise ValueError("code diagnostic thresholds must be positive")
+        if any(not root.is_absolute() for root in self.explicit_project_roots):
+            raise ValueError("code explicit_project_roots must be absolute")
         normalized_selectors = normalize_deep_test_selectors(self.deep_test_selectors)
         payload = deep_configuration_payload(
             analysis_profile=self.analysis_profile,
@@ -606,6 +612,12 @@ class CodeRouteSummary:
 
     processing_signature: str = ""
     candidates: int = 0
+    project_scope_enabled: int = 0
+    project_roots: int = 0
+    outside_project_skips: int = 0
+    dependency_skips: int = 0
+    generated_scope_skips: int = 0
+    cache_skips: int = 0
     processed: int = 0
     cache_hits: int = 0
     text_only: int = 0

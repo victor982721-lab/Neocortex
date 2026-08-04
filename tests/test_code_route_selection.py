@@ -4,10 +4,10 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -124,5 +124,134 @@ def test_status_and_diagnostic_selection_uses_current_code_state(tmp_path: Path)
     assert summary.candidates == 1
     assert summary.cache_hits == 1
     assert summary.processed == 0
+
+
+def test_project_scope_keeps_owned_files_and_rejects_profile_noise(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "Projects" / "owned"
+    outside = tmp_path / "Texto"
+    files = {
+        project / "pyproject.toml": "[project]\nname='owned'\n",
+        project / "src" / "owned.py": "def owned():\n    return True\n",
+        project / "docs" / "README.md": "# Owned project\n",
+        project / "settings.json": '{"tool": "owned"}\n',
+        project / "node_modules" / "dep" / "package.json": '{"name":"dep"}\n',
+        project / "node_modules" / "dep" / "index.js": "export const dep = 1;\n",
+        project / ".venv" / "Lib" / "site-packages" / "installed.py": "VALUE = 1\n",
+        project / "build" / "generated.py": "VALUE = 2\n",
+        project / ".pytest_cache" / "cached.py": "VALUE = 3\n",
+        outside / "export.jsonl": '{"not":"code"}\n',
+        outside / "loose.py": "VALUE = 4\n",
+    }
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    config = CodeRouteConfig(
+        state_path=tmp_path / "state" / "code.sqlite3",
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+        candidate_scope="projects",
+        include_generated=False,
+        include_vendored=False,
+    )
+    summary = CodeRoute(
+        config,
+        _Inventory(files),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    assert summary.project_scope_enabled == 1
+    assert summary.project_roots == 1
+    assert summary.candidates == 4
+    assert summary.processed == 4
+    assert summary.outside_project_skips == 2
+    assert summary.dependency_skips == 3
+    assert summary.generated_scope_skips == 1
+    assert summary.cache_skips == 1
+
+
+def test_explicit_path_overrides_project_discovery(tmp_path: Path) -> None:
+    source = tmp_path / "loose.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    selection = CandidateSelection.from_values(paths=(source,))
+    config = CodeRouteConfig(
+        state_path=tmp_path / "state" / "code.sqlite3",
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+        candidate_scope="projects",
+        include_generated=False,
+        include_vendored=False,
+        selection=selection,
+    )
+
+    summary = CodeRoute(
+        config,
+        _Inventory((source,)),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    assert summary.project_scope_enabled == 0
+    assert summary.project_roots == 0
+    assert summary.candidates == 1
+    assert summary.processed == 1
+
+
+def test_project_scope_reconciles_broad_state_without_discarding_history(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "Projects" / "owned"
+    manifest = project / "pyproject.toml"
+    owned = project / "owned.py"
+    loose = tmp_path / "Texto" / "loose.py"
+    for path, content in (
+        (manifest, "[project]\nname='owned'\n"),
+        (owned, "OWNED = True\n"),
+        (loose, "LOOSE = True\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    state_path = tmp_path / "state" / "code.sqlite3"
+    broad = CodeRouteConfig(
+        state_path=state_path,
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+        candidate_scope="broad",
+        include_generated=False,
+        include_vendored=False,
+    )
+    inventory = _Inventory((manifest, owned, loose))
+    first = CodeRoute(broad, inventory, _FrameworkState(), 1, 1).run()
+
+    narrowed = CodeRouteConfig(
+        state_path=state_path,
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+        candidate_scope="projects",
+        include_generated=False,
+        include_vendored=False,
+    )
+    second = CodeRoute(narrowed, inventory, _FrameworkState(), 2, 2).run()
+
+    assert first.candidates == 3
+    assert second.candidates == 2
+    assert second.cache_hits == 2
+    assert second.invalidated_versions == 1
+    with sqlite3.connect(state_path) as connection:
+        current_paths = {
+            str(row[0])
+            for row in connection.execute("SELECT current_path FROM files WHERE status='current'")
+        }
+        loose_history = connection.execute(
+            """SELECT COUNT(*) FROM file_versions
+            WHERE path_observed=? AND invalidated_ns IS NOT NULL""",
+            (str(loose),),
+        ).fetchone()
+
+    assert current_paths == {str(manifest), str(owned)}
+    assert loose_history == (1,)
+
 
 # endregion [02]

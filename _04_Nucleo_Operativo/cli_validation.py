@@ -220,6 +220,8 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         raise SystemExit("--self-analysis rejects --code-generated")
     if "code_include_vendored" in explicit and args.code_include_vendored:
         raise SystemExit("--self-analysis rejects --code-vendored")
+    if "code_candidate_scope" in explicit and args.code_candidate_scope != "projects":
+        raise SystemExit("--self-analysis rejects --code-scope broad")
 
     from _02_Deduplicacion import InventoryError
     from _02_Deduplicacion.inventory import validate_inventory_root
@@ -250,6 +252,7 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         raise SystemExit("--self-analysis root and state directory must be disjoint")
     args.route = "code"
     args.no_document_catalog = True
+    args.code_candidate_scope = "projects"
     args.code_include_generated = False
     args.code_include_vendored = False
 

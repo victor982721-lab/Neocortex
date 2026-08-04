@@ -62,6 +62,7 @@ def test_self_analysis_requires_explicit_paths(
         (("--pdf-workers", "1"), "is not consumed by --self-analysis"),
         (("--code-generated",), "rejects --code-generated"),
         (("--code-vendored",), "rejects --code-vendored"),
+        (("--code-scope", "broad"), "rejects --code-scope broad"),
     ],
 )
 def test_self_analysis_rejects_unsafe_or_unused_combinations(
@@ -102,6 +103,7 @@ def test_self_analysis_preset_is_code_only_and_analyze_only(tmp_path: Path) -> N
     assert config.route == "code"
     assert not config.apply_actions
     assert not config.document_catalog_enabled
+    assert config.code_candidate_scope == "projects"
     assert not config.code_include_generated
     assert not config.code_include_vendored
     assert config.analysis_profile == "protected"

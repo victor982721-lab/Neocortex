@@ -663,6 +663,22 @@ Neocortex --root $Root --route code --code-cache-validation full
 un comando público general para “limpiar toda la caché”. No borre bases, WAL o
 SHM manualmente.
 
+Code selecciona proyectos por defecto. Detecta sus raíces mediante manifiestos
+fuertes y excluye archivos fuera de ellas, dependencias instaladas, caches y
+salidas generadas antes de leer contenido:
+
+```powershell
+Neocortex --root $Root --route code
+Neocortex --root $Root --route code --code-scope broad
+```
+
+El segundo comando es el override deliberado que restaura la selección textual
+amplia anterior. `--code-generated` y `--code-vendored` permiten esas capas
+dentro de proyectos; no son el valor predeterminado. Los campos
+`code_project_scope`, `code_project_roots`, `code_outside_project_skips`,
+`code_dependency_skips`, `code_generated_scope_skips` y `code_cache_skips`
+explican la frontera aplicada.
+
 Los errores permanentes o ya cacheados no se reintentan sólo por usar `--all`.
 Los overrides explícitos son:
 

@@ -68,8 +68,9 @@ class FrameworkConfig:
     code_chunk_chars: int = 12_000
     code_retry_errors: bool = False
     code_cache_validation: Literal["metadata", "full"] = "metadata"
-    code_include_generated: bool = True
-    code_include_vendored: bool = True
+    code_candidate_scope: Literal["projects", "broad"] = "projects"
+    code_include_generated: bool = False
+    code_include_vendored: bool = False
     code_complexity_warning: int = 15
     code_function_lines_warning: int = 200
     image_workers: int = 4
