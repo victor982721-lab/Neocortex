@@ -16,21 +16,23 @@ selección histórica amplia únicamente como override deliberado; `--select-pat
 sigue admitiendo una ruta exacta y `--self-analysis` conserva su raíz explícita.
 
 El wheel final está en
-`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-code-project-scope-20260804-rc2\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
-Tiene 1 598 255 bytes, SHA-256
-`35194003F5306CE147D7D209ECF94A796C89489B0BC5CB36F73DC7153892250C` y
-xxh3_128 `d5c5fda695f395c26e5fd846e8e89f9f`. Los diez módulos de producción
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-code-project-scope-20260804-rc3\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 597 847 bytes, SHA-256
+`D7492BF5119F35F96AF5AF09534684D6F0AF32A12DE12046018FEBDB6FB38452` y
+xxh3_128 `d8747b3b6d25f63ed0fbc40a69a6495c`. Los diez módulos de producción
 modificados son byte-idénticos entre fuente e instalación; `pip check` está
 limpio y `doctor capabilities --json` informa 8/8 capacidades. El lanzador
 estable fue promovido atómicamente con respaldo y recibo encadenado; su SHA-256
-vigente es `9EAC99D62A85F779482C5F2C7E7C70E35DE57AE57F590C2B9225FC96A50E0FA3`.
+vigente es `0C2104DAA3A5C46F63E731F639B58EFD1D041A14FCE602FE12EB3062BD327FF1`.
 
 La aceptación instalada inventarió una muestra aislada de 20 archivos y
 detectó 10 candidatos propios dentro de dos proyectos. Omitió 2 archivos fuera
 de proyecto, 4 dependencias, 2 generados y 2 cachés, con 0 errores. El replay
 `route-only` reutilizó los 10 resultados, procesó 0, leyó 0 bytes y conservó los
 mismos conteos. La barrera afectada aprobó 232 pruebas y 2 subtests; Ruff y el
-Mypy directo de producción quedaron limpios.
+Mypy directo de producción quedaron limpios. El carril GitHub `standard`
+aprobó además 384 pruebas instaladas; el ajuste mecánico exigido por el contrato
+Ruff quedó incorporado en rc3.
 
 No se recorrió ni modificó el corpus vivo. Los resultados Code amplios ya
 existentes se preservan como historia; la próxima corrida Code completa marcará

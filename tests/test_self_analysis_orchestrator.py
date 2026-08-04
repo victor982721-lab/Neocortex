@@ -56,9 +56,7 @@ def _config(root: Path, state: Path) -> FrameworkConfig:
 def _inventory_adapter(seen: list[tuple[str, ...]]) -> RouteAdapter:
     def execute(context) -> CodeRouteSummary:
         with DedupIndex(context.config.dedup_database) as index:
-            paths = tuple(
-                snapshot.path for snapshot in index.snapshots(context.scan_id)
-            )
+            paths = tuple(snapshot.path for snapshot in index.snapshots(context.scan_id))
         seen.append(paths)
         return CodeRouteSummary(
             processing_signature=_FIXTURE_CODE_SIGNATURE,
@@ -90,9 +88,7 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
         *(str(path.resolve()) for path in transient_roots),
     }
     default_keys = {str(path.resolve()).casefold() for path in DEFAULT_EXCLUDED_PATHS}
-    assert not default_keys.intersection(
-        path.casefold() for path in policy.explicit_roots
-    )
+    assert not default_keys.intersection(path.casefold() for path in policy.explicit_roots)
     assert {".git", ".venv", "__pycache__", "node_modules", "dist", "target"}.issubset(
         policy.directory_names
     )
@@ -274,9 +270,7 @@ def test_self_analysis_real_code_route_omits_common_work_and_publishes_manifest(
     assert result.corpus_action_count == 0
     assert result.code.processed == 1
     assert source.read_bytes() == original
-    assert all(
-        path.read_text(encoding="utf-8") == "excluded = True\n" for path in excluded
-    )
+    assert all(path.read_text(encoding="utf-8") == "excluded = True\n" for path in excluded)
     assert journal.raw_volume_open_attempts == 0
 
     with DedupIndex(state / "dedup.sqlite3") as index:
@@ -324,18 +318,10 @@ def test_self_analysis_real_code_route_omits_common_work_and_publishes_manifest(
     route_summary = json.loads(route_row[2])
     assert manifest["run"]["run_id"] == result.run_id
     assert manifest["inventory"]["scan_id"] == result.scan.scan_id
-    assert manifest["inventory"]["journal"]["start_usn"] == (
-        result.journal_before.next_usn
-    )
-    assert manifest["inventory"]["journal"]["end_usn"] == (
-        result.journal_after.next_usn
-    )
-    assert manifest["inventory"]["policy"]["signature"] == (
-        result.inventory_policy_signature
-    )
-    assert manifest["code"]["processing_signature"] == (
-        result.code.processing_signature
-    )
+    assert manifest["inventory"]["journal"]["start_usn"] == (result.journal_before.next_usn)
+    assert manifest["inventory"]["journal"]["end_usn"] == (result.journal_after.next_usn)
+    assert manifest["inventory"]["policy"]["signature"] == (result.inventory_policy_signature)
+    assert manifest["code"]["processing_signature"] == (result.code.processing_signature)
     assert route_summary["processing_signature"] == result.code.processing_signature
     assert code_state_row == (
         result.run_id,
@@ -441,9 +427,7 @@ def test_exception_after_manifest_commit_cannot_degrade_completed_run(
             ).run()
 
     with sqlite3.connect(state / "framework.sqlite3") as connection:
-        run_row = connection.execute(
-            "SELECT status,current_phase FROM initial_runs"
-        ).fetchone()
+        run_row = connection.execute("SELECT status,current_phase FROM initial_runs").fetchone()
         route_row = connection.execute(
             "SELECT status,current_phase FROM route_runs WHERE route_name='code'"
         ).fetchone()
@@ -472,18 +456,12 @@ def test_self_analysis_reuses_only_a_matching_durable_checkpoint(
     registry = {"code": _inventory_adapter(seen)}
 
     with SyntheticUsnJournal(root) as journal:
-        first = FrameworkOrchestrator(
-            _config(root, state), route_registry=registry
-        ).run()
-        second = FrameworkOrchestrator(
-            _config(root, state), route_registry=registry
-        ).run()
+        first = FrameworkOrchestrator(_config(root, state), route_registry=registry).run()
+        second = FrameworkOrchestrator(_config(root, state), route_registry=registry).run()
         renamed = root / "renamed.py"
         source.rename(renamed)
         renamed.write_text("value = 2\n", encoding="utf-8")
-        third = FrameworkOrchestrator(
-            _config(root, state), route_registry=registry
-        ).run()
+        third = FrameworkOrchestrator(_config(root, state), route_registry=registry).run()
 
     assert isinstance(first, SelfAnalysisRunResult)
     assert isinstance(second, SelfAnalysisRunResult)
@@ -515,9 +493,7 @@ def test_failed_inventory_owner_checkpoint_cannot_authorize_incremental(
     with SyntheticUsnJournal(root) as journal:
         with pytest.raises(RouteExecutionError):
             FrameworkOrchestrator(_config(root, state), route_registry=failing).run()
-        completed = FrameworkOrchestrator(
-            _config(root, state), route_registry=succeeding
-        ).run()
+        completed = FrameworkOrchestrator(_config(root, state), route_registry=succeeding).run()
 
     assert isinstance(completed, SelfAnalysisRunResult)
     assert completed.inventory_mode == "full"
@@ -552,9 +528,7 @@ def test_failed_incremental_checkpoint_cannot_advance_past_durable_boundary(
 
     failing = {"code": RouteAdapter("code", fail, input_source="inventory_snapshot")}
     with SyntheticUsnJournal(root) as journal:
-        durable = FrameworkOrchestrator(
-            _config(root, state), route_registry=succeeding
-        ).run()
+        durable = FrameworkOrchestrator(_config(root, state), route_registry=succeeding).run()
         assert isinstance(durable, SelfAnalysisRunResult)
         source.write_text("value = 2\n", encoding="utf-8")
         with pytest.raises(RouteExecutionError):
@@ -572,9 +546,7 @@ def test_failed_incremental_checkpoint_cannot_advance_past_durable_boundary(
         assert failed_checkpoint.scan_id == durable.scan.scan_id
         assert failed_checkpoint.next_usn > durable_end_usn
 
-        recovered = FrameworkOrchestrator(
-            _config(root, state), route_registry=succeeding
-        ).run()
+        recovered = FrameworkOrchestrator(_config(root, state), route_registry=succeeding).run()
 
     assert isinstance(recovered, SelfAnalysisRunResult)
     assert recovered.inventory_mode == "full"

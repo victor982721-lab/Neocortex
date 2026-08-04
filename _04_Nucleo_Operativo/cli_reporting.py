@@ -333,10 +333,7 @@ def print_reports(result, args: argparse.Namespace) -> None:
         _print_global_resource_report(result)
         return
     if hasattr(result, "source_run_id"):
-        print(
-            f"run_id={result.run_id} mode=route-only "
-            f"source_run_id={result.source_run_id}"
-        )
+        print(f"run_id={result.run_id} mode=route-only source_run_id={result.source_run_id}")
         _print_pdf_report(result)
         _print_docx_report(result)
         _print_image_report(result)
