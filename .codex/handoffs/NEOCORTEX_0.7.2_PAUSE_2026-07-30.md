@@ -26,12 +26,12 @@ El piloto instalado sobre 20 PDF sintéticos publicó 40/40 embeddings, cero
 errores y una generación `ready`. El replay exacto tuvo 20/20 cache hits,
 `new_jobs=0`, `embedded=0` y otro head `ready` por clon de los 40 miembros. Una
 consulta textual completa devolvió cinco hits útiles con exit `0`. La aceptación
-final rc2 repitió el replay en 6.764 s mediante el ejecutable instalado.
+final rc2 repitió el replay en 6.815 s mediante el ejecutable instalado.
 
 El wheel rc2 está en
 `C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-all-semantic-20260803-rc2\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
-Tiene 1 594 631 bytes, 298 miembros, ZIP íntegro y SHA-256
-`210BA7CA2A29ADD460ACCB4D559F2AA3C1C275A79480FEE4003773066959F451`.
+Tiene 1 594 454 bytes, 298 miembros, ZIP íntegro y SHA-256
+`017983AF1C79CB71E9E29DDCFF18BACCF1C0B91ED1594A52D6C8D02FB3BDF043`.
 Los cuatro módulos de producción modificados son byte-idénticos entre fuente y
 wheel; `pip check` está limpio, `doctor capabilities --json` reporta las ocho
 capacidades disponibles y el preset instalado confirmó `100000/1000000/172800`.
