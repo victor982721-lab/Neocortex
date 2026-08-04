@@ -46,11 +46,7 @@ def _semantic_text_model(profile: str):
         multilingual_text_model,
     )
 
-    return (
-        compact_multilingual_text_model()
-        if profile == "compact"
-        else multilingual_text_model()
-    )
+    return compact_multilingual_text_model() if profile == "compact" else multilingual_text_model()
 
 
 def _validate_semantic_state_write(
@@ -70,9 +66,7 @@ def _validate_semantic_state_write(
     from .semantic_service import SEMANTIC_DATABASE_NAME
 
     database_paths = (
-        state_sqlite_mutation_paths(state_directory / SEMANTIC_DATABASE_NAME)
-        if database
-        else ()
+        state_sqlite_mutation_paths(state_directory / SEMANTIC_DATABASE_NAME) if database else ()
     )
     validate_authorized_state_path(
         state_directory,
@@ -143,9 +137,7 @@ def run_semantic_status(args: argparse.Namespace) -> int:
     if not status.exists:
         print(f"SEMANTIC_STATUS exists=0 database={database}")
         return 0
-    counts = ",".join(
-        f"{name}:{value}" for name, value in sorted(status.counts.items())
-    )
+    counts = ",".join(f"{name}:{value}" for name, value in sorted(status.counts.items()))
     print(
         f"SEMANTIC_STATUS exists=1 schema={status.schema_version} "
         f"counts={counts or '-'} database={database}"
@@ -498,13 +490,9 @@ def run_semantic_search(args: argparse.Namespace) -> int:
             if isinstance(calibration, dict) and calibrated_abstained
             else None
         )
-        reason = (
-            semantic_ranking.unavailable_reason or semantic_ranking.cutoff_reason or "-"
-        )
+        reason = semantic_ranking.unavailable_reason or semantic_ranking.cutoff_reason or "-"
         cutoff_score = (
-            "-"
-            if semantic_ranking.cutoff_score is None
-            else f"{semantic_ranking.cutoff_score:.6f}"
+            "-" if semantic_ranking.cutoff_score is None else f"{semantic_ranking.cutoff_score:.6f}"
         )
         next_cursor = semantic_ranking.next_cursor or "-"
         _print_console_line(
@@ -537,8 +525,7 @@ def run_semantic_search(args: argparse.Namespace) -> int:
     )
     for rank, hit in enumerate(result.fused, start=1):
         evidence = ",".join(
-            f"{value.ranking}:{value.rank}:{value.raw_score:.6f}:"
-            f"{value.contribution:.6f}"
+            f"{value.ranking}:{value.rank}:{value.raw_score:.6f}:{value.contribution:.6f}"
             for value in hit.fused.evidence
         )
         _print_console_line(

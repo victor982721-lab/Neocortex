@@ -169,8 +169,7 @@ def _validate_semantic_values(args: argparse.Namespace) -> None:
     if args.semantic_search is not None and len(args.semantic_search) > 4_096:
         raise SystemExit("--semantic-search cannot exceed 4096 characters")
     if args.semantic_evidence is not None and (
-        not args.semantic_evidence
-        or args.semantic_evidence.strip() != args.semantic_evidence
+        not args.semantic_evidence or args.semantic_evidence.strip() != args.semantic_evidence
     ):
         raise SystemExit("--semantic-evidence must be non-empty and trimmed")
     if args.semantic_evidence is not None and len(args.semantic_evidence) > 32_768:
@@ -194,29 +193,20 @@ def _validate_semantic_values(args: argparse.Namespace) -> None:
         raise SystemExit(
             "--semantic-time-budget-seconds must be finite and between 0.001 and 172800"
         )
-    if (
-        not 64 * 1024
-        <= args.semantic_plan_max_scratch_bytes
-        <= (16 * 1024 * 1024 * 1024 * 1024)
-    ):
-        raise SystemExit(
-            "--semantic-plan-max-scratch-bytes must be between 65536 and 16 TiB"
-        )
+    if not 64 * 1024 <= args.semantic_plan_max_scratch_bytes <= (16 * 1024 * 1024 * 1024 * 1024):
+        raise SystemExit("--semantic-plan-max-scratch-bytes must be between 65536 and 16 TiB")
 
 
 def validate_semantic_arguments(args: argparse.Namespace) -> None:
     """Validate one Semantic selection using the established error order."""
 
     explicit = set(getattr(args, "_explicit_options", ()))
-    semantic_actions = len(
-        selected_direct_operations(args, family=DirectOperationFamily.SEMANTIC)
-    )
+    semantic_actions = len(selected_direct_operations(args, family=DirectOperationFamily.SEMANTIC))
     integrated_all = bool(args.all)
     code_semantic_search = bool(
         args.code_search is not None
         and any(
-            mode in {"semantic", "hybrid"}
-            for mode in tuple(args.code_search_mode or ("hybrid",))
+            mode in {"semantic", "hybrid"} for mode in tuple(args.code_search_mode or ("hybrid",))
         )
     )
     if semantic_actions > 1:
@@ -263,25 +253,19 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         or args.semantic_plan in {"text", "all"}
     )
     if args.semantic_source is not None and not text_scope:
-        raise SystemExit(
-            "--semantic-source requires semantic text/all planning or indexing"
-        )
+        raise SystemExit("--semantic-source requires semantic text/all planning or indexing")
     image_scope = args.semantic_index in {"image", "all"} or args.semantic_plan in {
         "image",
         "all",
     }
     if args.semantic_no_ocr and not image_scope:
-        raise SystemExit(
-            "--semantic-no-ocr requires semantic image/all planning or indexing"
-        )
+        raise SystemExit("--semantic-no-ocr requires semantic image/all planning or indexing")
     if args.semantic_plan_json and args.semantic_plan is None:
         raise SystemExit("--semantic-plan-json requires --semantic-plan")
     if "semantic_plan_max_scratch_bytes" in explicit and args.semantic_plan is None:
         raise SystemExit("--semantic-plan-max-scratch-bytes requires --semantic-plan")
     if args.semantic_include_compact and not args.semantic_prepare_models:
-        raise SystemExit(
-            "--semantic-include-compact requires --semantic-prepare-models"
-        )
+        raise SystemExit("--semantic-include-compact requires --semantic-prepare-models")
     search_only = {
         "semantic_search_mode",
         "semantic_search_limit",
@@ -296,11 +280,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         "semantic_max_new_jobs",
         "semantic_time_budget_seconds",
     }
-    if (
-        index_only.intersection(explicit)
-        and args.semantic_index is None
-        and not integrated_all
-    ):
+    if index_only.intersection(explicit) and args.semantic_index is None and not integrated_all:
         raise SystemExit("semantic index budget options require --semantic-index")
     model_actions = bool(
         args.semantic_prepare_models
@@ -310,9 +290,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
         or code_semantic_search
         or integrated_all
     )
-    if {"semantic_model_cache", "semantic_threads"}.intersection(
-        explicit
-    ) and not model_actions:
+    if {"semantic_model_cache", "semantic_threads"}.intersection(explicit) and not model_actions:
         raise SystemExit(
             "semantic model cache/thread options require prepare, index, search, or classify"
         )
@@ -327,9 +305,7 @@ def validate_semantic_arguments(args: argparse.Namespace) -> None:
             "--semantic-text-profile requires semantic plan, index, search, or classify"
         )
     if semantic_actions and args.apply:
-        raise SystemExit(
-            "semantic direct actions cannot be combined with file-action --apply"
-        )
+        raise SystemExit("semantic direct actions cannot be combined with file-action --apply")
     if semantic_actions and args.route != "none":
         raise SystemExit("semantic direct actions cannot be combined with --route")
 
