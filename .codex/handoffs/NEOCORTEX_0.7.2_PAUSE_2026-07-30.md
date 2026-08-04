@@ -1,7 +1,7 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, corte `relocation-aware publication diff` listo
-> para publicación desde `codex/neocortex-relocation-aware-diff`.
+> Actualizado: 2026-08-03, corte `relocation-aware publication diff` publicado
+> mediante el PR #22.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
