@@ -130,6 +130,7 @@ from .external_supply_chain_audit import (
     INSTALLED_PACKAGE_PROVIDER_SCHEMA,
     PIP_AUDIT_PROVIDER_ID,
     PIP_AUDIT_PROVIDER_SCHEMA,
+    PIP_AUDIT_LIMITATIONS,
     PIP_AUDIT_SERVICE,
     InstalledPackageInventoryExecution,
     PipAuditExecution,
@@ -2441,12 +2442,7 @@ class PipAuditKnownVulnerabilitiesProvider:
                 started_ns=started_ns,
             )
         signature = self.baseline_input_signature(())
-        limitations = (
-            "known_vulnerability_feed_is_a_point_in_time_snapshot",
-            "absence_of_a_report_is_not_proof_of_security",
-            "package_reachability_and_runtime_exposure_are_not_assessed",
-            "advisory_only_no_fix_or_mutation_authority",
-        )
+        limitations = PIP_AUDIT_LIMITATIONS
         if baseline is not None and baseline.input_signature == signature:
             replay = _exact_replay(
                 self.descriptor,

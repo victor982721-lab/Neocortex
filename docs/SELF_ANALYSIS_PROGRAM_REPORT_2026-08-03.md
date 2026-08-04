@@ -34,11 +34,35 @@ Los schemas públicos finales son:
 
 - `neocortex.code-status/schema-v4`;
 - `neocortex.code-review/v10`, compatible con v2-v9;
-- `neocortex.code-publication-diff/v8`, compatible con v1-v7;
+- `neocortex.code-publication-diff/v9`, compatible con v1-v8 y con
+  relocalizaciones tipadas separadas de findings añadidos/resueltos;
 - `neocortex.code-analysis-query/v1`;
 - `neocortex.code-architecture-analysis/v2`;
 - `neocortex.code-engineering-analytics/v1`;
 - los schemas v1 propios de cada proveedor externo.
+
+## Corte posterior: relocations tipadas y robustez de pip-audit
+
+El primer work package posterior al programa elimina churn falso del diff sin
+debilitar sus gates. `publication-diff/v9` empareja por multiplicidad findings
+Mypy/Pyright que conservan evidencia semántica exacta y sólo cambian de rango;
+publica IDs y posiciones antes/después como `relocated`. Los cambios reales de
+mensaje o metadata siguen apareciendo como `added/resolved`.
+
+La aceptación instalada final contra rc22 obtuvo:
+
+- Mypy: 424 comunes, 19 relocalizados, 0 añadidos y 6 resueltos;
+- Pyright: 725 comunes, 18 relocalizados, 0 añadidos y 8 resueltos;
+- query real: 37 registros de relocation, sin truncación;
+- replay: 592/592 hits, 0 bytes Code, 12 proveedores desde caché y 0 errores;
+- los 13 proveedores de `trusted-static` en estado `ready`.
+
+La misma aceptación reveló que pip-audit 2.10.1 puede repetir un advisory en su
+JSON. El productor agrupa ahora por ID case-insensitive y une aliases y versiones
+de fix con límites deterministas. No corrige paquetes ni adquiere autoridad de
+mutación. El wheel aceptado mide 1 593 465 bytes, contiene 298 miembros y tiene
+SHA-256
+`95EDEBFD8014B1F080A6D787FDA21656668E6AB7BC944991BC68507F28A14597`.
 
 ## Experiencia pública final
 

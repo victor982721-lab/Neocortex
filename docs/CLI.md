@@ -271,12 +271,14 @@ incompatible devuelve `2` sin crear estado.
 `--code-publication-diff BASELINE_STATE` compara ese baseline con el owner Code
 de `--state-directory`. Es estrictamente read-only y falla cerrado si falta un
 run completado, el schema no coincide o existe cualquier sidecar SQLite. El
-envelope `neocortex.code-publication-diff/v8`, compatible con v1-v7, informa
+envelope `neocortex.code-publication-diff/v9`, compatible con v1-v8, informa
 calls comunes y exclusivas, resoluciones nuevas/corregidas/perdidas, cambios de hotspots y el
 delta meramente descriptivo de `probable_dead`. También compara por separado
 los proveedores cuyas firmas coinciden, informa findings añadidos/resueltos,
 gate y veredicto agregado; los restantes quedan `not_evaluated` con su
-limitación. Cuando la arquitectura es comparable añade deltas por módulo,
+limitación. En Mypy/Pyright clasifica como `relocated` únicamente el mismo
+finding semántico en la misma ruta con otro rango, publica ejemplos con ambas
+posiciones y no lo convierte en regresión. Cuando la arquitectura es comparable añade deltas por módulo,
 imports, SCC/ciclos, contratos y complejidad desplazada. También compara líneas
 y ramas de Coverage cuando suite, alcance de medición, configuración y versiones
 son equivalentes; en cualquier otro caso publica `not_evaluated`. Nunca aplica

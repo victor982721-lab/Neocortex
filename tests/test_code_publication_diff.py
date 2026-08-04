@@ -30,6 +30,8 @@ from _04_Nucleo_Operativo.code_publication_diff import (
     _architecture_delta,
     _architecture_module_deltas,
     _engineering_delta,
+    _provider_deltas,
+    _provider_verdict,
     _unused_delta,
     compare_code_publications,
 )
@@ -39,12 +41,74 @@ from _04_Nucleo_Operativo.code_schema import (
     remove_checkpointed_code_sidecars,
 )
 from _04_Nucleo_Operativo.code_state import CodeState
+from _04_Nucleo_Operativo.external_evidence_models import (
+    ExternalProviderFinding,
+    external_finding_identity,
+)
 from tests.test_code_review import _analysis, _source_range
 from tests.test_external_provider_platform import _run as _run_provider_publication
 from tests.test_external_provider_platform import _tree as _provider_source_tree
 
 
 PROCESSING_SIGNATURE = "code-publication-diff-fixture-v1"
+TYPE_PROVIDER_ID = "mypy-trusted-project"
+
+
+def _typed_finding(
+    line: int,
+    *,
+    message: str = "Incompatible return value type",
+) -> ExternalProviderFinding:
+    identity = external_finding_identity(
+        TYPE_PROVIDER_ID,
+        relative_path="pkg/checks.py",
+        category="typing",
+        code="return-value",
+        message=message,
+        start_line=line,
+        start_column=4,
+        end_line=line,
+        end_column=12,
+    )
+    return ExternalProviderFinding(
+        identity,
+        line,
+        "pkg/checks.py",
+        "typing",
+        "return-value",
+        "error",
+        message,
+        True,
+        1.0,
+        None,
+        "advisory",
+        line,
+        4,
+        line,
+        12,
+        metadata={"location_precision": "range", "reported_severity": "error"},
+    )
+
+
+def _typed_publication(*findings: ExternalProviderFinding) -> SimpleNamespace:
+    provider = SimpleNamespace(
+        provider_id=TYPE_PROVIDER_ID,
+        status="ready",
+        reason=None,
+        profile="trusted-static",
+        provider_schema="neocortex.mypy-trusted-project/v1",
+        tool_name="mypy",
+        tool_version="2.1.0",
+        comparability_signature="mypy-comparable-v1",
+    )
+    return SimpleNamespace(
+        external_evidence_suite=SimpleNamespace(providers=(provider,)),
+        provider_finding_ids={
+            TYPE_PROVIDER_ID: frozenset(item.portable_finding_id for item in findings)
+        },
+        provider_findings={TYPE_PROVIDER_ID: findings},
+        external_diagnostic_ids=frozenset(),
+    )
 
 
 def _unused_candidate(candidate_id: str, state: str) -> SimpleNamespace:
@@ -73,6 +137,51 @@ def _unused_analysis(
             SimpleNamespace(gate="holdout_probable_unused_precision", status="passed"),
         ),
     )
+
+
+def test_typed_provider_diff_classifies_relocations_without_false_churn() -> None:
+    baseline = _typed_publication(
+        _typed_finding(10),
+        _typed_finding(20),
+        _typed_finding(30),
+    )
+    current = _typed_publication(
+        _typed_finding(12),
+        _typed_finding(22),
+        _typed_finding(30),
+    )
+
+    deltas = _provider_deltas(baseline, current)  # type: ignore[arg-type]
+
+    assert len(deltas) == 1
+    delta = deltas[0]
+    assert delta.common == 1
+    assert delta.relocated == 2
+    assert delta.added == 0
+    assert delta.resolved == 0
+    assert delta.gate == "passed"
+    assert _provider_verdict(deltas) == "equivalent_under_observed_metrics"
+    assert [item.baseline_start_line for item in delta.relocation_examples] == [10, 20]
+    assert [item.current_start_line for item in delta.relocation_examples] == [12, 22]
+    assert {item.path for item in delta.relocation_examples} == {"pkg/checks.py"}
+    assert {item.message for item in delta.relocation_examples} == {
+        "Incompatible return value type"
+    }
+
+
+def test_typed_provider_diff_does_not_call_a_message_change_a_relocation() -> None:
+    baseline = _typed_publication(_typed_finding(10, message="Expected str"))
+    current = _typed_publication(_typed_finding(12, message="Expected bytes"))
+
+    deltas = _provider_deltas(baseline, current)  # type: ignore[arg-type]
+
+    delta = deltas[0]
+    assert delta.relocated == 0
+    assert delta.relocation_examples == ()
+    assert delta.added == 1
+    assert delta.resolved == 1
+    assert delta.gate == "failed"
+    assert _provider_verdict(deltas) == "mixed"
 
 
 def test_unused_diff_compares_portable_identity_and_state_without_a_magic_score() -> None:
@@ -483,9 +592,12 @@ def test_publication_diff_of_the_same_state_is_stable_and_empty(
     assert result.engineering_analytics.baseline_mutation_score is None
     assert result.engineering_analytics.current_mutation_score is None
     payload = result.as_payload()
-    assert payload["schema"] == "neocortex.code-publication-diff/v8"
-    assert "neocortex.code-publication-diff/v7" in payload["compatible_schemas"]
-    assert "neocortex.code-publication-diff/v5" in payload["compatible_schemas"]
+    assert payload["schema"] == "neocortex.code-publication-diff/v9"
+    compatible_schemas = payload["compatible_schemas"]
+    assert isinstance(compatible_schemas, list)
+    assert "neocortex.code-publication-diff/v8" in compatible_schemas
+    assert "neocortex.code-publication-diff/v7" in compatible_schemas
+    assert "neocortex.code-publication-diff/v5" in compatible_schemas
     assert isinstance(payload["engineering_analytics"], dict)
     coverage_payload = payload["test_coverage"]
     assert isinstance(coverage_payload, dict)

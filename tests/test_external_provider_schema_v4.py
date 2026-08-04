@@ -33,6 +33,7 @@ from _04_Nucleo_Operativo.external_evidence_store import (
     read_external_evidence_suite,
     read_external_provider_baselines,
     read_external_provider_evidence,
+    read_external_provider_findings,
     read_external_provider_finding_ids,
 )
 
@@ -409,6 +410,16 @@ def test_legacy_pyright_stage_paths_read_as_one_portable_identity(tmp_path: Path
         )
         first_ids = read_external_provider_finding_ids(connection, 1)
         second_ids = read_external_provider_finding_ids(connection, 2)
+        first_findings = read_external_provider_findings(
+            connection,
+            1,
+            provider_ids=("pyright-trusted-project",),
+        )
+        second_findings = read_external_provider_findings(
+            connection,
+            2,
+            provider_ids=("pyright-trusted-project",),
+        )
         exact, comparable = read_external_provider_baselines(
             connection,
             provider_id="pyright-trusted-project",
@@ -438,6 +449,12 @@ def test_legacy_pyright_stage_paths_read_as_one_portable_identity(tmp_path: Path
     assert raw_ids[0] != raw_ids[1]
     assert first_ids["pyright-trusted-project"] == frozenset({expected})
     assert second_ids["pyright-trusted-project"] == frozenset({expected})
+    assert first_findings["pyright-trusted-project"][0].portable_finding_id == expected
+    assert second_findings["pyright-trusted-project"][0].portable_finding_id == expected
+    assert first_findings["pyright-trusted-project"][0].message == (
+        second_findings["pyright-trusted-project"][0].message
+    )
+    assert "<project>" in first_findings["pyright-trusted-project"][0].message
     assert exact is not None
     assert comparable is not None
     assert exact.portable_finding_ids == comparable.portable_finding_ids == (expected,)

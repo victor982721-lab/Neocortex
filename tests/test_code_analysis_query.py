@@ -117,16 +117,80 @@ def test_diff_query_exposes_provider_category_status_and_delta_filters() -> None
     assert category["matches"][0]["record_type"] == "supply_chain_category_delta"
 
 
+def test_diff_query_exposes_typed_relocation_with_exact_positions() -> None:
+    payload = {
+        "kind": "code-publication-diff",
+        "schema": "neocortex.code-publication-diff/v9",
+        "status": "ready",
+        "providers": [
+            {
+                "provider_id": "mypy-trusted-project",
+                "status": "ready",
+                "common": 3,
+                "added": 0,
+                "resolved": 0,
+                "relocated": 1,
+                "gate": "passed",
+                "relocation_examples": [
+                    {
+                        "baseline_finding_id": "finding-before",
+                        "current_finding_id": "finding-after",
+                        "path": "pkg/checks.py",
+                        "category": "typing",
+                        "code": "return-value",
+                        "severity": "error",
+                        "message": "Expected str",
+                        "baseline_start_line": 10,
+                        "baseline_start_column": 4,
+                        "baseline_end_line": 10,
+                        "baseline_end_column": 12,
+                        "current_start_line": 12,
+                        "current_start_column": 4,
+                        "current_end_line": 12,
+                        "current_end_column": 12,
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = query_code_analysis(
+        payload,
+        CodeAnalysisQuery(
+            surface="diff",
+            providers=("mypy-trusted-project",),
+            categories=("typing",),
+            modules=("pkg.checks",),
+            deltas=("relocated",),
+        ),
+    )
+
+    assert result["counts"]["matched"] == 1
+    match = result["matches"][0]
+    assert match["record_type"] == "provider_finding_relocation"
+    facts = match["facts"]
+    assert isinstance(facts, dict)
+    assert facts["message"] == "Expected str"
+    assert facts["baseline_start_line"] == 10
+    assert facts["current_start_line"] == 12
+
+
 def test_limit_is_hard_and_reports_honest_truncation() -> None:
     result = query_code_analysis(
         _surface("status"),
         CodeAnalysisQuery(surface="status", limit=1),
     )
 
-    assert result["counts"]["available"] > 1
-    assert result["counts"]["matched"] == result["counts"]["available"]
-    assert result["counts"]["returned"] == len(result["matches"]) == 1
-    assert result["counts"]["truncated"] is True
+    counts = result["counts"]
+    matches = result["matches"]
+    assert isinstance(counts, dict)
+    assert isinstance(matches, list)
+    available = counts["available"]
+    assert isinstance(available, int)
+    assert available > 1
+    assert counts["matched"] == available
+    assert counts["returned"] == len(matches) == 1
+    assert counts["truncated"] is True
 
 
 def test_normalization_is_idempotent_and_filtering_is_monotonic() -> None:
@@ -162,7 +226,15 @@ def test_normalization_is_idempotent_and_filtering_is_monotonic() -> None:
         first = query_code_analysis(payload, query)
         second = query_code_analysis(payload, query)
         assert first == second
-        assert first["counts"]["matched"] <= unfiltered["counts"]["matched"]
+        first_counts = first["counts"]
+        unfiltered_counts = unfiltered["counts"]
+        assert isinstance(first_counts, dict)
+        assert isinstance(unfiltered_counts, dict)
+        first_matched = first_counts["matched"]
+        unfiltered_matched = unfiltered_counts["matched"]
+        assert isinstance(first_matched, int)
+        assert isinstance(unfiltered_matched, int)
+        assert first_matched <= unfiltered_matched
 
 
 @pytest.mark.parametrize(

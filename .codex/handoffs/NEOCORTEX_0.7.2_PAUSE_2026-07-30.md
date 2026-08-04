@@ -1,64 +1,72 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-03, work package `_normalize` publicado mediante PR #21.
+> Actualizado: 2026-08-03, corte `relocation-aware publication diff` listo
+> para publicación desde `codex/neocortex-relocation-aware-diff`.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-El PR #21, desde `codex/neocortex-normalize-work-package`, cerró el work package
-para `_04_Nucleo_Operativo.external_deep_coverage` /
-`external_deep_coverage._normalize`. El coordinador pasó de complejidad
-cognitiva 124 a 0; el módulo bajó 331→288. El diff elimina exactamente ese
-hotspot, reduce high-complexity 258→257 y long-function 28→27, no añade
-hotspots y aprueba contratos, ciclos y `module_complexity_not_displaced`.
+El corte publica `neocortex.code-publication-diff/v9`, compatible con v1-v8, y
+clasifica como `relocated` un finding Mypy/Pyright cuyo path, categoría, código,
+severidad, mensaje normalizado y metadata permanecen exactos pero cuya posición
+cambió. Conserva multiplicidad, IDs antes/después y rangos completos; resta las
+parejas relocalizadas de `added/resolved` y no falla el gate por desplazamiento.
+Un cambio real de mensaje sigue produciendo un añadido y un resuelto y falla el
+gate. `--code-query diff --code-query-delta relocated` expone cada ejemplo con
+sus posiciones exactas.
 
-El corte también corrigió un defecto encontrado por el propio autoanálisis:
-Pyright incluía el scratch `neocortex-pyright-trusted-project-*` en mensajes e
-identidades que debían ser portátiles. El productor ahora publica `<project>`
-y la lectura normaliza publicaciones antiguas sin migrarlas. Dos regresiones
-prueban productor, baseline y diff; la barrera integrada de plataforma,
-persistencia v4 y publication diff aprobó `36 passed`. La barrera previa del
-objetivo aprobó `8 passed` antes y después, y la integración afectada obtuvo
-`121 passed, 1 skipped`; Ruff/format y Mypy focal están limpios.
+El diff instalado final contra rc22 está `ready`, schema v9, digest
+`170aa7010b318839f26bdcad549c940f` y 450 141 bytes. Mypy conserva 424 findings
+exactos, clasifica 19 relocalizados, añade 0 y resuelve 6; Pyright conserva 725,
+clasifica 18, añade 0 y resuelve 8. Ambos gates están `passed`. Ruff trusted,
+Ruff protected, Semgrep, arquitectura y supply chain no presentan regresiones.
+El veredicto agregado permanece `mixed` por 45 candidatos Vulture añadidos y 37
+resueltos; no se presenta esa evidencia advisory como defecto ni como autoridad
+de borrado. Coverage/Mutation no son comparables porque la publicación actual
+es `trusted-static`. Calls conserva 0 corregidas y 0 perdidas; hotspots tiene 0
+añadidos, 0 removidos y 3 evidencias cambiadas.
 
-El carril CI `standard` instala ahora Pillow 12.x bajo `constraints.txt`, dirige
-el temporal de Python al scratch de GitHub y prueba el modelo NudeNet mediante
-un artefacto hermético en vez de depender del extra opcional instalado. La
-regresión afectada aprobó `12 passed`, el workflow conserva YAML válido y el
-carril no se amplió a NudeNet/ONNX ni a la instalación completa.
-
-El wheel final tiene 1 591 588 bytes, 298 miembros, `ZipFile.testzip()` y
-`pip check` limpios, y SHA-256
-`FC86A4CC777ECED846EFC6B8BE8601442594A2183D178B9605CCC8097739B300`.
-Los cuatro módulos decisivos son byte-idénticos entre fuente, wheel e
-instalación aislada. No se promovió el launcher estable.
-
-La corrida instalada 19 inventarió 605 archivos y evaluó 592 candidatos:
-procesó 1, reutilizó 591, publicó 18 480 símbolos, 98 750 referencias, 513
-diagnósticos Code y 1 580 externos, sin errores. Duró 295.628 s; la ruta
-externa ocupó 254.112 s. El replay 20 terminó en 31.459 s con 592/592 hits,
-cero bytes y cero tiempo de read/analyze/persist/graph, catorce proveedores
-desde caché, 2.848 s externos y cero errores.
-
-Status, review y diff instalados terminaron en 33.717, 41.260 y 71.102 s,
-respectivamente, con JSON válido, stderr vacío y sin sidecars. Review está
-`ready`, digest `87df971ce74328f91c7adf74a7ac1ef5`, y publica como siguiente paquete
-`_04_Nucleo_Operativo.cli_validation` /
+La consulta pública real devolvió 39/39 registros sin truncar: dos deltas de
+proveedor y 37 `provider_finding_relocation` —19 Mypy y 18 Pyright—. Status
+final registra la corrida 7 `completed`, 592/592 cache hits, 0 procesados, 0
+errores y los 13 proveedores `ready`. Review v10 está `ready` y publica un único
+paquete, `code-review-work-package-v1:xxh3_128:2588847e578d56daf97138187d173cdd`,
+para `_04_Nucleo_Operativo.cli_validation` /
 `cli_validation.apply_self_analysis_preset`.
 
-El diff v8 contra Hito 7 está `ready`, digest
-`60b197dce0f0cb7875ecd2a0a1658efd`, con veredicto `mixed` únicamente porque
-las identidades exactas cuentan 3+3 relocalizaciones Mypy y 4+4 Pyright. Los
-totales permanecen 449/449 y 751/751; una comparación SQLite `immutable`
-normalizada obtuvo 198/198 y 366/366 grupos semánticos con cero diferencias.
-Por tanto no hay finding tipado semántico nuevo, pero publication diff todavía
-no expresa `relocated` como delta separado. Coverage y Mutation no son
-comparables porque cambió su alcance medido; el gate actual de mutación está
-`passed`. Supply chain, Semgrep, dependencias, vulnerabilidades, integridad y
-licencias conservan deltas cero; sus fallos preexistentes no son atribuibles a
-este refactor, que no cambió declaraciones ni paquetes.
+El replay exacto final terminó en 14.235 s: 592/592 hits, 0 bytes Code, 0 ms de
+read/analyze/persist/graph, 12 publicaciones externas desde caché, 3.019 s
+externos y 0 errores. `installed-package-inventory` conserva su reverificación
+local; ninguna herramienta de análisis de contenido volvió a ejecutarse. Una
+corrida anterior reintentó únicamente Semgrep después de un timeout transitorio
+y dejó el proveedor `ready` antes del replay final.
+
+El autoanálisis real encontró y cerró dos fallos de la ruta canónica. pip-audit
+2.10.1 puede repetir el mismo advisory en su JSON; el productor ahora agrupa por
+ID case-insensitive y une aliases/fix versions con límites deterministas en vez
+de abortar, y productor/adapter comparten una sola constante de limitaciones.
+Además, cuatro errores tipados introducidos por las regresiones nuevas quedaron
+corregidos; el diff final no añade findings Mypy ni Pyright.
+
+El wheel candidato tiene 1 593 465 bytes, 298 miembros, ZIP y `pip check`
+limpios, SHA-256
+`95EDEBFD8014B1F080A6D787FDA21656668E6AB7BC944991BC68507F28A14597`.
+Los seis módulos de producción decisivos son byte-idénticos entre fuente, wheel
+e instalación aislada. Las correcciones posteriores sólo estrechan tipos en
+tests no empaquetados. Las barreras afectadas aprobaron 78, 12, 40 y 14 pruebas;
+Ruff/format y Mypy focal de producción están limpios.
+
+La línea base comparable está en
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-normalize-work-package-20260803-rc1\pilot-state-rc1`,
+pero fue producida por el Python de
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-hito7-integration-20260803-rc1\acceptance-venv`.
+Esa procedencia es necesaria porque la firma de entorno distingue el ejecutable
+físico; usar otro venv hace que el diff se abstenga correctamente. El baseline
+original permaneció intacto salvo dos sidecars vacíos creados por un diagnóstico
+read-only y retirados tras verificar WAL=0, SHM=32 KiB y ausencia de procesos.
+No se tocó corpus ni estado durable vivo y no se promovió el launcher estable.
 
 Los Hitos 1 a 7 están publicados mediante los PR #14 a #20. Como línea base del
 corte, el candidato
@@ -1353,16 +1361,17 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Evitar el falso churn antes del siguiente refactor.** Extender publication
-   diff para clasificar findings tipados relocalizados sin perder ruta, mensaje,
-   multiplicidad ni posición exacta. Las relocalizaciones no deben disparar
-   `added/resolved` ni un veredicto `mixed`; los cambios semánticos reales deben
-   seguir fallando el gate.
-2. **Usar el siguiente work package publicado.** Caracterizar y reducir
+1. **Usar el siguiente work package publicado.** Caracterizar y reducir
    `cli_validation.apply_self_analysis_preset` con sus pruebas CLI/self-analysis
    existentes. El selector deep actual protege Coverage, no ese objetivo: elegir
    primero los node ids reales que lo ejercitan y conservar preset, argv y
    compatibilidad pública exactos.
+2. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
+   Diff ya separa relocations, pero los findings realmente `added/resolved` aún
+   exponen conteos y no ejemplos tipados públicos. Esta aceptación necesitó una
+   lectura diagnóstica interna para localizar cuatro additions; si el siguiente
+   paquete falla ese gate, añadir ejemplos acotados y consultables antes de
+   seguir corrigiendo código.
 3. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
    34-71 s; una proyección publicada de consultas es trabajo futuro justificable,
    pero no invalida la entrega funcional actual.
