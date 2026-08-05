@@ -1,53 +1,81 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-04, inventario normal acotado a contenido útil y
-> launcher reparado promovido.
+> Actualizado: 2026-08-05, salida real 74 diagnosticada y corrección fuente validada.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
 
-El inventario normal excluye antes de leer contenido los árboles internos de
-Neocortex (`Laboratory`, `Lab`, `Checkpoints`, `Backups` y
-`external_backups`), metadatos VCS, entornos Python, `site-packages`,
-`node_modules`, `__pycache__`, cachés de herramientas y archivos `.pyc`/`.pyo`.
-Estas exclusiones aplican globalmente aunque aparezcan fuera de los proyectos;
-`build` y `dist` permanecen elegibles para no ocultar contenido propio por un
-nombre genérico.
+La corrida real 74 terminó con exit `2` después de 58 minutos. Code no fue el
+fallo: reutilizó 170/170 archivos, publicó 4 933 símbolos y 31 029 referencias
+sin errores. El bloqueo provenía de `action_errors=13`: cuatro paquetes
+históricos dentro de árboles `dist` no admiten lectura ni consulta de ACL, y la
+búsqueda final de directorios vacíos entraba en subárboles que el inventario ya
+había excluido, acumulando otros nueve errores sin ruta diagnóstica. Semantic no
+llegó a arrancar porque el contrato integrado se abstiene ante errores de
+acciones u organización.
+
+La fuente ahora excluye por ruta exacta `build`, `dist` y `wheelhouse` sólo bajo
+Neocortex, el framework EPS canónico y la referencia EPS histórica en OneDrive;
+los mismos nombres siguen siendo elegibles en el resto del corpus. La fase de
+acciones recibe y reutiliza la política compilada completa del inventario, por
+lo que no vuelve a atravesar dependencias, temporales, rutas protegidas ni esos
+artefactos reconstruibles.
+
+Los 26 errores de perfil PDF tampoco eran 26 documentos nuevos: eran una cola
+persistente con evidencia de página parcial y dos documentos de 5 033 páginas
+cuya extracción seguía en `PdfDocumentTimeout`. El perfilado ahora difiere esos
+documentos hasta completar extracción, ordena los candidatos por tamaño,
+conserva lotes de página ya publicados, procesa sólo páginas faltantes,
+reconstruye el perfil documental desde SQLite y persiste el tipo/mensaje acotado
+de cualquier fallo en `document_warnings`/`profile-error`.
+
+La validación aislada aprobó 97 pruebas integradas y 14/14 acciones focales
+(se excluyó únicamente la regresión histórica de 258 duplicados, que consume
+varios minutos), además de dos regresiones de ruta PDF, Ruff/format, compileall,
+`git diff --check` y Mypy focal de siete módulos. Mypy transitivo conserva nueve
+deudas anteriores fuera de este cambio. No se reprocesó el corpus ni se modificó
+el estado durable.
+
+El inventario normal v3 excluye antes de leer contenido los árboles internos de
+Neocortex (`Laboratory`, `Laboratories`, `TestTemp`, `Lab`, `Checkpoints`,
+`Backups` y `external_backups`), metadatos VCS, entornos Python,
+`site-packages`, `node_modules`, `__pycache__`, `.CDX`, temporales reconocibles
+de `pytest`/`tmp`/`basetemp`/`inline-snapshot`, cachés de herramientas y archivos
+`.pyc`/`.pyo`. `build` y `dist` permanecen elegibles para no ocultar contenido
+propio por un nombre genérico.
 
 Una interrupción conserva el último lote inventariado y finaliza la generación
-como `partial`. Al comenzar la siguiente corrida, cualquier generación antigua
-que haya quedado `building` se recupera de forma idempotente como `partial` y
-se invalida su checkpoint antes de abrir una generación nueva. Por ello la
-corrida 27 cancelada no fue editada manualmente ni requirió respaldo de SQLite:
-el próximo `Neocortex --all` realizará la recuperación automáticamente.
+como `partial`. El arranque real siguiente recuperó automáticamente la corrida
+27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
+`partial` con 52 errores de acceso y no fue publicada. El diagnóstico posterior
+aisló laboratorios y temporales internos omitidos por v2. Con la política v3, el
+recorrido de metadatos instalado completó 119 198 entradas en 4.72 s con cero
+errores, sin leer contenido ni escribir estado.
 
-La selección pública de Code usa ahora `--code-scope projects` por defecto.
-Descubre límites de proyecto mediante manifiestos fuertes y, antes de leer
-bytes, excluye archivos fuera de esos límites, dependencias instaladas,
-directorios de build/generados y cachés. `--code-scope broad` conserva la
-selección histórica amplia únicamente como override deliberado; `--select-path`
-sigue admitiendo una ruta exacta y `--self-analysis` conserva su raíz explícita.
+La selección pública de Code usa ahora `--code-scope projects` por defecto y
+una allowlist exacta de dos raíces: `C:\Users\Victor\Neocortex\Repository` y
+`C:\Users\Victor\Frameworks\Generador de bitácoras EPS`. Cuando existe esa
+allowlist, los manifiestos de cualquier otro árbol no pueden ampliar el límite.
+Antes de leer bytes se excluyen archivos externos, laboratorios, dependencias,
+generados y cachés. `--code-project-root` reemplaza explícitamente la allowlist;
+`--code-scope broad` conserva la selección histórica amplia sólo como override
+deliberado; `--select-path` sigue admitiendo una ruta exacta y `--self-analysis`
+conserva su raíz explícita.
 
-El wheel vigente está en
-`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-inventory-exclusions-20260804-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
-Tiene 1 598 994 bytes, SHA-256
-`26EDAB8A9590D79F97076F4A50B6A227FD29D0AA4CA487F8B6C5609AA3D9E52D` y
-xxh3_128 `81a0fc635452a328bce44744467cd645`. Los cuatro módulos de producción
-de esta reparación son byte-idénticos entre fuente e instalación; `pip check`
-está limpio, 109 pruebas integradas aprobaron y Ruff quedó limpio. La aceptación
-instalada inventarió 14 de 30 archivos: omitió los 16 generados o dependencias,
-tuvo cero errores y el replay exacto reutilizó los 14 resultados.
-
-El launcher estable fue promovido atómicamente al runtime
-`0.7.2-wheel-xxh3_128-81a0fc635452a328bce44744467cd645`; su SHA-256 vigente
-es `08CEC462AD592629C495E38C2FF2EE7E732373DED59AE223452137355A7267EF`.
-El recibo encadenado es
-`e918e0ad5f65d3968467217a9ac0faf94486de39b4c5d8ce9968b7321fed07c2.result.json`
-y el launcher anterior quedó respaldado por su hash. Desde una ruta externa al
-repositorio, `Neocortex --version` devuelve 0.7.2 y
-`Neocortex doctor capabilities --json` informa 8/8 capacidades disponibles.
+El wheel promovido está en
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-code-allowlist-20260804-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 600 082 bytes, SHA-256
+`b3435ce8090147af52a48a89f7be128d38ed7a7052f12079b2dbdc0f6a8a8afd` y
+xxh3_128 `c6dc77fbd570195ed7c736d8f8ddaef4`. El runtime versionado es
+`0.7.2-wheel-xxh3_128-c6dc77fbd570195ed7c736d8f8ddaef4`; `pip check` quedó
+limpio, 23 pruebas focales aprobaron, Ruff quedó limpio y el doctor instalado
+informa 8/8 capacidades. El launcher estable fue promovido mediante la
+transición NTFS con rollback y quedó en SHA-256
+`021a982f58ee5e0156d1cd3d8589541bff80c99d6a8e3d6edbb9b3378af56619`.
+El recibo es
+`c4f2e555a7eeeaccb4f0f7da056b20c641631ddb048d1a11595db67b215337a6.result.json`.
 
 La aceptación instalada inventarió una muestra aislada de 20 archivos y
 detectó 10 candidatos propios dentro de dos proyectos. Omitió 2 archivos fuera
@@ -1445,29 +1473,32 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Ejecutar la corrida real sólo cuando Victor lo decida.** Iniciar el runtime
-   instalado vigente con `Neocortex --all`, sin `--apply`, sobre la raíz y estado
-   canónicos. No se inició ninguna corrida viva en este corte. El arranque
-   recuperará como `partial` la corrida de inventario 27 que quedó `building`;
-   Code seleccionará proyectos por defecto y Semantic implícito priorizará
-   documentos/audio. No reanudar deliberadamente la generación Code amplia
-   anterior.
-2. **Consumir la publicación, no sólo observar progreso.** Al terminar, comprobar
+1. **Construir y validar un candidato desde este commit.** Instalar el wheel en
+   un runtime aislado, ejecutar versión, doctor y un slice PDF sintético con
+   replay; no usar estado ni corpus vivos.
+2. **Promover sólo tras la aceptación instalada.** Reemplazar atómicamente el
+   launcher estable mediante la transición NTFS y verificar versión,
+   capacidades, hash y recibo; no ejecutar `--all` durante la promoción.
+3. **Repetir la corrida real sólo cuando Victor lo decida.** Ejecutar
+   `Neocortex --all`, sin `--apply`, sobre la raíz y estado canónicos. Las
+   corridas 27 y 28 ya están `partial`; Code seleccionará proyectos por defecto
+   y Semantic implícito priorizará documentos/audio.
+4. **Consumir la publicación, no sólo observar progreso.** Al terminar, comprobar
    `--semantic-status` y consultas representativas en modo textual; registrar
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
-3. **Retomar el siguiente work package publicado.** Caracterizar y reducir
+5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
    `cli_validation.apply_self_analysis_preset` con sus pruebas CLI/self-analysis
    existentes. El selector deep actual protege Coverage, no ese objetivo: elegir
    primero los node ids reales que lo ejercitan y conservar preset, argv y
    compatibilidad pública exactos.
-4. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
+6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
    Diff ya separa relocations, pero los findings realmente `added/resolved` aún
    exponen conteos y no ejemplos tipados públicos. Esta aceptación necesitó una
    lectura diagnóstica interna para localizar cuatro additions; si el siguiente
    paquete falla ese gate, añadir ejemplos acotados y consultables antes de
    seguir corrigiendo código.
-5. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
+7. **Tratar la latencia sólo como bloqueo medido.** Status/review/diff tardan
    34-71 s; una proyección publicada de consultas es trabajo futuro justificable,
    pero no invalida la entrega funcional actual.
 

@@ -9,6 +9,7 @@ from pathlib import Path
 # region [01] Per-user paths
 
 APPLICATION_DIRECTORY_NAME = "Neocortex"
+EPS_FRAMEWORK_DIRECTORY_NAME = "Generador de bitácoras EPS"
 
 
 def local_application_data_directory() -> Path:
@@ -32,6 +33,28 @@ def default_state_directory() -> Path:
     return local_application_data_directory() / "state"
 
 
+def default_code_project_roots() -> tuple[Path, ...]:
+    """Return the exact personal project allowlist used by integrated Code."""
+
+    return (
+        source_repository_directory(),
+        Path.home() / "Frameworks" / EPS_FRAMEWORK_DIRECTORY_NAME,
+    )
+
+
+def default_generated_artifact_directories() -> tuple[Path, ...]:
+    """Return project build trees that are never corpus source material."""
+
+    projects = (
+        source_repository_directory(),
+        Path.home() / "Frameworks" / EPS_FRAMEWORK_DIRECTORY_NAME,
+        Path.home() / "OneDrive" / "Documentos" / "Bitácoras EPS",
+    )
+    return tuple(
+        project / directory for project in projects for directory in ("build", "dist", "wheelhouse")
+    )
+
+
 def default_ui_settings_path() -> Path:
     return local_application_data_directory() / "ui.ini"
 
@@ -45,11 +68,7 @@ def source_repository_directory() -> Path:
 def program_installation_directory() -> Path:
     """Return the per-user root for immutable, versioned installations."""
 
-    return (
-        local_application_data_directory().parent
-        / "Programs"
-        / APPLICATION_DIRECTORY_NAME
-    )
+    return local_application_data_directory().parent / "Programs" / APPLICATION_DIRECTORY_NAME
 
 
 def self_analysis_data_directory() -> Path:

@@ -253,6 +253,14 @@ def test_boundary_compiles_restricted_codex_allowlist_and_v2_signature(
         profile / "project" / "node_modules",
         file_attributes=0,
     )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "tmp1mfujc__",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "title-review-pytest",
+        file_attributes=0,
+    )
     assert boundary.exclusion_policy.excludes_file(profile / "project" / "cached.pyc")
     assert not boundary.exclusion_policy.excludes_directory(
         profile / "project" / "build",
@@ -280,6 +288,10 @@ def test_normal_inventory_omits_generated_trees_but_keeps_ambiguous_names(
         "web/node_modules/dependency.js",
         "source/__pycache__/cached.pyc",
         "source/orphan.pyc",
+        ".CDX/reconstruction.xml",
+        "tests/tmp1mfujc__/cache.bin",
+        "tests/title-review-pytest/cache.bin",
+        "tests/inline-snapshot-abcd/cache.bin",
     ):
         target = root / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)

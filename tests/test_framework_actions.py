@@ -14,7 +14,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from _02_Deduplicacion import DedupIndex, DedupPlanner
+from _02_Deduplicacion import DedupIndex, DedupPlanner, InventoryExclusionPolicy
 from _02_Deduplicacion.path_io import native_io_path
 from _04_Nucleo_Operativo.actions import FrameworkActions
 from _04_Nucleo_Operativo.content_types import detect_content_type
@@ -159,9 +159,9 @@ class ActionTests(unittest.TestCase):
                 plan = DedupPlanner(index).plan(scan.scan_id)
                 run_id = begin_signed_normal_run(state, corpus)
                 disappearing.unlink()
-                summary = FrameworkActions(
-                    index, state, run_id, scan.scan_id, apply=False
-                ).execute(plan)
+                summary = FrameworkActions(index, state, run_id, scan.scan_id, apply=False).execute(
+                    plan
+                )
                 failed = state._connection.execute(
                     "SELECT COUNT(*) FROM file_actions WHERE run_id=? AND status='failed'",
                     (run_id,),
@@ -228,9 +228,7 @@ class ActionTests(unittest.TestCase):
                 FrameworkState(_framework_database(base)) as state,
             ):
                 scan = index.scan(corpus)
-                plan = DedupPlanner(index).plan(
-                    scan.scan_id, exact_compare=False, preview_limit=0
-                )
+                plan = DedupPlanner(index).plan(scan.scan_id, exact_compare=False, preview_limit=0)
                 run_id = begin_signed_normal_run(state, corpus)
 
                 with patch("_04_Nucleo_Operativo.actions.send2trash") as recycle:
@@ -283,6 +281,36 @@ class ActionTests(unittest.TestCase):
             self.assertTrue(eligible.exists())
             self.assertTrue(excluded_leaf.exists())
 
+    def test_empty_directory_cleanup_reuses_named_inventory_exclusions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            corpus = base / "corpus"
+            excluded_leaf = corpus / "node_modules" / "empty-child"
+            eligible = corpus / "eligible-empty"
+            excluded_leaf.mkdir(parents=True)
+            eligible.mkdir(parents=True)
+            policy = InventoryExclusionPolicy.compile(directory_names=("node_modules",))
+            with (
+                DedupIndex(base / "dedup.sqlite3") as index,
+                FrameworkState(_framework_database(base)) as state,
+            ):
+                scan = index.scan(corpus, exclusion_policy=policy)
+                plan = DedupPlanner(index).plan(scan.scan_id)
+                run_id = begin_signed_normal_run(state, corpus)
+                summary = FrameworkActions(
+                    index,
+                    state,
+                    run_id,
+                    scan.scan_id,
+                    apply=False,
+                    exclusion_policy=policy,
+                ).execute(plan)
+
+            self.assertEqual(summary.errors, 0)
+            self.assertEqual(summary.empty_directory_candidates, 1)
+            self.assertTrue(eligible.exists())
+            self.assertTrue(excluded_leaf.exists())
+
     def test_empty_files_without_hash_group_abstain_from_path_trash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -298,9 +326,7 @@ class ActionTests(unittest.TestCase):
                 FrameworkState(_framework_database(base)) as state,
             ):
                 scan = index.scan(corpus)
-                plan = DedupPlanner(index).plan(
-                    scan.scan_id, exact_compare=False, preview_limit=0
-                )
+                plan = DedupPlanner(index).plan(scan.scan_id, exact_compare=False, preview_limit=0)
                 run_id = begin_signed_normal_run(state, corpus)
 
                 with patch("_04_Nucleo_Operativo.actions.send2trash") as recycle:
@@ -332,9 +358,7 @@ class ActionTests(unittest.TestCase):
                 FrameworkState(_framework_database(base)) as state,
             ):
                 scan = index.scan(corpus)
-                plan = DedupPlanner(index).plan(
-                    scan.scan_id, exact_compare=False, preview_limit=0
-                )
+                plan = DedupPlanner(index).plan(scan.scan_id, exact_compare=False, preview_limit=0)
                 run_id = begin_signed_normal_run(state, corpus)
 
                 with patch("_04_Nucleo_Operativo.actions.send2trash") as recycle:
@@ -438,8 +462,7 @@ class ActionTests(unittest.TestCase):
             recycle.assert_not_called()
             with closing(sqlite3.connect(framework_database)) as connection:
                 status, detail = connection.execute(
-                    "SELECT status,detail FROM file_actions "
-                    "WHERE action_type='trash_duplicate'"
+                    "SELECT status,detail FROM file_actions WHERE action_type='trash_duplicate'"
                 ).fetchone()
             self.assertEqual(status, "skipped")
             self.assertIn("protected Windows user-profile state", detail)
@@ -460,9 +483,9 @@ class ActionTests(unittest.TestCase):
                 scan = index.scan(corpus)
                 plan = DedupPlanner(index).plan(scan.scan_id)
                 run_id = begin_signed_normal_run(state, corpus)
-                summary = FrameworkActions(
-                    index, state, run_id, scan.scan_id, apply=True
-                ).execute(plan)
+                summary = FrameworkActions(index, state, run_id, scan.scan_id, apply=True).execute(
+                    plan
+                )
             self.assertEqual(summary.files_renamed, 0)
             self.assertEqual(summary.rename_skips, 1)
             self.assertTrue(source.exists())

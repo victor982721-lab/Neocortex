@@ -149,6 +149,8 @@ def inventory_policy_manifest(
 
     explicit_roots = list(policy.explicit_roots)
     directory_names = sorted(policy.directory_names)
+    directory_prefixes = list(policy.directory_prefixes)
+    directory_fragments = list(policy.directory_fragments)
     file_names = sorted(policy.file_names)
     file_suffixes = list(policy.file_suffixes)
     manifest: dict[str, object] = {
@@ -157,12 +159,16 @@ def inventory_policy_manifest(
         "signature_version": policy.signature_version,
         "explicit_roots": explicit_roots,
         "directory_names": directory_names,
+        "directory_prefixes": directory_prefixes,
+        "directory_fragments": directory_fragments,
         "file_names": file_names,
         "file_suffixes": file_suffixes,
     }
     rebuilt = InventoryExclusionPolicy.compile(
         explicit_roots,
         directory_names=directory_names,
+        directory_prefixes=directory_prefixes,
+        directory_fragments=directory_fragments,
         file_names=file_names,
         file_suffixes=file_suffixes,
     )

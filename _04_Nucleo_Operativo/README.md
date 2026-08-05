@@ -6,7 +6,8 @@ cuando el usuario solicita explícitamente `--apply`. Actualmente:
 1. intenta capturar un cursor USN anterior cuando Windows/NTFS lo ofrece;
 2. inventaría de forma portable el perfil seleccionado, excluyendo AppData,
    estado y árboles internos de Neocortex, metadatos VCS, entornos virtuales,
-   dependencias instaladas, caches/bytecode generados y directorios ocultos;
+   dependencias instaladas, laboratorios, `.CDX`, temporales reconocibles de
+   pruebas, caches/bytecode generados y directorios ocultos;
 3. reduce candidatos de duplicado con `_02_Deduplicacion` y exige comparación
    exacta antes de cualquier acción destructiva;
 4. si USN está disponible, consume su ventana; si no, publica el recorrido
@@ -17,6 +18,14 @@ cuando el usuario solicita explícitamente `--apply`. Actualmente:
 6. valida por firma de contenido las extensiones de formatos conocidos;
 7. conserva el checkpoint reconciliado, el cursor opcional, cada acción y el
    estado en SQLite.
+
+La búsqueda final de directorios vacíos reutiliza la misma política compilada
+del inventario —rutas exactas, nombres, prefijos, fragmentos, atributos y
+restricciones—. No vuelve a entrar en dependencias, temporales o árboles
+protegidos que el inventario ya excluyó. Los árboles reconstruibles `build`,
+`dist` y `wheelhouse` se excluyen únicamente bajo Neocortex, el framework EPS
+canónico y su referencia histórica en OneDrive; esos nombres permanecen
+elegibles en cualquier otro lugar del corpus.
 
 El recorrido completo se usa para crear la primera generación válida, cuando
 USN no existe o no está accesible, y para recuperarse de una discontinuidad o
@@ -340,6 +349,16 @@ Las búsquedas y listados operativos no dependen de esa limpieza: ante una base
 sin sidecars abren una instantánea immutable con cercas de archivo antes y
 después, y ante un writer activo usan SQLite read-only sin borrar, checkpoint o
 crear auxiliares de forma oportunista.
+
+La ruta Code integrada de `Neocortex --all` no autodetecta proyectos por
+`pyproject.toml`, `package.json` u otros marcadores distribuidos en el perfil.
+Su allowlist predeterminada contiene exclusivamente
+`C:\Users\Victor\Neocortex\Repository` y
+`C:\Users\Victor\Frameworks\Generador de bitácoras EPS`; laboratorios,
+dependencias, generados y caches dentro de esas raíces también se excluyen antes
+de leer contenido. `--code-project-root RUTA` reemplaza la allowlist y puede
+repetirse. `--code-scope broad` conserva la selección histórica amplia sólo como
+override deliberado.
 
 Las consultas exactas, textuales y estructurales se pueden ejecutar por separado
 o fusionar mediante reciprocal rank fusion. Cada resultado conserva archivo,
@@ -1043,6 +1062,14 @@ suprimen de la consola, se drenan después de cada página para no acumularlos
 sin límite, se consolidan por documento y etapa, y se conservan en
 `document_warnings` con conteo y una muestra limitada. Esto cubre extracción y
 perfilado. La salida resume `warning_documents` y `mupdf_warnings`.
+
+El perfilado PDF conserva cada lote de páginas ya publicado y reanuda sólo las
+páginas cuyo perfil o layout vigente falta; después reconstruye el perfil de
+documento mediante un recorrido SQLite acotado. Los documentos cuya extracción
+sigue en `PdfDocumentTimeout` se difieren hasta que esa etapa termine, en vez de
+competir durante otros diez minutos con trabajo incompleto. Cada fallo de
+perfilado conserva tipo, mensaje acotado y número de intentos en
+`document_warnings` con etapa `profile-error`, y se retira al publicar el perfil.
 
 Antes de aplicar `MaxMB` o `MaxCount`, la ruta marca todos los PDF del
 inventario vivo. Por eso un documento omitido por esos límites conserva su

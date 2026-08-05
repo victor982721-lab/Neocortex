@@ -1,4 +1,4 @@
-"""Application projections for Office, audio and image route owners."""
+"""Application projections for integrated route owners."""
 
 from __future__ import annotations
 
@@ -10,10 +10,15 @@ import _04_Nucleo_Operativo.application_config_projections as runtime_projection
 from _04_Nucleo_Operativo import ApplicationConfig
 from _04_Nucleo_Operativo.application_config import (
     audio_route_config_from_application,
+    code_route_config_from_application,
     image_route_config_from_application,
     office_route_config_from_application,
 )
 from _04_Nucleo_Operativo.audio_models import AudioRouteConfig
+from _04_Nucleo_Operativo.app_paths import (
+    default_code_project_roots,
+    source_repository_directory,
+)
 from _04_Nucleo_Operativo.image_route import ImageRouteConfig
 from _04_Nucleo_Operativo.office_route import OfficeRouteConfig
 from _04_Nucleo_Operativo.route_filters import CandidateSelection
@@ -85,6 +90,25 @@ def test_image_projection_accepts_the_route_context_effective_root() -> None:
     assert projected.root == Path("context-image-root")
     assert projected.state_path == Path("effective-image-state") / "image.sqlite3"
     assert projected.isolate_decoders is True
+
+
+def test_code_projection_uses_only_the_configured_project_allowlist(tmp_path: Path) -> None:
+    owned_roots = (tmp_path / "Neocortex", tmp_path / "Bitacoras-EPS")
+    config = ApplicationConfig(
+        root=tmp_path,
+        state_directory=tmp_path / "state",
+        code_project_roots=owned_roots,
+    )
+
+    projected = code_route_config_from_application(config)
+    self_analysis = code_route_config_from_application(replace(config, self_analysis=True))
+
+    assert projected.explicit_project_roots == owned_roots
+    assert self_analysis.explicit_project_roots == (tmp_path,)
+    assert default_code_project_roots() == (
+        source_repository_directory(),
+        Path.home() / "Frameworks" / "Generador de bitácoras EPS",
+    )
 
 
 # endregion [01]

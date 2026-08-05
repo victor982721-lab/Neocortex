@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 from _01_Enumeracion import JournalCursor
 from _02_Deduplicacion import DedupPlan, ScanSummary
 
-from .app_paths import default_state_directory
+from .app_paths import default_code_project_roots, default_state_directory
 from .route_filters import CandidateSelection
 
 # endregion [01]
@@ -69,6 +69,7 @@ class FrameworkConfig:
     code_retry_errors: bool = False
     code_cache_validation: Literal["metadata", "full"] = "metadata"
     code_candidate_scope: Literal["projects", "broad"] = "projects"
+    code_project_roots: tuple[Path, ...] = field(default_factory=default_code_project_roots)
     code_include_generated: bool = False
     code_include_vendored: bool = False
     code_complexity_warning: int = 15

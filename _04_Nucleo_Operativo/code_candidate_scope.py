@@ -1,10 +1,10 @@
 """Project-aware admission boundary for the integrated Code route.
 
 The broad inventory is shared by every media route.  Code must therefore
-distinguish a real software project from arbitrary JSON, text and installed
-dependencies without walking the corpus a second time.  This module derives
-project roots exclusively from immutable inventory paths and applies bounded,
-deterministic path rules before any candidate bytes are read.
+distinguish owned software projects from arbitrary JSON, text and installed
+dependencies without walking the corpus a second time.  This module honors an
+explicit project allowlist when supplied; marker discovery is only the legacy
+fallback.  Bounded deterministic path rules run before candidate bytes are read.
 """
 
 from __future__ import annotations
@@ -71,14 +71,20 @@ GENERATED_DIRECTORY_NAMES: Final[frozenset[str]] = frozenset(
         ".turbo",
         "backups",
         "build",
+        "checkpoints",
         "dist",
+        "external_backups",
         "generated",
         "gen",
         "htmlcov",
+        "lab",
         "laboratory",
+        "laboratories",
         "obj",
         "out",
         "target",
+        "test-temp",
+        "testtemp",
         "wheelhouse",
         "__generated__",
     }
@@ -192,17 +198,20 @@ class ProjectCandidateScope:
         include_vendored: bool,
         explicit_roots: Iterable[str | Path] = (),
     ) -> "ProjectCandidateScope":
-        """Discover roots from inventory paths without reading project files."""
+        """Build an allowlist, falling back to marker discovery only if empty."""
 
         raw_roots = {_path_key(root): os.path.abspath(os.fspath(root)) for root in explicit_roots}
-        for value in paths:
-            if not is_project_marker(value):
-                continue
-            directory_parts = _directory_parts(value)
-            if not include_vendored and any(_is_vendored_part(part) for part in directory_parts):
-                continue
-            root = os.path.abspath(os.fspath(Path(value).parent))
-            raw_roots.setdefault(_path_key(root), root)
+        if not raw_roots:
+            for value in paths:
+                if not is_project_marker(value):
+                    continue
+                directory_parts = _directory_parts(value)
+                if not include_vendored and any(
+                    _is_vendored_part(part) for part in directory_parts
+                ):
+                    continue
+                root = os.path.abspath(os.fspath(Path(value).parent))
+                raw_roots.setdefault(_path_key(root), root)
 
         accepted: dict[str, str] = {}
         for root_key, root in sorted(

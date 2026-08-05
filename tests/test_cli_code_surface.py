@@ -139,12 +139,20 @@ EXPECTED_CODE_ACTIONS = (
         help_text=("metadata is incremental-fast; full rechecks exact bytes before reuse"),
     ),
     _expected_store(
+        "--code-project-root",
+        "code_project_root",
+        type_name="Path",
+        metavar="PATH",
+        help_text="replace default Code project allowlist; repeat for each owned project",
+        action_name="_AppendAction",
+    ),
+    _expected_store(
         "--code-scope",
         "code_candidate_scope",
         default="projects",
         choices=("projects", "broad"),
         help_text=(
-            "projects admits only detected project trees; broad restores the "
+            "projects admits only explicit project roots; broad restores the "
             "legacy profile-wide textual selection"
         ),
     ),
@@ -315,8 +323,11 @@ EXPECTED_CODE_HELP = (
     "  --code-cache-validation {metadata,full}\n"
     "                        metadata is incremental-fast; full rechecks exact\n"
     "                        bytes before reuse\n"
+    "  --code-project-root PATH\n"
+    "                        replace default Code project allowlist; repeat for\n"
+    "                        each owned project\n"
     "  --code-scope {projects,broad}\n"
-    "                        projects admits only detected project trees; broad\n"
+    "                        projects admits only explicit project roots; broad\n"
     "                        restores the legacy profile-wide textual selection\n"
     "  --code-generated, --no-code-generated\n"
     "                        retain generated artifacts in structural analysis\n"

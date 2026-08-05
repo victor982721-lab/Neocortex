@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -291,9 +290,7 @@ class PdfDerivedIndexer:
                     connection.commit()
                     emit_progress(
                         self.progress,
-                        ProgressEvent(
-                            "pdf", "fts", "Indexando texto PDF", indexed, unit="páginas"
-                        ),
+                        ProgressEvent("pdf", "fts", "Indexando texto PDF", indexed, unit="páginas"),
                     )
         emit_progress(
             self.progress,
@@ -413,12 +410,12 @@ class PdfDerivedIndexer:
                 while not exhausted and len(pending) < self.workers * 2:
                     self.cancellation.checkpoint()
                     try:
-                        file_key, path = next(iterator)
+                        file_key, path, size = next(iterator)
                     except StopIteration:
                         exhausted = True
                         break
                     pending.add(
-                        executor.submit(self._profile_document_admitted, file_key, path)
+                        executor.submit(self._profile_document_admitted, file_key, path, size)
                     )
                 if not pending:
                     continue
@@ -429,8 +426,7 @@ class PdfDerivedIndexer:
                 )
                 if (
                     not done
-                    and time.monotonic() - last_progress_at
-                    >= PROFILE_PROGRESS_INTERVAL_SECONDS
+                    and time.monotonic() - last_progress_at >= PROFILE_PROGRESS_INTERVAL_SECONDS
                 ):
                     report_progress()
                 for future in done:
@@ -459,7 +455,9 @@ class PdfDerivedIndexer:
             return int(
                 connection.execute(
                     """SELECT COUNT(*) FROM documents
-                    WHERE status IN ('done','partial') AND last_seen_run_id=?
+                    WHERE (status='done' OR (status='partial'
+                    AND COALESCE(error_type,'')<>'PdfDocumentTimeout'))
+                    AND last_seen_run_id=?
                     AND (COALESCE(profile_version,0)<>? OR template_simhash64 IS NULL
                     OR EXISTS(SELECT 1 FROM pages p WHERE p.file_key=documents.file_key
                         AND (p.profile_json IS NULL OR NOT EXISTS(
@@ -475,13 +473,15 @@ class PdfDerivedIndexer:
     def _profile_candidates(self):
         """Yield profile work using bounded keyset pages, never a full corpus list."""
 
+        last_size = -1
         last_path = ""
         while True:
             self.cancellation.checkpoint()
             with _database(self.state_path) as connection:
                 rows = connection.execute(
-                    """SELECT file_key,path FROM documents
-                    WHERE status IN ('done','partial')
+                    """SELECT file_key,path,size FROM documents
+                    WHERE (status='done' OR (status='partial'
+                    AND COALESCE(error_type,'')<>'PdfDocumentTimeout'))
                     AND last_seen_run_id=? AND (COALESCE(profile_version,0)<>?
                     OR template_simhash64 IS NULL OR EXISTS(
                         SELECT 1 FROM pages p WHERE p.file_key=documents.file_key
@@ -491,12 +491,15 @@ class PdfDerivedIndexer:
                     OR NOT EXISTS(SELECT 1 FROM document_layouts dl
                         WHERE dl.file_key=documents.file_key
                         AND dl.algorithm_version=?))
-                    AND path>? COLLATE NOCASE ORDER BY path COLLATE NOCASE LIMIT 1000""",
+                    AND (size>? OR (size=? AND path>? COLLATE NOCASE))
+                    ORDER BY size,path COLLATE NOCASE LIMIT 1000""",
                     (
                         self.run_id,
                         PROFILE_VERSION,
                         LAYOUT_VERSION,
                         LAYOUT_VERSION,
+                        last_size,
+                        last_size,
                         last_path,
                     ),
                 ).fetchall()
@@ -504,15 +507,16 @@ class PdfDerivedIndexer:
                 return
             for row in rows:
                 self.cancellation.checkpoint()
-                yield row["file_key"], row["path"]
+                yield row["file_key"], row["path"], int(row["size"])
+            last_size = int(rows[-1]["size"])
             last_path = rows[-1]["path"]
 
-    def _profile_document_admitted(self, file_key: str, path: str) -> bool:
+    def _profile_document_admitted(self, file_key: str, path: str, size: int) -> bool:
         self.cancellation.checkpoint()
         if self.resource_gate is None:
             return self._profile_document(file_key, path)
         with self.resource_gate.admit(
-            0,
+            size,
             reservation_bytes=self.profile_memory_bytes,
         ):
             return self._profile_document(file_key, path)
@@ -534,8 +538,13 @@ class PdfDerivedIndexer:
                     _database(self.state_path) as connection,
                 ):
                     page_numbers = connection.execute(
-                        "SELECT page_number FROM pages WHERE file_key=? ORDER BY page_number",
-                        (file_key,),
+                        """SELECT p.page_number FROM pages p
+                        LEFT JOIN page_layouts l ON l.file_key=p.file_key
+                        AND l.page_number=p.page_number AND l.algorithm_version=?
+                        WHERE p.file_key=?
+                        AND (p.profile_json IS NULL OR l.file_key IS NULL)
+                        ORDER BY p.page_number""",
+                        (LAYOUT_VERSION, file_key),
                     )
 
                     def local_profiles():
@@ -551,6 +560,13 @@ class PdfDerivedIndexer:
                     stored = self._store_profiles(file_key, profiles)
                 warning_count, warning_samples = _mupdf_warning_summary(fitz)
                 self._store_profile_warnings(file_key, warning_count, warning_samples)
+                if stored:
+                    self._clear_profile_failure(file_key)
+                else:
+                    self._store_profile_failure(
+                        file_key,
+                        RuntimeError("persisted page profile set is incomplete"),
+                    )
                 return stored
 
             messages = stream_isolated_profiles(
@@ -570,21 +586,73 @@ class PdfDerivedIndexer:
                         raise RuntimeError(f"{message[1]}: {message[2]}")
                     if message[0] == "warnings":
                         warning_count += int(message[1])
-                        warning_samples = tuple(
-                            dict.fromkeys((*warning_samples, *message[2]))
-                        )[:20]
+                        warning_samples = tuple(dict.fromkeys((*warning_samples, *message[2])))[:20]
                     if message[0] == "page":
                         yield int(message[1]), message[2]
 
             profiles = isolated_profiles()
             stored = self._store_profiles(file_key, profiles)
             self._store_profile_warnings(file_key, warning_count, warning_samples)
+            if stored:
+                self._clear_profile_failure(file_key)
+            else:
+                self._store_profile_failure(
+                    file_key,
+                    RuntimeError("persisted page profile set is incomplete"),
+                )
             return stored
         except CancellationRequested:
             raise
-        except Exception:
+        except Exception as exc:
             self._store_profile_warnings(file_key, warning_count, warning_samples)
+            self._store_profile_failure(file_key, exc)
             return False
+
+    def _store_profile_failure(self, file_key: str, error: Exception) -> None:
+        """Persist bounded diagnostic evidence for an incomplete profile."""
+
+        detail = f"{type(error).__name__}: {error}"[:2000]
+        try:
+            with serialized_pdf_write(), _database(self.state_path) as connection:
+                row = connection.execute(
+                    "SELECT processing_signature FROM documents WHERE file_key=?",
+                    (file_key,),
+                ).fetchone()
+                if row is None:
+                    return
+                signature = str(row[0])
+                previous = connection.execute(
+                    """SELECT warning_count FROM document_warnings
+                    WHERE file_key=? AND processing_signature=?
+                    AND stage='profile-error'""",
+                    (file_key, signature),
+                ).fetchone()
+                attempts = 1 if previous is None else min(int(previous[0]) + 1, 1000)
+                connection.execute(
+                    """INSERT OR REPLACE INTO document_warnings(
+                    file_key,processing_signature,stage,warning_count,samples_json,updated_ns)
+                    VALUES(?,?,?,?,?,?)""",
+                    (
+                        file_key,
+                        signature,
+                        "profile-error",
+                        attempts,
+                        json.dumps((detail,), ensure_ascii=True),
+                        time.time_ns(),
+                    ),
+                )
+        except (sqlite3.Error, UnicodeError):
+            return
+
+    def _clear_profile_failure(self, file_key: str) -> None:
+        try:
+            with serialized_pdf_write(), _database(self.state_path) as connection:
+                connection.execute(
+                    "DELETE FROM document_warnings WHERE file_key=? AND stage='profile-error'",
+                    (file_key,),
+                )
+        except sqlite3.Error:
+            return
 
     def _store_profile_warnings(
         self, file_key: str, warning_count: int, samples: tuple[str, ...]
@@ -625,33 +693,8 @@ class PdfDerivedIndexer:
 
     def _store_profiles(self, file_key: str, profiles) -> bool:
         try:
-            counters = [0] * SIMHASH_BITS
-            layout_counters = [0] * SIMHASH_BITS
-            geometry_counters = [0] * SIMHASH_BITS
-            visual_counters = [0] * SIMHASH_BITS
-            header_counters = [0] * SIMHASH_BITS
-            footer_counters = [0] * SIMHASH_BITS
-            for target, seed in (
-                (layout_counters, "document-layout-v1"),
-                (geometry_counters, "document-geometry-v1"),
-                (visual_counters, "document-visual-v1"),
-                (header_counters, "document-header-v1"),
-                (footer_counters, "document-footer-v1"),
-            ):
-                _add_layout_feature(target, seed, 2)
-            sequence = xxhash.xxh3_128()
-            source_counts: dict[str, int] = {}
-            visual_errors = mapped_pages = header_ink = footer_ink = 0
             profile_batch: list[tuple[str, str, int]] = []
             layout_batch: list[tuple] = []
-
-            with serialized_pdf_write(), _database(self.state_path) as connection:
-                connection.execute(
-                    "DELETE FROM page_layouts WHERE file_key=?", (file_key,)
-                )
-                connection.execute(
-                    "DELETE FROM document_layouts WHERE file_key=?", (file_key,)
-                )
 
             def flush() -> None:
                 self.cancellation.checkpoint()
@@ -677,9 +720,7 @@ class PdfDerivedIndexer:
             for offset, (page_number, profile) in enumerate(profiles, 1):
                 self.cancellation.checkpoint()
                 layout = dict(profile["layout"])
-                profile_summary = {
-                    key: value for key, value in profile.items() if key != "layout"
-                }
+                profile_summary = {key: value for key, value in profile.items() if key != "layout"}
                 profile_batch.append(
                     (
                         json.dumps(
@@ -714,6 +755,49 @@ class PdfDerivedIndexer:
                         now,
                     )
                 )
+                if offset % 16 == 0:
+                    flush()
+            flush()
+            return self._finalize_stored_profile(file_key)
+        except CancellationRequested:
+            raise
+
+    def _finalize_stored_profile(self, file_key: str) -> bool:
+        """Publish one document profile from complete persisted page evidence."""
+
+        counters = [0] * SIMHASH_BITS
+        layout_counters = [0] * SIMHASH_BITS
+        geometry_counters = [0] * SIMHASH_BITS
+        visual_counters = [0] * SIMHASH_BITS
+        header_counters = [0] * SIMHASH_BITS
+        footer_counters = [0] * SIMHASH_BITS
+        for target, seed in (
+            (layout_counters, "document-layout-v1"),
+            (geometry_counters, "document-geometry-v1"),
+            (visual_counters, "document-visual-v1"),
+            (header_counters, "document-header-v1"),
+            (footer_counters, "document-footer-v1"),
+        ):
+            _add_layout_feature(target, seed, 2)
+        sequence = xxhash.xxh3_128()
+        source_counts: dict[str, int] = {}
+        visual_errors = mapped_pages = header_ink = footer_ink = 0
+
+        with _database(self.state_path) as connection:
+            rows = connection.execute(
+                """SELECT p.page_number,p.profile_json,l.layout_zlib
+                FROM pages p LEFT JOIN page_layouts l
+                ON l.file_key=p.file_key AND l.page_number=p.page_number
+                AND l.algorithm_version=? WHERE p.file_key=?
+                ORDER BY p.page_number""",
+                (LAYOUT_VERSION, file_key),
+            )
+            for page_number, profile_json, layout_zlib in rows:
+                self.cancellation.checkpoint()
+                if profile_json is None or layout_zlib is None:
+                    return False
+                profile = json.loads(str(profile_json))
+                layout = json.loads(zlib.decompress(layout_zlib).decode("utf-8"))
                 mapped_pages += 1
                 source = str(layout["source_kind"])
                 source_counts[source] = source_counts.get(source, 0) + 1
@@ -723,9 +807,7 @@ class PdfDerivedIndexer:
                 sequence.update(int(page_number).to_bytes(4, "little", signed=False))
                 sequence.update(bytes.fromhex(layout["layout_simhash64"]))
                 _add_layout_signature(layout_counters, layout["layout_simhash64"], 3)
-                _add_layout_signature(
-                    geometry_counters, layout["geometry_simhash64"], 3
-                )
+                _add_layout_signature(geometry_counters, layout["geometry_simhash64"], 3)
                 _add_layout_signature(visual_counters, layout["visual_simhash64"], 2)
                 _add_layout_signature(header_counters, layout["header_simhash64"], 3)
                 _add_layout_signature(footer_counters, layout["footer_simhash64"], 2)
@@ -740,11 +822,10 @@ class PdfDerivedIndexer:
                 )
                 for feature in features:
                     _add_feature(counters, feature)
-                if offset % 16 == 0:
-                    flush()
-            flush()
-            if mapped_pages <= 0:
-                return False
+        if mapped_pages <= 0:
+            return False
+
+        try:
             layout_signature = _finish_layout_signature(layout_counters)
             geometry_signature = _finish_layout_signature(geometry_counters)
             visual_signature = _finish_layout_signature(visual_counters)
@@ -789,8 +870,6 @@ class PdfDerivedIndexer:
             return True
         except CancellationRequested:
             raise
-        except Exception:
-            return False
 
     def _build_similarity(self, kind: str) -> int:
         self.cancellation.checkpoint()
@@ -805,9 +884,7 @@ class PdfDerivedIndexer:
             )
             if cached_count is not None:
                 return cached_count
-            connection.execute(
-                "DELETE FROM similarity_buckets WHERE signature_kind=?", (kind,)
-            )
+            connection.execute("DELETE FROM similarity_buckets WHERE signature_kind=?", (kind,))
             connection.execute(
                 "DELETE FROM similarity_relations WHERE kind=?", (f"{kind}_similar",)
             )
@@ -850,9 +927,7 @@ class PdfDerivedIndexer:
                         break
                 for candidate in sorted(candidates)[:MAX_CANDIDATES_PER_DOCUMENT]:
                     self.cancellation.checkpoint()
-                    candidate_signature = self._signature_for(
-                        connection, kind, candidate
-                    )
+                    candidate_signature = self._signature_for(connection, kind, candidate)
                     if candidate_signature is None:
                         continue
                     if kind == "layout":
@@ -972,9 +1047,7 @@ class PdfDerivedIndexer:
             last_key = rows[-1][0]
 
     @staticmethod
-    def _signature_for(
-        connection: sqlite3.Connection, kind: str, file_key: str
-    ) -> int | None:
+    def _signature_for(connection: sqlite3.Connection, kind: str, file_key: str) -> int | None:
         if kind == "text":
             row = connection.execute(
                 "SELECT simhash64 FROM text_signatures WHERE file_key=?",
@@ -1009,9 +1082,7 @@ class PdfDerivedIndexer:
         left, right = by_key[file_key_a], by_key[file_key_b]
         left_evidence = json.loads(left["evidence_json"])
         right_evidence = json.loads(right["evidence_json"])
-        geometry = _layout_similarity(
-            left["geometry_simhash64"], right["geometry_simhash64"]
-        )
+        geometry = _layout_similarity(left["geometry_simhash64"], right["geometry_simhash64"])
         visual = _layout_similarity(left["visual_simhash64"], right["visual_simhash64"])
         header = _layout_similarity(left["header_simhash64"], right["header_simhash64"])
         footer = _layout_similarity(left["footer_simhash64"], right["footer_simhash64"])
@@ -1031,9 +1102,7 @@ class PdfDerivedIndexer:
             < 3
         ):
             footer = 0.0
-        same_sequence = (
-            left["page_sequence_xxh3_128"] == right["page_sequence_xxh3_128"]
-        )
+        same_sequence = left["page_sequence_xxh3_128"] == right["page_sequence_xxh3_128"]
         weighted = geometry * 0.45 + visual * 0.25 + header * 0.20 + footer * 0.05
         weighted += 0.05 if same_sequence else 0.0
         letterhead_score = header * 0.72 + geometry * 0.28 if header else 0.0
@@ -1102,7 +1171,7 @@ class PdfDerivedIndexer:
                 self.cancellation.checkpoint()
                 components.setdefault(find(file_key), []).append(file_key)
 
-            degree = {file_key: 0 for file_key in parent}
+            degree = dict.fromkeys(parent, 0)
             minimum_edge_score: dict[str, float] = {}
             for row in connection.execute(
                 """SELECT file_key_a,file_key_b,score FROM similarity_relations
@@ -1163,4 +1232,6 @@ class PdfDerivedIndexer:
                 )
                 group_count += 1
             return group_count
+
+
 # endregion [02]

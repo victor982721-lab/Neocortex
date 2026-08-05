@@ -76,6 +76,8 @@ def test_policy_signature_is_versioned_canonical_and_non_cryptographic(
     first = InventoryExclusionPolicy.compile(
         explicit_roots,
         directory_names=("Build", "NODE_MODULES"),
+        directory_prefixes=("TMP", "BaseTemp"),
+        directory_fragments=("PyTest",),
         file_names=("Coverage.XML", ".Coverage"),
         file_suffixes=(".PSTATS", ".prof"),
         restricted_roots=(restricted_root,),
@@ -88,6 +90,8 @@ def test_policy_signature_is_versioned_canonical_and_non_cryptographic(
     second = InventoryExclusionPolicy.compile(
         reversed(explicit_roots),
         directory_names=("node_modules", "build", "BUILD"),
+        directory_prefixes=("basetemp", "tmp", "TMP"),
+        directory_fragments=("pytest", "PYTEST"),
         file_names=(".coverage", "coverage.xml"),
         file_suffixes=(".prof", ".pstats"),
         restricted_roots=(restricted_root,),
@@ -99,9 +103,11 @@ def test_policy_signature_is_versioned_canonical_and_non_cryptographic(
     )
 
     assert first.signature == second.signature
-    assert first.signature.startswith("inventory-exclusion-policy-v2:xxh3_128:")
+    assert first.signature.startswith("inventory-exclusion-policy-v3:xxh3_128:")
     assert len(first.signature.rsplit(":", 1)[1]) == 32
     assert first.directory_names == frozenset({"build", "node_modules"})
+    assert first.directory_prefixes == ("basetemp", "tmp")
+    assert first.directory_fragments == ("pytest",)
     assert first.file_names == frozenset({".coverage", "coverage.xml"})
     assert first.file_suffixes == (".prof", ".pstats")
     assert first.restricted_roots == (str(restricted_root.resolve()),)
@@ -113,21 +119,26 @@ def test_policy_signature_is_versioned_canonical_and_non_cryptographic(
 
     with pytest.raises(ValueError, match="invalid directory-name exclusion"):
         InventoryExclusionPolicy.compile(directory_names=("build/*",))
+    with pytest.raises(ValueError, match="invalid directory-prefix exclusion"):
+        InventoryExclusionPolicy.compile(directory_prefixes=("tmp/*",))
 
 
 def test_default_paths_exclude_codex_cache_and_sandbox_infrastructure() -> None:
-    assert tuple(path.name.casefold() for path in DEFAULT_EXCLUDED_PATHS) == (
-        "appdata",
-        ".codex",
-        ".cache",
-        ".sbx-denybin",
-        "laboratory",
-        "lab",
-        "checkpoints",
-        "backups",
-        "external_backups",
+    home = Path.home()
+    assert DEFAULT_EXCLUDED_PATHS == (
+        home / "AppData",
+        home / ".codex",
+        home / ".cache",
+        home / ".sbx-denybin",
+        home / "Neocortex" / "Laboratory",
+        home / "Neocortex" / "Lab",
+        home / "Neocortex" / "Checkpoints",
+        home / "Neocortex" / "Backups",
+        home / "Neocortex" / "external_backups",
+        home / "Neocortex" / "Repository" / "Laboratory",
+        home / "Neocortex" / "Laboratories",
+        home / "Neocortex" / "TestTemp",
     )
-    assert all(path.parent == Path.home() / "Neocortex" for path in DEFAULT_EXCLUDED_PATHS[4:])
 
 
 def test_default_policy_excludes_generated_dependencies_without_broad_names(
@@ -149,6 +160,20 @@ def test_default_policy_excludes_generated_dependencies_without_broad_names(
         ".ruff_cache",
         ".tox",
         ".nox",
+        ".CDX",
+        "pytest",
+    ):
+        assert DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
+            project / directory_name,
+            file_attributes=0,
+        )
+
+    for directory_name in (
+        ".tmp-handoff",
+        "basetemp-second",
+        "inline-snapshot-abcd",
+        "tmp1mfujc__",
+        "title-review-pytest",
     ):
         assert DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
             project / directory_name,
@@ -163,6 +188,10 @@ def test_default_policy_excludes_generated_dependencies_without_broad_names(
     )
     assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
         project / "dist",
+        file_attributes=0,
+    )
+    assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
+        project / "templates",
         file_attributes=0,
     )
     assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_file(project / "document.pdf")

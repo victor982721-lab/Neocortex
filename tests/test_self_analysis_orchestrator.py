@@ -78,7 +78,7 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
         transient.mkdir()
     policy = build_self_analysis_inventory_policy(root, state)
 
-    assert policy.signature.startswith("inventory-exclusion-policy-v2:xxh3_128:")
+    assert policy.signature.startswith("inventory-exclusion-policy-v3:xxh3_128:")
     assert set(policy.explicit_roots) == {
         str(state.resolve()),
         str((root / ".codex-lab").resolve()),

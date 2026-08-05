@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from pathlib import Path
 
 from .cli_operations import DirectOperationFamily, selected_direct_operations
 from .route_selection import BUILTIN_ROUTE_ORDER, normalize_route_selection
@@ -52,12 +53,20 @@ def register_code_arguments(
         help="metadata is incremental-fast; full rechecks exact bytes before reuse",
     )
     code.add_argument(
+        "--code-project-root",
+        action="append",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="replace default Code project allowlist; repeat for each owned project",
+    )
+    code.add_argument(
         "--code-scope",
         dest="code_candidate_scope",
         choices=("projects", "broad"),
         default="projects",
         help=(
-            "projects admits only detected project trees; broad restores the "
+            "projects admits only explicit project roots; broad restores the "
             "legacy profile-wide textual selection"
         ),
     )

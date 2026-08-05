@@ -125,7 +125,9 @@ def code_route_config_from_application(
         complexity_warning=config.code_complexity_warning,
         function_lines_warning=config.code_function_lines_warning,
         external_evidence_root=config.root if config.self_analysis else None,
-        explicit_project_roots=(config.root,) if config.self_analysis else (),
+        explicit_project_roots=(
+            (config.root,) if config.self_analysis else config.code_project_roots
+        ),
         analysis_profile=getattr(config, "analysis_profile", "protected"),
         deep_test_selectors=getattr(config, "deep_test_selectors", ()),
         deep_max_tests=getattr(config, "deep_max_tests", 3000),

@@ -1,20 +1,152 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from _04_Nucleo_Operativo.pdf_derived import (
     PdfDerivedIndexer,
     initialize_derived_schema,
 )
+from _04_Nucleo_Operativo.pdf_state import initialize_pdf_state
 
 
 # region [01] Linear FTS/state reconciliation
 
 
 class PdfDerivedRepairTests(unittest.TestCase):
+    def test_finalizes_from_persisted_pages_without_reprofiling_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "pdf.sqlite3"
+            initialize_pdf_state(database)
+            profile = {
+                "width": 600.0,
+                "height": 800.0,
+                "rotation": 0,
+                "font_names": ["Arial"],
+                "font_count": 1,
+                "image_count": 0,
+                "drawing_count": 0,
+                "text_block_count": 1,
+            }
+            layout = {
+                "source_kind": "text",
+                "geometry_simhash64": "0000000000000001",
+                "visual_simhash64": "0000000000000002",
+                "header_simhash64": "0000000000000003",
+                "footer_simhash64": "0000000000000004",
+                "layout_simhash64": "0000000000000005",
+                "visual_error": False,
+                "header_ink": 0,
+                "footer_ink": 0,
+            }
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    """INSERT INTO documents(
+                    file_key,path,size,mtime_ns,birthtime_ns,processing_signature,
+                    status,page_count,completed_pages,last_seen_run_id,updated_ns)
+                    VALUES('doc','doc.pdf',10,1,1,'sig','done',1,1,7,1)"""
+                )
+                connection.execute(
+                    """INSERT INTO pages(
+                    file_key,page_number,source,text_zlib,text_chars,profile_json)
+                    VALUES('doc',0,'native',?,4,?)""",
+                    (
+                        zlib.compress(b"text"),
+                        json.dumps(profile, separators=(",", ":")),
+                    ),
+                )
+                connection.execute(
+                    """INSERT INTO page_layouts(
+                    file_key,page_number,algorithm_version,source_kind,
+                    geometry_simhash64,visual_simhash64,header_simhash64,
+                    footer_simhash64,layout_simhash64,layout_zlib,updated_ns)
+                    VALUES('doc',0,1,'text',?,?,?,?,?,?,1)""",
+                    (
+                        layout["geometry_simhash64"],
+                        layout["visual_simhash64"],
+                        layout["header_simhash64"],
+                        layout["footer_simhash64"],
+                        layout["layout_simhash64"],
+                        zlib.compress(json.dumps(layout, separators=(",", ":")).encode()),
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            indexer = PdfDerivedIndexer(
+                database,
+                7,
+                workers=1,
+                similarity_threshold=0.8,
+            )
+            self.assertTrue(indexer._store_profiles("doc", ()))
+
+            connection = sqlite3.connect(database)
+            try:
+                document = connection.execute(
+                    "SELECT profile_version,template_simhash64 FROM documents"
+                ).fetchone()
+                layout_row = connection.execute(
+                    "SELECT mapped_pages FROM document_layouts"
+                ).fetchone()
+                page_layout_count = connection.execute(
+                    "SELECT COUNT(*) FROM page_layouts"
+                ).fetchone()
+            finally:
+                connection.close()
+            self.assertEqual(document[0], 2)
+            self.assertIsNotNone(document[1])
+            self.assertEqual(layout_row, (1,))
+            self.assertEqual(page_layout_count, (1,))
+
+    def test_profile_candidates_defer_incomplete_extraction_timeouts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "pdf.sqlite3"
+            initialize_pdf_state(database)
+            connection = sqlite3.connect(database)
+            try:
+                connection.executemany(
+                    """INSERT INTO documents(
+                    file_key,path,size,mtime_ns,birthtime_ns,processing_signature,
+                    status,page_count,completed_pages,error_type,last_seen_run_id,updated_ns)
+                    VALUES(?,?,?,?,?,'sig',?,?,?,?,7,1)""",
+                    (
+                        ("small", "small.pdf", 10, 1, 1, "done", 1, 1, None),
+                        (
+                            "timeout",
+                            "timeout.pdf",
+                            1,
+                            1,
+                            1,
+                            "partial",
+                            5000,
+                            3000,
+                            "PdfDocumentTimeout",
+                        ),
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            indexer = PdfDerivedIndexer(
+                database,
+                7,
+                workers=1,
+                similarity_threshold=0.8,
+            )
+            self.assertEqual(
+                list(indexer._profile_candidates()),
+                [("small", "small.pdf", 10)],
+            )
+            self.assertEqual(indexer._profile_candidate_count(), 1)
+
     def test_layout_groups_stream_relations_in_two_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "pdf.sqlite3"
@@ -29,9 +161,7 @@ class PdfDerivedRepairTests(unittest.TestCase):
                 """
             )
             initialize_derived_schema(connection)
-            connection.execute(
-                "INSERT INTO similarity_state VALUES('layout','active',0.8,2,7,3)"
-            )
+            connection.execute("INSERT INTO similarity_state VALUES('layout','active',0.8,2,7,3)")
             connection.executemany(
                 "INSERT INTO similarity_relations VALUES(?,?,?,?,?,?,?)",
                 (

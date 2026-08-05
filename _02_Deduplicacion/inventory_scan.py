@@ -32,8 +32,12 @@ DEFAULT_EXCLUDED_PATHS = (
     Path.home() / "Neocortex" / "Checkpoints",
     Path.home() / "Neocortex" / "Backups",
     Path.home() / "Neocortex" / "external_backups",
+    Path.home() / "Neocortex" / "Repository" / "Laboratory",
+    Path.home() / "Neocortex" / "Laboratories",
+    Path.home() / "Neocortex" / "TestTemp",
 )
 DEFAULT_GENERATED_DIRECTORY_NAMES = (
+    ".cdx",
     ".git",
     ".hg",
     ".svn",
@@ -47,13 +51,21 @@ DEFAULT_GENERATED_DIRECTORY_NAMES = (
     ".ruff_cache",
     ".tox",
     ".nox",
+    "pytest",
 )
+DEFAULT_GENERATED_DIRECTORY_PREFIXES = (
+    ".tmp",
+    "basetemp",
+    "inline-snapshot-",
+    "tmp",
+)
+DEFAULT_GENERATED_DIRECTORY_FRAGMENTS = ("pytest",)
 DEFAULT_GENERATED_FILE_SUFFIXES = (
     ".pyc",
     ".pyo",
 )
 INTERNAL_DIRECTORY_PREFIXES = (".dedupe-quarantine-",)
-INVENTORY_EXCLUSION_SIGNATURE_VERSION = "inventory-exclusion-policy-v2"
+INVENTORY_EXCLUSION_SIGNATURE_VERSION = "inventory-exclusion-policy-v3"
 MAX_INVENTORY_EXCLUSION_RULES = 1024
 MAX_INVENTORY_EXCLUSION_RULE_CHARS = 255
 MAX_INVENTORY_EXCLUSION_PATH_CHARS = 32_767
@@ -206,6 +218,8 @@ class InventoryExclusionPolicy:
     explicit_roots: tuple[str, ...]
     explicit_path_keys: frozenset[str]
     directory_names: frozenset[str]
+    directory_prefixes: tuple[str, ...]
+    directory_fragments: tuple[str, ...]
     file_names: frozenset[str]
     file_suffixes: tuple[str, ...]
     restricted_roots: tuple[str, ...]
@@ -226,6 +240,8 @@ class InventoryExclusionPolicy:
         explicit_roots: Iterable[str | Path] = (),
         *,
         directory_names: Iterable[str] = (),
+        directory_prefixes: Iterable[str] = (),
+        directory_fragments: Iterable[str] = (),
         file_names: Iterable[str] = (),
         file_suffixes: Iterable[str] = (),
         restricted_roots: Iterable[str | Path] = (),
@@ -245,6 +261,14 @@ class InventoryExclusionPolicy:
         normalized_directories = _normalize_named_rules(
             directory_names,
             kind="directory-name exclusion",
+        )
+        normalized_directory_prefixes = _normalize_named_rules(
+            directory_prefixes,
+            kind="directory-prefix exclusion",
+        )
+        normalized_directory_fragments = _normalize_named_rules(
+            directory_fragments,
+            kind="directory-fragment exclusion",
         )
         normalized_files = _normalize_named_rules(
             file_names,
@@ -299,6 +323,8 @@ class InventoryExclusionPolicy:
         payload = json.dumps(
             {
                 "directory_names": normalized_directories,
+                "directory_prefixes": normalized_directory_prefixes,
+                "directory_fragments": normalized_directory_fragments,
                 "explicit_root_keys": root_keys,
                 "file_names": normalized_files,
                 "file_suffixes": normalized_suffixes,
@@ -319,6 +345,8 @@ class InventoryExclusionPolicy:
             explicit_roots=tuple(canonical_by_key[key] for key in root_keys),
             explicit_path_keys=frozenset(root_keys),
             directory_names=frozenset(normalized_directories),
+            directory_prefixes=normalized_directory_prefixes,
+            directory_fragments=normalized_directory_fragments,
             file_names=frozenset(normalized_files),
             file_suffixes=normalized_suffixes,
             restricted_roots=tuple(restricted_by_key[key] for key in restricted_root_keys),
@@ -374,12 +402,16 @@ class InventoryExclusionPolicy:
                 frozenset(),
                 file_attributes=file_attributes,
                 excluded_directory_names=self.directory_names,
+                excluded_directory_prefixes=self.directory_prefixes,
+                excluded_directory_fragments=self.directory_fragments,
             )
         return is_excluded_directory(
             path,
             self.explicit_path_keys,
             file_attributes=file_attributes,
             excluded_directory_names=self.directory_names,
+            excluded_directory_prefixes=self.directory_prefixes,
+            excluded_directory_fragments=self.directory_fragments,
         )
 
     def excludes_file(self, path: str | Path) -> bool:
@@ -440,6 +472,8 @@ def is_excluded_directory(
     *,
     file_attributes: int | None = None,
     excluded_directory_names: frozenset[str] = frozenset(),
+    excluded_directory_prefixes: tuple[str, ...] = (),
+    excluded_directory_fragments: tuple[str, ...] = (),
 ) -> bool:
     """Match a configured subtree, internal quarantine, or hidden directory."""
 
@@ -447,8 +481,11 @@ def is_excluded_directory(
     if os.path.normcase(absolute) in excluded_path_keys:
         return True
     directory_name = os.path.basename(absolute).casefold()
-    if directory_name in excluded_directory_names or any(
-        directory_name.startswith(prefix) for prefix in INTERNAL_DIRECTORY_PREFIXES
+    if (
+        directory_name in excluded_directory_names
+        or any(directory_name.startswith(prefix) for prefix in excluded_directory_prefixes)
+        or any(fragment in directory_name for fragment in excluded_directory_fragments)
+        or any(directory_name.startswith(prefix) for prefix in INTERNAL_DIRECTORY_PREFIXES)
     ):
         return True
     if file_attributes is None:
@@ -472,6 +509,8 @@ def exclusion_path_keys(paths: Iterable[str | Path]) -> frozenset[str]:
 DEFAULT_INVENTORY_EXCLUSION_POLICY = InventoryExclusionPolicy.compile(
     DEFAULT_EXCLUDED_PATHS,
     directory_names=DEFAULT_GENERATED_DIRECTORY_NAMES,
+    directory_prefixes=DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+    directory_fragments=DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
     file_suffixes=DEFAULT_GENERATED_FILE_SUFFIXES,
 )
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 
+from .app_paths import default_code_project_roots
 from .models import FrameworkConfig
 from .route_filters import CandidateSelection
 
@@ -80,6 +81,11 @@ def framework_config_from_args(args: argparse.Namespace) -> FrameworkConfig:
         code_retry_errors=args.retry_code_errors,
         code_cache_validation=args.code_cache_validation,
         code_candidate_scope=args.code_candidate_scope,
+        code_project_roots=(
+            default_code_project_roots()
+            if args.code_project_root is None
+            else tuple(args.code_project_root)
+        ),
         code_include_generated=args.code_include_generated,
         code_include_vendored=args.code_include_vendored,
         code_complexity_warning=args.code_complexity_warning,

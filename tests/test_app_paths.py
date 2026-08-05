@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from _04_Nucleo_Operativo.app_paths import (
+    default_generated_artifact_directories,
     default_state_directory,
     default_ui_settings_path,
     local_application_data_directory,
@@ -47,6 +48,18 @@ class ApplicationPathTests(unittest.TestCase):
                 self.assertEqual(
                     self_analysis_data_directory(),
                     local_appdata / "Neocortex" / "self-analysis",
+                )
+                self.assertEqual(
+                    default_generated_artifact_directories(),
+                    tuple(
+                        project / generated
+                        for project in (
+                            profile / "Neocortex" / "Repository",
+                            profile / "Frameworks" / "Generador de bitácoras EPS",
+                            profile / "OneDrive" / "Documentos" / "Bitácoras EPS",
+                        )
+                        for generated in ("build", "dist", "wheelhouse")
+                    ),
                 )
                 self.assertEqual(
                     stable_launcher_path(),

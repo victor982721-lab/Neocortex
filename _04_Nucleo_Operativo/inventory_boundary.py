@@ -20,9 +20,13 @@ from pathlib import Path
 from _02_Deduplicacion import InventoryExclusionPolicy
 from _02_Deduplicacion.inventory import (
     DEFAULT_EXCLUDED_PATHS,
+    DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
     DEFAULT_GENERATED_DIRECTORY_NAMES,
+    DEFAULT_GENERATED_DIRECTORY_PREFIXES,
     DEFAULT_GENERATED_FILE_SUFFIXES,
 )
+
+from .app_paths import default_generated_artifact_directories
 
 from .corpus_access import (
     CorpusAccessPolicy,
@@ -400,11 +404,14 @@ def build_normal_inventory_boundary(
     exclusion_policy = InventoryExclusionPolicy.compile(
         (
             *DEFAULT_EXCLUDED_PATHS,
+            *default_generated_artifact_directories(),
             state_path,
             *internal_paths_policy.inventory_exclusion_roots(access_policy),
             *protected_content_policy.inventory_exclusion_roots(access_policy),
         ),
         directory_names=DEFAULT_GENERATED_DIRECTORY_NAMES,
+        directory_prefixes=DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+        directory_fragments=DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
         file_suffixes=DEFAULT_GENERATED_FILE_SUFFIXES,
         restricted_roots=restricted_roots,
         restricted_allowed_trees=allowed_trees,

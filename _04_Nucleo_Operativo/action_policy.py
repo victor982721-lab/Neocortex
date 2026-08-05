@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from _02_Deduplicacion import FileSnapshot
-from _02_Deduplicacion.inventory import is_excluded_directory
+from _02_Deduplicacion.inventory import InventoryExclusionPolicy
 
 
 # region [01] Snapshot and destination policy
@@ -17,9 +17,7 @@ PROFILE_SYSTEM_PREFIXES = ("ntuser.dat", "usrclass.dat")
 PROFILE_SYSTEM_NAMES = frozenset({"ntuser.ini"})
 FILE_ATTRIBUTE_HIDDEN = 0x00000002
 FILE_ATTRIBUTE_SYSTEM = 0x00000004
-FILE_ATTRIBUTE_REPARSE_POINT = getattr(
-    stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400
-)
+FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
 
 
 def same_snapshot(planned: FileSnapshot, current: FileSnapshot) -> bool:
@@ -79,9 +77,7 @@ def validate_descendant_path(
     try:
         relative = Path(os.path.relpath(candidate, root_path))
     except ValueError as exc:
-        raise RuntimeError(
-            f"{role} cannot be related to the inventory root: {candidate}"
-        ) from exc
+        raise RuntimeError(f"{role} cannot be related to the inventory root: {candidate}") from exc
     if relative.is_absolute() or any(part == os.pardir for part in relative.parts):
         raise RuntimeError(f"{role} escapes the inventory root lexically: {candidate}")
     return root_path, relative
@@ -139,21 +135,16 @@ def validate_mutation_path(
                 physical_subject = current.parent
                 break
             raise RuntimeError(
-                f"{role} component no longer exists inside the inventory root: "
-                f"{current}"
+                f"{role} component no longer exists inside the inventory root: {current}"
             ) from exc
         except OSError as exc:
             raise RuntimeError(
                 f"{role} component cannot be inspected safely: {current}: {exc}"
             ) from exc
         if _is_reparse_entry(current, current_stat):
-            raise RuntimeError(
-                f"{role} traverses a symlink, junction, or reparse point: {current}"
-            )
+            raise RuntimeError(f"{role} traverses a symlink, junction, or reparse point: {current}")
         if not is_leaf and not stat_module.S_ISDIR(current_stat.st_mode):
-            raise RuntimeError(
-                f"{role} has a non-directory intermediate component: {current}"
-            )
+            raise RuntimeError(f"{role} has a non-directory intermediate component: {current}")
         if is_leaf:
             leaf_stat = current_stat
         physical_subject = current
@@ -206,9 +197,7 @@ def protected_path_reason(
     if not check_attributes:
         return None
     try:
-        attributes = int(
-            getattr(os.stat(source, follow_symlinks=False), "st_file_attributes", 0)
-        )
+        attributes = int(getattr(os.stat(source, follow_symlinks=False), "st_file_attributes", 0))
     except OSError:
         return None
     if attributes & FILE_ATTRIBUTE_SYSTEM:
@@ -226,7 +215,7 @@ def protected_path_reason(
 
 def postorder_directories(
     root: Path,
-    excluded_keys: frozenset[str],
+    exclusion_policy: InventoryExclusionPolicy,
     error_count: list[int],
 ) -> Iterator[Path]:
     """Yield eligible directories child-first with memory bounded by depth."""
@@ -258,11 +247,7 @@ def postorder_directories(
                 continue
             try:
                 is_junction = getattr(entry, "is_junction", lambda: False)()
-                if (
-                    entry.is_symlink()
-                    or is_junction
-                    or not entry.is_dir(follow_symlinks=False)
-                ):
+                if entry.is_symlink() or is_junction or not entry.is_dir(follow_symlinks=False):
                     continue
                 child = Path(entry.path)
                 attributes = int(
@@ -272,11 +257,7 @@ def postorder_directories(
                         0,
                     )
                 )
-                if is_excluded_directory(
-                    child,
-                    excluded_keys,
-                    file_attributes=attributes,
-                ):
+                if exclusion_policy.excludes_directory(child, file_attributes=attributes):
                     continue
                 stack.append((child, None))
             except OSError:
