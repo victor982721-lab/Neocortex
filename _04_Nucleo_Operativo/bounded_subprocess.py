@@ -13,7 +13,7 @@ import tempfile
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO
 
 from .isolated_process import WindowsKillOnCloseJob
@@ -36,6 +36,49 @@ class SubprocessOutputLimitError(RuntimeError):
 
     def __str__(self) -> str:
         return f"subprocess {self.stream} exceeded {self.limit_bytes} bytes"
+
+
+@dataclass(slots=True)
+class _CaptureBuffers:
+    stdout: bytearray = field(default_factory=bytearray)
+    stderr: bytearray = field(default_factory=bytearray)
+    overflow: list[tuple[str, int]] = field(default_factory=list)
+    overflow_lock: threading.Lock = field(default_factory=threading.Lock)
+    reader_errors: list[BaseException] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _TerminationController:
+    process: subprocess.Popen[bytes]
+    job: WindowsKillOnCloseJob | None
+    termination_errors: list[BaseException] = field(default_factory=list)
+    termination_lock: threading.Lock = field(default_factory=threading.Lock)
+    terminated: bool = False
+
+    def terminate(self) -> None:
+        with self.termination_lock:
+            if self.terminated:
+                return
+            self.terminated = True
+            if self.job is not None:
+                try:
+                    self.job.terminate()
+                    return
+                except OSError as error:
+                    self.termination_errors.append(error)
+            try:
+                if self.process.poll() is None:
+                    self.process.kill()
+            except OSError as error:
+                self.termination_errors.append(error)
+
+
+@dataclass(frozen=True, slots=True)
+class _CaptureWait:
+    started_readers: tuple[threading.Thread, ...]
+    timed_out: bool
+    primary_error: BaseException | None
+    returncode: int | None
 
 
 def _drain_bounded_stream(
@@ -135,6 +178,249 @@ def _cleanup_note(error: BaseException) -> str:
     return f"subprocess cleanup: {type(error).__name__}: {error}"
 
 
+def _validate_capture_bounds(
+    arguments: Sequence[str | os.PathLike[str]],
+    *,
+    timeout_seconds: float,
+    stdout_limit_bytes: int,
+    stderr_limit_bytes: int,
+    memory_limit_bytes: int | None,
+) -> None:
+    if not arguments:
+        raise ValueError("subprocess arguments cannot be empty")
+    if timeout_seconds <= 0:
+        raise ValueError("subprocess timeout must be positive")
+    if stdout_limit_bytes < 0 or stderr_limit_bytes < 0:
+        raise ValueError("subprocess output limits cannot be negative")
+    if memory_limit_bytes is not None and memory_limit_bytes < 1:
+        raise ValueError("subprocess memory limit must be positive")
+
+
+def _prepare_stdin(resources: ExitStack, input_bytes: bytes | None) -> int | IO[bytes]:
+    stdin: int | IO[bytes] = subprocess.DEVNULL
+    if input_bytes is None:
+        return stdin
+    input_stream = resources.enter_context(tempfile.TemporaryFile())
+    input_stream.write(input_bytes)
+    input_stream.seek(0)
+    return input_stream
+
+
+def _capture_readers(
+    process: subprocess.Popen[bytes],
+    buffers: _CaptureBuffers,
+    controller: _TerminationController,
+    *,
+    stdout_limit_bytes: int,
+    stderr_limit_bytes: int,
+) -> tuple[threading.Thread, ...]:
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return (
+        threading.Thread(
+            target=_drain_bounded_stream,
+            kwargs={
+                "stream": process.stdout,
+                "output": buffers.stdout,
+                "limit_bytes": stdout_limit_bytes,
+                "stream_name": "stdout",
+                "terminate_process_tree": controller.terminate,
+                "overflow": buffers.overflow,
+                "overflow_lock": buffers.overflow_lock,
+                "reader_errors": buffers.reader_errors,
+            },
+            name="neocortex-subprocess-stdout",
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_drain_bounded_stream,
+            kwargs={
+                "stream": process.stderr,
+                "output": buffers.stderr,
+                "limit_bytes": stderr_limit_bytes,
+                "stream_name": "stderr",
+                "terminate_process_tree": controller.terminate,
+                "overflow": buffers.overflow,
+                "overflow_lock": buffers.overflow_lock,
+                "reader_errors": buffers.reader_errors,
+            },
+            name="neocortex-subprocess-stderr",
+            daemon=True,
+        ),
+    )
+
+
+def _wait_for_capture(
+    process: subprocess.Popen[bytes],
+    readers: tuple[threading.Thread, ...],
+    buffers: _CaptureBuffers,
+    controller: _TerminationController,
+    *,
+    timeout_seconds: float,
+) -> _CaptureWait:
+    started_readers: list[threading.Thread] = []
+    timed_out = False
+    primary_error: BaseException | None = None
+    returncode: int | None = None
+    try:
+        for reader in readers:
+            reader.start()
+            started_readers.append(reader)
+        try:
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            controller.terminate()
+    except BaseException as error:
+        primary_error = error
+        controller.terminate()
+    if buffers.overflow:
+        controller.terminate()
+    return _CaptureWait(tuple(started_readers), timed_out, primary_error, returncode)
+
+
+def _finalize_capture(
+    process: subprocess.Popen[bytes],
+    job: WindowsKillOnCloseJob | None,
+    started_readers: tuple[threading.Thread, ...],
+    initial_returncode: int | None,
+) -> tuple[int | None, list[BaseException]]:
+    cleanup_errors: list[BaseException] = []
+    if job is not None:
+        try:
+            job.close()
+        except OSError as error:
+            cleanup_errors.append(error)
+    returncode = initial_returncode
+    assert process.stdout is not None
+    assert process.stderr is not None
+    try:
+        if process.poll() is None:
+            returncode = process.wait(timeout=_PROCESS_REAP_SECONDS)
+        else:
+            returncode = process.returncode
+    except BaseException as error:
+        cleanup_errors.append(error)
+        try:
+            process.kill()
+        except OSError as kill_error:
+            cleanup_errors.append(kill_error)
+        try:
+            returncode = process.wait(timeout=_PROCESS_REAP_SECONDS)
+        except BaseException as reap_error:
+            cleanup_errors.append(reap_error)
+    try:
+        _join_readers(started_readers, (process.stdout, process.stderr))
+    except BaseException as error:
+        cleanup_errors.append(error)
+    for stream in (process.stdout, process.stderr):
+        try:
+            stream.close()
+        except (OSError, ValueError) as error:
+            cleanup_errors.append(error)
+    return returncode, cleanup_errors
+
+
+def _resolve_capture_result(
+    command: tuple[str, ...],
+    *,
+    timeout_seconds: float,
+    buffers: _CaptureBuffers,
+    controller: _TerminationController,
+    wait: _CaptureWait,
+    returncode: int | None,
+    cleanup_errors: list[BaseException],
+) -> subprocess.CompletedProcess[bytes]:
+    captured_stdout = bytes(buffers.stdout)
+    captured_stderr = bytes(buffers.stderr)
+    diagnostic_errors = controller.termination_errors + cleanup_errors
+    if wait.primary_error is not None:
+        for diagnostic_error in diagnostic_errors:
+            wait.primary_error.add_note(_cleanup_note(diagnostic_error))
+        raise wait.primary_error
+    if wait.timed_out:
+        timeout_error = subprocess.TimeoutExpired(
+            command,
+            timeout_seconds,
+            output=captured_stdout,
+            stderr=captured_stderr,
+        )
+        for cleanup_error in diagnostic_errors:
+            timeout_error.add_note(_cleanup_note(cleanup_error))
+        raise timeout_error
+    if buffers.overflow:
+        stream_name, limit_bytes = buffers.overflow[0]
+        overflow_error = SubprocessOutputLimitError(stream_name, limit_bytes)
+        for cleanup_error in diagnostic_errors:
+            overflow_error.add_note(_cleanup_note(cleanup_error))
+        raise overflow_error
+    if buffers.reader_errors:
+        raise RuntimeError("subprocess output capture failed") from buffers.reader_errors[0]
+    if diagnostic_errors:
+        raise RuntimeError("subprocess cleanup failed") from diagnostic_errors[0]
+    if returncode is None:
+        raise RuntimeError("subprocess did not expose a terminal return code")
+    return subprocess.CompletedProcess(
+        command,
+        returncode,
+        captured_stdout,
+        captured_stderr,
+    )
+
+
+def _execute_bounded_capture(
+    command: tuple[str, ...],
+    *,
+    stdin: int | IO[bytes],
+    timeout_seconds: float,
+    stdout_limit_bytes: int,
+    stderr_limit_bytes: int,
+    creationflags: int,
+    cwd: str | None,
+    environment: Mapping[str, str] | None,
+    memory_limit_bytes: int | None,
+) -> subprocess.CompletedProcess[bytes]:
+    process, job = _start_bounded_process(
+        command,
+        stdin=stdin,
+        creationflags=creationflags,
+        cwd=cwd,
+        environment=environment,
+        memory_limit_bytes=memory_limit_bytes,
+    )
+    buffers = _CaptureBuffers()
+    controller = _TerminationController(process, job)
+    readers = _capture_readers(
+        process,
+        buffers,
+        controller,
+        stdout_limit_bytes=stdout_limit_bytes,
+        stderr_limit_bytes=stderr_limit_bytes,
+    )
+    wait = _wait_for_capture(
+        process,
+        readers,
+        buffers,
+        controller,
+        timeout_seconds=timeout_seconds,
+    )
+    returncode, cleanup_errors = _finalize_capture(
+        process,
+        job,
+        wait.started_readers,
+        wait.returncode,
+    )
+    return _resolve_capture_result(
+        command,
+        timeout_seconds=timeout_seconds,
+        buffers=buffers,
+        controller=controller,
+        wait=wait,
+        returncode=returncode,
+        cleanup_errors=cleanup_errors,
+    )
+
+
 def run_bounded_capture(
     arguments: Sequence[str | os.PathLike[str]],
     *,
@@ -156,179 +442,28 @@ def run_bounded_capture(
     survive the call.
     """
 
-    if not arguments:
-        raise ValueError("subprocess arguments cannot be empty")
-    if timeout_seconds <= 0:
-        raise ValueError("subprocess timeout must be positive")
-    if stdout_limit_bytes < 0 or stderr_limit_bytes < 0:
-        raise ValueError("subprocess output limits cannot be negative")
-    if memory_limit_bytes is not None and memory_limit_bytes < 1:
-        raise ValueError("subprocess memory limit must be positive")
-
+    _validate_capture_bounds(
+        arguments,
+        timeout_seconds=timeout_seconds,
+        stdout_limit_bytes=stdout_limit_bytes,
+        stderr_limit_bytes=stderr_limit_bytes,
+        memory_limit_bytes=memory_limit_bytes,
+    )
     command = tuple(os.fspath(argument) for argument in arguments)
     working_directory = None if cwd is None else os.fspath(cwd)
     with ExitStack() as resources:
-        stdin: int | IO[bytes] = subprocess.DEVNULL
-        if input_bytes is not None:
-            input_stream = resources.enter_context(tempfile.TemporaryFile())
-            input_stream.write(input_bytes)
-            input_stream.seek(0)
-            stdin = input_stream
-        process, job = _start_bounded_process(
+        stdin = _prepare_stdin(resources, input_bytes)
+        return _execute_bounded_capture(
             command,
             stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            stdout_limit_bytes=stdout_limit_bytes,
+            stderr_limit_bytes=stderr_limit_bytes,
             creationflags=creationflags,
             cwd=working_directory,
             environment=environment,
             memory_limit_bytes=memory_limit_bytes,
         )
-        assert process.stdout is not None
-        assert process.stderr is not None
-        stdout = bytearray()
-        stderr = bytearray()
-        overflow: list[tuple[str, int]] = []
-        overflow_lock = threading.Lock()
-        reader_errors: list[BaseException] = []
-        termination_errors: list[BaseException] = []
-        cleanup_errors: list[BaseException] = []
-        termination_lock = threading.Lock()
-        terminated = False
-
-        def terminate_process_tree() -> None:
-            nonlocal terminated
-            with termination_lock:
-                if terminated:
-                    return
-                terminated = True
-                if job is not None:
-                    try:
-                        job.terminate()
-                        return
-                    except OSError as error:
-                        termination_errors.append(error)
-                try:
-                    if process.poll() is None:
-                        process.kill()
-                except OSError as error:
-                    termination_errors.append(error)
-
-        readers = (
-            threading.Thread(
-                target=_drain_bounded_stream,
-                kwargs={
-                    "stream": process.stdout,
-                    "output": stdout,
-                    "limit_bytes": stdout_limit_bytes,
-                    "stream_name": "stdout",
-                    "terminate_process_tree": terminate_process_tree,
-                    "overflow": overflow,
-                    "overflow_lock": overflow_lock,
-                    "reader_errors": reader_errors,
-                },
-                name="neocortex-subprocess-stdout",
-                daemon=True,
-            ),
-            threading.Thread(
-                target=_drain_bounded_stream,
-                kwargs={
-                    "stream": process.stderr,
-                    "output": stderr,
-                    "limit_bytes": stderr_limit_bytes,
-                    "stream_name": "stderr",
-                    "terminate_process_tree": terminate_process_tree,
-                    "overflow": overflow,
-                    "overflow_lock": overflow_lock,
-                    "reader_errors": reader_errors,
-                },
-                name="neocortex-subprocess-stderr",
-                daemon=True,
-            ),
-        )
-        started_readers: list[threading.Thread] = []
-        timed_out = False
-        primary_error: BaseException | None = None
-        returncode: int | None = None
-        try:
-            for reader in readers:
-                reader.start()
-                started_readers.append(reader)
-            try:
-                returncode = process.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                terminate_process_tree()
-        except BaseException as error:
-            primary_error = error
-            terminate_process_tree()
-
-        if overflow:
-            terminate_process_tree()
-        if job is not None:
-            try:
-                job.close()
-            except OSError as error:
-                cleanup_errors.append(error)
-        try:
-            if process.poll() is None:
-                returncode = process.wait(timeout=_PROCESS_REAP_SECONDS)
-            else:
-                returncode = process.returncode
-        except BaseException as error:
-            cleanup_errors.append(error)
-            try:
-                process.kill()
-            except OSError as kill_error:
-                cleanup_errors.append(kill_error)
-            try:
-                returncode = process.wait(timeout=_PROCESS_REAP_SECONDS)
-            except BaseException as reap_error:
-                cleanup_errors.append(reap_error)
-
-        try:
-            _join_readers(tuple(started_readers), (process.stdout, process.stderr))
-        except BaseException as error:
-            cleanup_errors.append(error)
-        for stream in (process.stdout, process.stderr):
-            try:
-                stream.close()
-            except (OSError, ValueError) as error:
-                cleanup_errors.append(error)
-
-    captured_stdout = bytes(stdout)
-    captured_stderr = bytes(stderr)
-    diagnostic_errors = termination_errors + cleanup_errors
-    if primary_error is not None:
-        for diagnostic_error in diagnostic_errors:
-            primary_error.add_note(_cleanup_note(diagnostic_error))
-        raise primary_error
-    if timed_out:
-        timeout_error = subprocess.TimeoutExpired(
-            command,
-            timeout_seconds,
-            output=captured_stdout,
-            stderr=captured_stderr,
-        )
-        for cleanup_error in diagnostic_errors:
-            timeout_error.add_note(_cleanup_note(cleanup_error))
-        raise timeout_error
-    if overflow:
-        stream_name, limit_bytes = overflow[0]
-        overflow_error = SubprocessOutputLimitError(stream_name, limit_bytes)
-        for cleanup_error in diagnostic_errors:
-            overflow_error.add_note(_cleanup_note(cleanup_error))
-        raise overflow_error
-    if reader_errors:
-        raise RuntimeError("subprocess output capture failed") from reader_errors[0]
-    if diagnostic_errors:
-        raise RuntimeError("subprocess cleanup failed") from diagnostic_errors[0]
-    if returncode is None:
-        raise RuntimeError("subprocess did not expose a terminal return code")
-    return subprocess.CompletedProcess(
-        command,
-        returncode,
-        captured_stdout,
-        captured_stderr,
-    )
 
 
 __all__ = ["SubprocessOutputLimitError", "run_bounded_capture"]
