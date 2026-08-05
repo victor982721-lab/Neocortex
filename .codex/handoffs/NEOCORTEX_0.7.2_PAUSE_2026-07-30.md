@@ -1,6 +1,6 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-05, salida real 74 diagnosticada y corrección fuente validada.
+> Actualizado: 2026-08-05, salida real 74 corregida, empaquetada y promovida.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
@@ -37,6 +37,27 @@ varios minutos), además de dos regresiones de ruta PDF, Ruff/format, compileall
 `git diff --check` y Mypy focal de siete módulos. Mypy transitivo conserva nueve
 deudas anteriores fuera de este cambio. No se reprocesó el corpus ni se modificó
 el estado durable.
+
+La corrección quedó consolidada en el commit `5146674`. El wheel promovido está
+en `C:\Users\Victor\Neocortex\Laboratory\neocortex-runtime-output-fix\candidate-5146674\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`;
+tiene 1 605 370 bytes, SHA-256
+`1917ab85f82912557648f50fd47983f9340a512c80d48ee79660f660f38d00ce` y
+xxh3_128 `4704b5ae8a35c1d60473066aeeff316c`. El runtime aislado `full`
+quedó con `pip check` limpio y 8/8 capacidades disponibles. Su aceptación
+procesó 20/20 PDF sintéticos, publicó 20 páginas FTS y 20 perfiles, con
+`action_errors=0`, `profile_errors=0` y exit `0`; el replay reutilizó 20/20
+extracciones y clasificaciones, sin trabajo ni errores nuevos.
+
+El runtime versionado instalado es
+`0.7.2-wheel-xxh3_128-4704b5ae8a35c1d60473066aeeff316c`. El launcher estable
+se promovió mediante la transición NTFS registrada y quedó en SHA-256
+`44d4b33bc386266d290a92bf321b7e9cab359041e5b567fb17d731c4cf725f0b`;
+`Neocortex --version` informa `0.7.2` y el doctor estable confirma 8/8
+capacidades. El recibo es
+`2ee597a8741613c7595049dfe5aa18fb3b4c2bbf829ee3736abfcf8295674709.result.json`
+y el rollback externo conserva el launcher anterior por su SHA-256
+`021a982f58ee5e0156d1cd3d8589541bff80c99d6a8e3d6edbb9b3378af56619`.
+No se volvió a ejecutar `--all` ni se tocó el corpus o el estado durable vivo.
 
 El inventario normal v3 excluye antes de leer contenido los árboles internos de
 Neocortex (`Laboratory`, `Laboratories`, `TestTemp`, `Lab`, `Checkpoints`,
