@@ -67,6 +67,14 @@ de `pytest`/`tmp`/`basetemp`/`inline-snapshot`, cachés de herramientas y archiv
 `.pyc`/`.pyo`. `build` y `dist` permanecen elegibles para no ocultar contenido
 propio por un nombre genérico.
 
+El corte `593e584` redujo los hotspots publicados de clonación de miembros
+Semantic y del preset protegido de autoanálisis sin cambiar sus contratos de
+atomicidad, reanudación, orden de fases o cancelación. La barrera focal aprobó
+29 pruebas Semantic y 125 pruebas CLI/self-analysis; Ruff y `git diff --check`
+quedaron limpios. El replay aislado final quedó `ready`, retiró
+`cli_validation.apply_self_analysis_preset` del paquete de trabajo y dejó como
+siguiente recomendación `external_supply_chain_audit.execute_installed_package_inventory`.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
@@ -1509,10 +1517,10 @@ ausentes y su candidate limit, no evidencia inventada.
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
 5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
-   `cli_validation.apply_self_analysis_preset` con sus pruebas CLI/self-analysis
-   existentes. El selector deep actual protege Coverage, no ese objetivo: elegir
-   primero los node ids reales que lo ejercitan y conservar preset, argv y
-   compatibilidad pública exactos.
+   `external_supply_chain_audit.execute_installed_package_inventory` con sus
+   regresiones de fase, cancelación y diff de publicación. Mantener la evidencia
+   de proveedores ausentes como abstención; no convertirla en una autorización
+   de mutación ni en una instalación global.
 6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
    Diff ya separa relocations, pero los findings realmente `added/resolved` aún
    exponen conteos y no ejemplos tipados públicos. Esta aceptación necesitó una
