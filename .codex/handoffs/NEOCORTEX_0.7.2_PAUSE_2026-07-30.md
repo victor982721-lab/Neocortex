@@ -127,6 +127,15 @@ El diff v10 contra v9 quedó `ready` y `equivalent_under_observed_metrics`, con
 perdidas. La siguiente recomendación publicada es
 `external_mutation_cosmic_ray.execute_cosmic_ray_mutation`.
 
+Después se alineó el contrato de configuración Code con la allowlist personal
+intencional: `ApplicationConfig` declara 132 campos y las proyecciones públicas
+conservan `code_project_roots` como `explicit_project_roots`, mientras el modo
+de autoanálisis sigue usando exclusivamente su raíz explícita. Las pruebas
+focales pasaron 27 casos y el carril `standard` reproducido localmente pasó
+385 pruebas con una sola exclusión prevista; Ruff y el formato quedaron limpios.
+No se ejecutó el corpus ni se modificó estado durable. La verificación remota
+queda pendiente de la PR que transporte este ajuste.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó

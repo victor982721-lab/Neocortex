@@ -42,7 +42,7 @@ from _04_Nucleo_Operativo.route_registry import (
 def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
     assert ApplicationConfig is FrameworkConfig
     application_fields = fields(ApplicationConfig)
-    assert len(application_fields) == 131
+    assert len(application_fields) == 132
     assert {item.name for item in application_fields} >= {
         "analysis_profile",
         "deep_test_selectors",
@@ -54,6 +54,7 @@ def test_application_config_preserves_the_complete_legacy_dataclass() -> None:
         "deep_mutation_max_mutants",
         "deep_mutation_timeout_seconds",
         "code_candidate_scope",
+        "code_project_roots",
         "deep_mutation_time_budget_seconds",
     }
     base = Path("synthetic-application-config")
@@ -105,6 +106,7 @@ def test_default_code_projection_uses_current_canonical_paths() -> None:
         state_path=Path("canonical-code-state") / "code.sqlite3",
         dedup_path=Path("canonical-code-state") / "dedup.sqlite3",
         candidate_scope="projects",
+        explicit_project_roots=canonical.code_project_roots,
         include_generated=False,
         include_vendored=False,
     )
@@ -146,6 +148,7 @@ def test_code_projection_preserves_every_override_and_signature_input() -> None:
         retry_errors=True,
         cache_validation="full",
         candidate_scope="broad",
+        explicit_project_roots=config.code_project_roots,
         include_generated=False,
         include_vendored=False,
         complexity_warning=23,
