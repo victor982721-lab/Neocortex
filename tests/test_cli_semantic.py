@@ -738,6 +738,43 @@ def test_all_advances_document_semantic_without_broad_code_by_default(
     assert "truncated=1" in output
 
 
+def test_all_semantic_uses_shared_progress_and_captures_structured_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from _03_Progreso import RecordingProgress
+
+    (tmp_path / "pdf.sqlite3").touch()
+    args = build_parser().parse_args(["--all", "--state-directory", str(tmp_path)])
+    validate_arguments(args)
+    result = _index_result(tmp_path, ("pdf",))
+    progress = RecordingProgress()
+    captured: list[tuple[str, object]] = []
+    with patch(
+        "_04_Nucleo_Operativo.semantic_service.index_text_embeddings",
+        return_value=result,
+    ) as operation:
+        assert (
+            run_integrated_all_semantic_index(
+                args,
+                progress=progress,
+                result_sink=lambda scope, value: captured.append((scope, value)),
+                print_output=False,
+            )
+            == 0
+        )
+
+    assert operation.call_args.kwargs["progress"] is progress
+    assert captured == [("text", result)]
+    integrated = [event for event in progress.events if event.phase == "integrated"]
+    assert [event.description for event in integrated] == [
+        "Inicializando Semantic",
+        "Semantic completado",
+    ]
+    assert integrated[-1].finished is True
+    assert capsys.readouterr().out == ""
+
+
 def test_all_accepts_explicit_code_semantic_selection(tmp_path: Path) -> None:
     (tmp_path / "code.sqlite3").touch()
     args = build_parser().parse_args(

@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -61,11 +60,19 @@ _METRIC_PRESENTATION = {
     "queued_work": ("cola", "yellow"),
     "remaining": ("faltan", "white"),
     "memory_waits": ("esperas", "yellow"),
+    "sources": ("fuentes", "cyan"),
+    "chunks": ("fragmentos", "blue"),
+    "new_jobs": ("trabajo-nuevo", "magenta"),
+    "reused": ("reutilizados", "cyan"),
+    "embedded": ("vectores", "green"),
+    "generation": ("generación", "bright_black"),
+    "status": ("estado", "white"),
 }
 
 _ZERO_VISIBLE_METRICS = {
     "cache_hits",
     "new_work",
+    "new_jobs",
     "cache_refreshes",
     "retries",
     "errors",
@@ -179,8 +186,13 @@ class RichProgress:
                     refresh=False,
                 )
             if event.finished:
-                if event.total is not None:
-                    self._progress.update(task_id, completed=event.total, refresh=True)
+                terminal_total = event.total if event.total is not None else event.completed
+                self._progress.update(
+                    task_id,
+                    completed=terminal_total,
+                    total=terminal_total,
+                    refresh=True,
+                )
                 self._progress.stop_task(task_id)
 
     def __enter__(self) -> "RichProgress":
@@ -205,4 +217,6 @@ class RecordingProgress:
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         return None
+
+
 # endregion [02]

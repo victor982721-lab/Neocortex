@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from _03_Progreso import RecordingProgress
 from _04_Nucleo_Operativo import semantic_generation_worker
 from _04_Nucleo_Operativo.semantic_chunking import (
     TextChunkingConfig,
@@ -208,6 +209,33 @@ def test_new_payload_satisfies_duplicate_pending_after_prior_batch(
     assert payloads == 1
     assert members == 2
     assert head is not None and int(head[0]) == generation_id
+
+
+def test_generation_emits_live_semantic_progress_until_publication(
+    tmp_path: Path,
+) -> None:
+    database, generation_id, model = _duplicate_generation(tmp_path)
+    backend = _RecordingBackend(model, max_batch_size=1)
+    progress = RecordingProgress()
+
+    work = run_generation(
+        database,
+        generation_id,
+        backend,
+        queued=2,
+        progress=progress,
+    )
+
+    events = [event for event in progress.events if event.operation == "semantic"]
+    assert len(events) >= 2
+    assert events[0].phase == f"generation:{generation_id}"
+    assert events[-1].finished is True
+    assert events[-1].completed == events[-1].total == work.summary.done
+    assert events[-1].description == "Embeddings de texto publicados"
+    metrics = {metric.name: metric.value for metric in events[-1].metrics}
+    assert metrics["reused"] == 1
+    assert metrics["embedded"] == 1
+    assert metrics["remaining"] == 0
 
 
 def test_bounded_generation_requires_durable_complete_enumeration_to_publish(

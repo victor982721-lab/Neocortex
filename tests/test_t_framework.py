@@ -304,6 +304,43 @@ class ProgressTests(unittest.TestCase):
         self.assertIn("errores 1", rendered)
         self.assertIn("faltan 0", rendered)
 
+    def test_finished_unknown_total_becomes_a_complete_terminal_total(self) -> None:
+        output = io.StringIO()
+        console = Console(file=output, force_terminal=False, width=120)
+        with RichProgress(console=console) as progress:
+            progress(
+                ProgressEvent(
+                    "semantic",
+                    "stage:pdf",
+                    "Preparando texto PDF",
+                    3,
+                    None,
+                    "documentos",
+                )
+            )
+            progress(
+                ProgressEvent(
+                    "semantic",
+                    "stage:pdf",
+                    "Texto PDF preparado",
+                    3,
+                    None,
+                    "documentos",
+                    True,
+                    (
+                        ProgressMetric("chunks", 7),
+                        ProgressMetric("embedded", 5),
+                    ),
+                )
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("Texto PDF preparado", rendered)
+        self.assertIn("3/3", rendered)
+        self.assertNotIn("3/?", rendered)
+        self.assertIn("fragmentos 7", rendered)
+        self.assertIn("vectores 5", rendered)
+
 
 class OrchestratorTests(unittest.TestCase):
     def test_effective_exclusions_include_custom_state_but_not_same_named_dirs(
