@@ -89,6 +89,18 @@ La siguiente recomendación publicada es
 `bounded_subprocess.run_bounded_capture`; las abstenciones de proveedores se
 conservan como evidencia advisory, no como autorización de mutación.
 
+El corte siguiente separa la orquestación de
+`bounded_subprocess.run_bounded_capture` en validación, preparación de stdin,
+lectores, espera, finalización y resolución de errores, conservando la
+precedencia de timeout/overflow/excepción y la limpieza del proceso descendiente.
+Las regresiones focales pasaron 19 pruebas; Ruff y Mypy local quedaron limpios.
+El autoanálisis aislado v7 procesó 607 archivos, 579 candidatos, cero errores de
+inventario y cero errores Code; su review quedó `ready` y retiró el hotspot.
+El diff v7 contra v6 quedó `ready` y `equivalent_under_observed_metrics`, con
+0 hotspots añadidos, 0 cambiados, 1 retirado y 0 llamadas corregidas o perdidas.
+La siguiente recomendación publicada es
+`semantic_image_index.index_image_embeddings`.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
@@ -1531,8 +1543,9 @@ ausentes y su candidate limit, no evidencia inventada.
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
 5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
-   `bounded_subprocess.run_bounded_capture` con regresiones de timeout,
-   interrupción y limpieza; comparar la publicación y exigir replay incremental.
+   `semantic_image_index.index_image_embeddings` con regresiones de orden de
+   fases, cancelación y diff de publicación; conservar separados los espacios
+   vectoriales de imagen y texto.
    Mantener la evidencia de proveedores ausentes como abstención; no convertirla
    en una autorización de mutación ni en una instalación global.
 6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
