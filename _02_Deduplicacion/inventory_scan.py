@@ -27,6 +27,30 @@ DEFAULT_EXCLUDED_PATHS = (
     Path.home() / ".codex",
     Path.home() / ".cache",
     Path.home() / ".sbx-denybin",
+    Path.home() / "Neocortex" / "Laboratory",
+    Path.home() / "Neocortex" / "Lab",
+    Path.home() / "Neocortex" / "Checkpoints",
+    Path.home() / "Neocortex" / "Backups",
+    Path.home() / "Neocortex" / "external_backups",
+)
+DEFAULT_GENERATED_DIRECTORY_NAMES = (
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "site-packages",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+)
+DEFAULT_GENERATED_FILE_SUFFIXES = (
+    ".pyc",
+    ".pyo",
 )
 INTERNAL_DIRECTORY_PREFIXES = (".dedupe-quarantine-",)
 INVENTORY_EXCLUSION_SIGNATURE_VERSION = "inventory-exclusion-policy-v2"
@@ -34,9 +58,7 @@ MAX_INVENTORY_EXCLUSION_RULES = 1024
 MAX_INVENTORY_EXCLUSION_RULE_CHARS = 255
 MAX_INVENTORY_EXCLUSION_PATH_CHARS = 32_767
 FILE_ATTRIBUTE_HIDDEN = getattr(stat_module, "FILE_ATTRIBUTE_HIDDEN", 0x00000002)
-FILE_ATTRIBUTE_REPARSE_POINT = getattr(
-    stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400
-)
+FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat_module, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
 
 
 def _normalize_named_rules(
@@ -62,9 +84,7 @@ def _normalize_named_rules(
             raise ValueError(f"{kind} rules must be non-empty dotted suffixes")
         normalized.add(value.casefold())
         if len(normalized) > MAX_INVENTORY_EXCLUSION_RULES:
-            raise ValueError(
-                f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_RULES} entries"
-            )
+            raise ValueError(f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_RULES} entries")
     return tuple(sorted(normalized))
 
 
@@ -84,15 +104,11 @@ def _canonical_path_rules(
             raise ValueError(f"invalid {kind} rule: {raw_path!r}")
         canonical = os.path.realpath(os.path.abspath(raw_path))
         if len(canonical) > MAX_INVENTORY_EXCLUSION_PATH_CHARS:
-            raise ValueError(
-                f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_PATH_CHARS} characters"
-            )
+            raise ValueError(f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_PATH_CHARS} characters")
         key = os.path.normcase(canonical)
         canonical_by_key.setdefault(key, canonical)
         if len(canonical_by_key) > MAX_INVENTORY_EXCLUSION_RULES:
-            raise ValueError(
-                f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_RULES} entries"
-            )
+            raise ValueError(f"{kind} rules exceed {MAX_INVENTORY_EXCLUSION_RULES} entries")
     return canonical_by_key
 
 
@@ -305,9 +321,7 @@ class InventoryExclusionPolicy:
             directory_names=frozenset(normalized_directories),
             file_names=frozenset(normalized_files),
             file_suffixes=normalized_suffixes,
-            restricted_roots=tuple(
-                restricted_by_key[key] for key in restricted_root_keys
-            ),
+            restricted_roots=tuple(restricted_by_key[key] for key in restricted_root_keys),
             restricted_path_keys=restricted_path_key_set,
             restricted_allowed_trees=tuple(
                 restricted_tree_by_key[key] for key in restricted_tree_keys
@@ -338,9 +352,7 @@ class InventoryExclusionPolicy:
             self.restricted_path_keys,
         )
         if restricted_root is not None:
-            directory_name = os.path.basename(
-                os.path.abspath(os.fspath(path))
-            ).casefold()
+            directory_name = os.path.basename(os.path.abspath(os.fspath(path))).casefold()
             if directory_name in self.restricted_directory_names:
                 return True
             is_inside_allowed_tree = (
@@ -374,9 +386,7 @@ class InventoryExclusionPolicy:
         """Match exact file names and bounded suffixes case-insensitively."""
 
         name = os.path.basename(os.path.abspath(os.fspath(path))).casefold()
-        if name in self.file_names or any(
-            name.endswith(suffix) for suffix in self.file_suffixes
-        ):
+        if name in self.file_names or any(name.endswith(suffix) for suffix in self.file_suffixes):
             return True
         path_key = _absolute_path_key(path)
         if _containing_path_key(path_key, self.restricted_path_keys) is None:
@@ -403,9 +413,7 @@ def validate_inventory_root(root: str | Path) -> Path:
     try:
         root_stat = os.lstat(absolute)
     except OSError as exc:
-        raise InventoryError(
-            f"cannot inspect inventory root: {absolute}: {exc}"
-        ) from exc
+        raise InventoryError(f"cannot inspect inventory root: {absolute}: {exc}") from exc
 
     is_junction = getattr(os.path, "isjunction", lambda _path: False)
     attributes = int(getattr(root_stat, "st_file_attributes", 0))
@@ -415,8 +423,7 @@ def validate_inventory_root(root: str | Path) -> Path:
         or attributes & FILE_ATTRIBUTE_REPARSE_POINT
     ):
         raise InventoryError(
-            "inventory root cannot be a symlink, junction, or reparse point: "
-            f"{absolute}"
+            f"inventory root cannot be a symlink, junction, or reparse point: {absolute}"
         )
     if not stat_module.S_ISDIR(root_stat.st_mode):
         raise InventoryError(f"inventory root is not a directory: {absolute}")
@@ -458,13 +465,14 @@ def exclusion_path_keys(paths: Iterable[str | Path]) -> frozenset[str]:
     """Normalize explicit subtree roots once for all inventory consumers."""
 
     return frozenset(
-        os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path))))
-        for path in paths
+        os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(path)))) for path in paths
     )
 
 
 DEFAULT_INVENTORY_EXCLUSION_POLICY = InventoryExclusionPolicy.compile(
-    DEFAULT_EXCLUDED_PATHS
+    DEFAULT_EXCLUDED_PATHS,
+    directory_names=DEFAULT_GENERATED_DIRECTORY_NAMES,
+    file_suffixes=DEFAULT_GENERATED_FILE_SUFFIXES,
 )
 
 
@@ -476,9 +484,7 @@ def resolve_inventory_exclusion_policy(
 
     if exclusion_policy is not None:
         if excluded_paths is not None:
-            raise ValueError(
-                "excluded_paths and exclusion_policy cannot be supplied together"
-            )
+            raise ValueError("excluded_paths and exclusion_policy cannot be supplied together")
         return exclusion_policy
     if excluded_paths is None:
         return DEFAULT_INVENTORY_EXCLUSION_POLICY
@@ -489,9 +495,7 @@ def id_blob(value: int) -> bytes:
     """Encode an unsigned filesystem identity for the SQLite schema."""
 
     if value < 0 or value.bit_length() > 128:
-        raise InventoryError(
-            "filesystem identity does not fit an unsigned 128-bit value"
-        )
+        raise InventoryError("filesystem identity does not fit an unsigned 128-bit value")
     return value.to_bytes(16, "little")
 
 
@@ -649,9 +653,22 @@ class _InventoryTraversal:
         try:
             while stack:
                 self._advance(stack)
+        except BaseException as exc:
+            try:
+                self._batch.flush()
+            except Exception as flush_error:
+                exc.add_note(
+                    "inventory interruption could not flush its pending batch: "
+                    f"{type(flush_error).__name__}: {flush_error}"
+                )
+            raise
         finally:
             self._close_stack(stack)
         self._batch.flush()
+        return self._counters
+
+    @property
+    def counters(self) -> _ScanCounters:
         return self._counters
 
     def _advance(self, stack: list[tuple[str, _DirectoryIterator | None]]) -> None:
@@ -790,17 +807,28 @@ class InventoryScanner:
         )
         root_identity = _RootIdentity.capture(root)
         scan_id = self._begin_scan(root_identity, effective_policy.signature)
-        self._emit_started(progress)
-        counters = _InventoryTraversal(
+        traversal = _InventoryTraversal(
             self._connection,
             root_identity,
             scan_id,
             batch_size=batch_size,
             exclusion_policy=effective_policy,
             progress=progress,
-        ).run()
-        root_identity.verify_unchanged()
-        self._complete_scan(scan_id, counters)
+        )
+        try:
+            self._emit_started(progress)
+            counters = traversal.run()
+            root_identity.verify_unchanged()
+            self._complete_scan(scan_id, counters)
+        except BaseException as exc:
+            try:
+                self._complete_interrupted_scan(scan_id, traversal.counters)
+            except Exception as recovery_error:
+                exc.add_note(
+                    "inventory interruption could not finalize its scan: "
+                    f"{type(recovery_error).__name__}: {recovery_error}"
+                )
+            raise
         if counters.errors:
             raise InventoryError(
                 f"inventory scan {scan_id} was partial with "
@@ -853,13 +881,38 @@ class InventoryScanner:
                 ),
             )
 
+    def _complete_interrupted_scan(
+        self,
+        scan_id: int,
+        counters: _ScanCounters,
+    ) -> None:
+        with self._connection:
+            result = self._connection.execute(
+                """UPDATE scans SET completed_ns=?,
+                files_seen=(SELECT COUNT(*) FROM files WHERE scan_id=?),
+                directories_seen=?,
+                bytes_seen=(SELECT COALESCE(SUM(size),0) FROM files WHERE scan_id=?),
+                skipped_links=?,excluded_directories=?,errors=?,status='partial'
+                WHERE scan_id=? AND completed_ns IS NULL AND status='building'""",
+                (
+                    time.time_ns(),
+                    scan_id,
+                    counters.directories_seen,
+                    scan_id,
+                    counters.skipped_links,
+                    counters.excluded_directories,
+                    counters.errors,
+                    scan_id,
+                ),
+            )
+            if result.rowcount != 1:
+                raise InventoryError(f"cannot finalize interrupted inventory scan {scan_id}")
+
     @staticmethod
     def _emit_started(progress: ProgressCallback | None) -> None:
         emit_progress(
             progress,
-            ProgressEvent(
-                "dedup", "inventory", "Inventariando archivos", 0, unit="archivos"
-            ),
+            ProgressEvent("dedup", "inventory", "Inventariando archivos", 0, unit="archivos"),
         )
 
     @staticmethod

@@ -1,12 +1,27 @@
 # Neocortex — handoff operativo actual
 
-> Actualizado: 2026-08-04, selección Code acotada a proyectos publicada y
-> lanzador estable promovido.
+> Actualizado: 2026-08-04, inventario normal acotado a contenido útil y
+> launcher reparado promovido.
 > Este archivo conserva su nombre anterior sólo para mantener la ruta conocida.
 > `Resultado actual` y `Próximos pasos` son la única guía vigente; los
 > checkpoints restantes conservan evidencia histórica y no son planes activos.
 
 ## Resultado actual
+
+El inventario normal excluye antes de leer contenido los árboles internos de
+Neocortex (`Laboratory`, `Lab`, `Checkpoints`, `Backups` y
+`external_backups`), metadatos VCS, entornos Python, `site-packages`,
+`node_modules`, `__pycache__`, cachés de herramientas y archivos `.pyc`/`.pyo`.
+Estas exclusiones aplican globalmente aunque aparezcan fuera de los proyectos;
+`build` y `dist` permanecen elegibles para no ocultar contenido propio por un
+nombre genérico.
+
+Una interrupción conserva el último lote inventariado y finaliza la generación
+como `partial`. Al comenzar la siguiente corrida, cualquier generación antigua
+que haya quedado `building` se recupera de forma idempotente como `partial` y
+se invalida su checkpoint antes de abrir una generación nueva. Por ello la
+corrida 27 cancelada no fue editada manualmente ni requirió respaldo de SQLite:
+el próximo `Neocortex --all` realizará la recuperación automáticamente.
 
 La selección pública de Code usa ahora `--code-scope projects` por defecto.
 Descubre límites de proyecto mediante manifiestos fuertes y, antes de leer
@@ -15,15 +30,24 @@ directorios de build/generados y cachés. `--code-scope broad` conserva la
 selección histórica amplia únicamente como override deliberado; `--select-path`
 sigue admitiendo una ruta exacta y `--self-analysis` conserva su raíz explícita.
 
-El wheel final está en
-`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-code-project-scope-20260804-rc3\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
-Tiene 1 597 847 bytes, SHA-256
-`D7492BF5119F35F96AF5AF09534684D6F0AF32A12DE12046018FEBDB6FB38452` y
-xxh3_128 `d8747b3b6d25f63ed0fbc40a69a6495c`. Los diez módulos de producción
-modificados son byte-idénticos entre fuente e instalación; `pip check` está
-limpio y `doctor capabilities --json` informa 8/8 capacidades. El lanzador
-estable fue promovido atómicamente con respaldo y recibo encadenado; su SHA-256
-vigente es `0C2104DAA3A5C46F63E731F639B58EFD1D041A14FCE602FE12EB3062BD327FF1`.
+El wheel vigente está en
+`C:\Users\Victor\Neocortex\Laboratory\neocortex-0.7.2-inventory-exclusions-20260804-rc1\wheelhouse\neocortex_framework-0.7.2-py3-none-any.whl`.
+Tiene 1 598 994 bytes, SHA-256
+`26EDAB8A9590D79F97076F4A50B6A227FD29D0AA4CA487F8B6C5609AA3D9E52D` y
+xxh3_128 `81a0fc635452a328bce44744467cd645`. Los cuatro módulos de producción
+de esta reparación son byte-idénticos entre fuente e instalación; `pip check`
+está limpio, 109 pruebas integradas aprobaron y Ruff quedó limpio. La aceptación
+instalada inventarió 14 de 30 archivos: omitió los 16 generados o dependencias,
+tuvo cero errores y el replay exacto reutilizó los 14 resultados.
+
+El launcher estable fue promovido atómicamente al runtime
+`0.7.2-wheel-xxh3_128-81a0fc635452a328bce44744467cd645`; su SHA-256 vigente
+es `08CEC462AD592629C495E38C2FF2EE7E732373DED59AE223452137355A7267EF`.
+El recibo encadenado es
+`e918e0ad5f65d3968467217a9ac0faf94486de39b4c5d8ce9968b7321fed07c2.result.json`
+y el launcher anterior quedó respaldado por su hash. Desde una ruta externa al
+repositorio, `Neocortex --version` devuelve 0.7.2 y
+`Neocortex doctor capabilities --json` informa 8/8 capacidades disponibles.
 
 La aceptación instalada inventarió una muestra aislada de 20 archivos y
 detectó 10 candidatos propios dentro de dos proyectos. Omitió 2 archivos fuera
@@ -1421,11 +1445,13 @@ ausentes y su candidate limit, no evidencia inventada.
 
 ## Próximos pasos, en orden
 
-1. **Ejecutar la corrida real sólo cuando Victor lo decida.** Iniciar el rc2
-   instalado con `Neocortex --all`, sin `--apply`, sobre la raíz y estado
-   canónicos. No se inició ninguna corrida viva en este corte. Code seleccionará
-   proyectos por defecto y Semantic implícito priorizará documentos/audio; no
-   reanudar deliberadamente la generación Code amplia anterior.
+1. **Ejecutar la corrida real sólo cuando Victor lo decida.** Iniciar el runtime
+   instalado vigente con `Neocortex --all`, sin `--apply`, sobre la raíz y estado
+   canónicos. No se inició ninguna corrida viva en este corte. El arranque
+   recuperará como `partial` la corrida de inventario 27 que quedó `building`;
+   Code seleccionará proyectos por defecto y Semantic implícito priorizará
+   documentos/audio. No reanudar deliberadamente la generación Code amplia
+   anterior.
 2. **Consumir la publicación, no sólo observar progreso.** Al terminar, comprobar
    `--semantic-status` y consultas representativas en modo textual; registrar
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,

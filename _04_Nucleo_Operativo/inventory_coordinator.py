@@ -66,11 +66,7 @@ def _checkpoint_cursor(
         and checkpoint.next_usn <= journal_before.next_usn
     ):
         return checkpoint, None
-    if (
-        checkpoint.volume is None
-        or checkpoint.journal_id is None
-        or checkpoint.next_usn is None
-    ):
+    if checkpoint.volume is None or checkpoint.journal_id is None or checkpoint.next_usn is None:
         return checkpoint, None
     return checkpoint, JournalCursor(
         checkpoint.volume,
@@ -237,9 +233,7 @@ def _full_inventory(
                 inventory_policy_signature=exclusion_policy.signature,
             )
         if attempt == MAX_INVENTORY_ATTEMPTS:
-            raise RuntimeError(
-                "directory structure changed during all inventory attempts"
-            )
+            raise RuntimeError("directory structure changed during all inventory attempts")
         emit_progress(
             progress,
             ProgressEvent(
@@ -274,6 +268,19 @@ def prepare_inventory(
     publish_portable_checkpoint: bool = False,
 ) -> PreparedInventory:
     started = time.perf_counter_ns()
+    recovered_scan_ids = index.mark_abandoned_scans()
+    if recovered_scan_ids:
+        state.record_event(
+            run_id,
+            "warning",
+            "inventory-recovery",
+            "Inventarios interrumpidos conservados como parciales",
+            {
+                "count": len(recovered_scan_ids),
+                "scan_ids": list(recovered_scan_ids[:32]),
+                "scan_ids_truncated": len(recovered_scan_ids) > 32,
+            },
+        )
     prepared = None
     if journal_before is None:
         prepared = _full_inventory_without_journal(
@@ -319,9 +326,9 @@ def prepare_inventory(
                 publish_checkpoint=publish_portable_checkpoint,
             )
 
-    removed_state = index.prune_obsolete_state(
-        protected_scan_ids=state.referenced_inventory_scan_ids()
-    )
+    protected_scan_ids = set(state.referenced_inventory_scan_ids())
+    protected_scan_ids.update(recovered_scan_ids)
+    removed_state = index.prune_obsolete_state(protected_scan_ids=sorted(protected_scan_ids))
     state.update_run_start_cursor(run_id, prepared.journal_before)
     state.record_event(
         run_id,

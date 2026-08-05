@@ -4,9 +4,9 @@ Orquestador durable de los componentes compartidos, no destructivo salvo
 cuando el usuario solicita explícitamente `--apply`. Actualmente:
 
 1. intenta capturar un cursor USN anterior cuando Windows/NTFS lo ofrece;
-2. inventaría de forma portable el perfil seleccionado, excluyendo exactamente
-   `<home>\AppData`, `<home>\.codex`, el directorio de estado efectivo y
-   directorios que tengan el atributo oculto;
+2. inventaría de forma portable el perfil seleccionado, excluyendo AppData,
+   estado y árboles internos de Neocortex, metadatos VCS, entornos virtuales,
+   dependencias instaladas, caches/bytecode generados y directorios ocultos;
 3. reduce candidatos de duplicado con `_02_Deduplicacion` y exige comparación
    exacta antes de cualquier acción destructiva;
 4. si USN está disponible, consume su ventana; si no, publica el recorrido
@@ -36,10 +36,10 @@ coexistir en una generación anterior y otra en construcción; el checkpoint de
 la raíz cambia sólo después de comprobar estado `complete`, cero errores y
 agregados consistentes. Una exploración con errores queda `partial`, conserva
 la generación publicada anterior y no emite un evento de finalización exitosa.
-La poda retiene generaciones `building` y candidatas completas para no competir
-con publicación concurrente. Una generación `building` abandonada puede crecer
-hasta que exista una política de retención explícita; vigile el estado y el
-tamaño de `dedup.sqlite3`.
+Una cancelación conserva como `partial` el prefijo ya confirmado. Al iniciar el
+siguiente flujo integrado, cualquier `building` heredado de una terminación
+abrupta se cierra idempotentemente como `partial`, se invalida si aparecía ligado
+a un checkpoint y nunca sustituye la publicación completa anterior.
 
 La salida indica `inventory_mode=full` o `inventory_mode=incremental`. Los
 eventos operativos y tiempos de fase se guardan estructuradamente en la tabla

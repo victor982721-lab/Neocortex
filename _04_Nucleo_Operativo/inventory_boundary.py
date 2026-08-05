@@ -18,7 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from _02_Deduplicacion import InventoryExclusionPolicy
-from _02_Deduplicacion.inventory import DEFAULT_EXCLUDED_PATHS
+from _02_Deduplicacion.inventory import (
+    DEFAULT_EXCLUDED_PATHS,
+    DEFAULT_GENERATED_DIRECTORY_NAMES,
+    DEFAULT_GENERATED_FILE_SUFFIXES,
+)
 
 from .corpus_access import (
     CorpusAccessPolicy,
@@ -235,9 +239,7 @@ def validate_authorized_state_path(
     except (OSError, ValueError) as exc:
         raise ValueError("framework state boundary cannot be verified") from exc
     if _path_key(requested) != _path_key(physical):
-        raise ValueError(
-            "framework state_directory cannot use an alias or reparse path"
-        )
+        raise ValueError("framework state_directory cannot use an alias or reparse path")
 
     entries_by_role = {entry.role: entry for entry in internal_paths_policy.entries}
     authorized_roots = tuple(
@@ -254,13 +256,9 @@ def validate_authorized_state_path(
             candidate = _absolute_normalized(raw_candidate)
             candidate_physical = _physical_normalized(candidate)
         except (OSError, ValueError) as exc:
-            raise ValueError(
-                "framework state mutation boundary cannot be verified"
-            ) from exc
+            raise ValueError("framework state mutation boundary cannot be verified") from exc
         if _path_key(candidate) != _path_key(candidate_physical):
-            raise ValueError(
-                "framework state mutation path cannot use an alias or reparse path"
-            )
+            raise ValueError("framework state mutation path cannot use an alias or reparse path")
 
         for internal_entry in internal_paths_policy.entries:
             try:
@@ -270,29 +268,19 @@ def validate_authorized_state_path(
                     internal_entry.canonical_path,
                 )
                 identity_match = bool(
-                    os.path.lexists(candidate)
-                    and internal_entry.matches_file_identity(candidate)
+                    os.path.lexists(candidate) and internal_entry.matches_file_identity(candidate)
                 )
             except (OSError, ValueError) as exc:
-                raise ValueError(
-                    "framework state/internal boundary cannot be verified"
-                ) from exc
+                raise ValueError("framework state/internal boundary cannot be verified") from exc
             if not intersects and not identity_match:
                 continue
-            allowed_internal = (
-                internal_entry.role in _AUTHORIZED_INTERNAL_STATE_ROLES
-                and any(
-                    _same_or_descendant(candidate, root) for root in authorized_roots
-                )
+            allowed_internal = internal_entry.role in _AUTHORIZED_INTERNAL_STATE_ROLES and any(
+                _same_or_descendant(candidate, root) for root in authorized_roots
             )
             if internal_entry.role in _FORBIDDEN_INTERNAL_STATE_ROLES:
-                raise ValueError(
-                    "framework state_directory intersects protected code/runtime"
-                )
+                raise ValueError("framework state_directory intersects protected code/runtime")
             if not allowed_internal:
-                raise ValueError(
-                    "framework state_directory is not in an authorized state tree"
-                )
+                raise ValueError("framework state_directory is not in an authorized state tree")
 
         for protected_entry in protected_content_policy.entries:
             try:
@@ -302,8 +290,7 @@ def validate_authorized_state_path(
                     protected_entry.canonical_path,
                 )
                 identity_match = bool(
-                    os.path.lexists(candidate)
-                    and protected_entry.matches_file_identity(candidate)
+                    os.path.lexists(candidate) and protected_entry.matches_file_identity(candidate)
                 )
             except (OSError, ValueError) as exc:
                 raise ProtectedContentError(
@@ -356,18 +343,14 @@ def _protected_inventory_restrictions(
         for entry in policy.entries
         if entry.kind == "tree"
         and entry.disposition == "analyze_read_only"
-        and any(
-            _strict_descendant(entry.canonical_path, root) for root in restricted_roots
-        )
+        and any(_strict_descendant(entry.canonical_path, root) for root in restricted_roots)
     )
     allowed_files = tuple(
         entry.canonical_path
         for entry in policy.entries
         if entry.kind == "file"
         and entry.disposition == "analyze_read_only"
-        and any(
-            _strict_descendant(entry.canonical_path, root) for root in restricted_roots
-        )
+        and any(_strict_descendant(entry.canonical_path, root) for root in restricted_roots)
     )
     return restricted_roots, allowed_trees, allowed_files
 
@@ -410,9 +393,7 @@ def build_normal_inventory_boundary(
         raise ValueError("state access policy does not match state_directory")
     state_policy.verify_root_identity()
     if _same_or_descendant(access_policy.root, state_path):
-        raise ValueError(
-            "framework state_directory cannot equal or contain the inventory root"
-        )
+        raise ValueError("framework state_directory cannot equal or contain the inventory root")
     restricted_roots, allowed_trees, allowed_files = _protected_inventory_restrictions(
         protected_content_policy
     )
@@ -423,6 +404,8 @@ def build_normal_inventory_boundary(
             *internal_paths_policy.inventory_exclusion_roots(access_policy),
             *protected_content_policy.inventory_exclusion_roots(access_policy),
         ),
+        directory_names=DEFAULT_GENERATED_DIRECTORY_NAMES,
+        file_suffixes=DEFAULT_GENERATED_FILE_SUFFIXES,
         restricted_roots=restricted_roots,
         restricted_allowed_trees=allowed_trees,
         restricted_allowed_files=allowed_files,
@@ -486,9 +469,7 @@ def initialize_authorized_state_directory(
         raise ValueError("self-analysis root and state directory must be disjoint")
     if not requested.exists():
         if intersects and not allowed_transition_roles:
-            raise ValueError(
-                "framework cannot create a state directory inside the corpus root"
-            )
+            raise ValueError("framework cannot create a state directory inside the corpus root")
         validate_authorized_state_path(
             requested,
             internal_paths_policy=before,
@@ -505,17 +486,11 @@ def initialize_authorized_state_directory(
         current = after_by_role[role]
         if prior.exists:
             if current != prior:
-                raise ValueError(
-                    f"internal path identity changed during state setup: {role}"
-                )
+                raise ValueError(f"internal path identity changed during state setup: {role}")
         elif current.exists and role not in allowed_transition_roles:
-            raise ValueError(
-                f"unauthorized internal path appeared during state setup: {role}"
-            )
+            raise ValueError(f"unauthorized internal path appeared during state setup: {role}")
         elif not current.exists and current != prior:
-            raise ValueError(
-                f"internal path reservation changed during state setup: {role}"
-            )
+            raise ValueError(f"internal path reservation changed during state setup: {role}")
     after.verify_identities()
     access_policy.verify_root_identity()
     protected_content_policy.validate_corpus_access(access_policy)

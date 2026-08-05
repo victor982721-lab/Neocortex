@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -15,6 +14,7 @@ import pytest
 
 from _01_Enumeracion import JournalCursor, NtfsEntry, UsnChangeBatch
 from _02_Deduplicacion import (
+    DEFAULT_INVENTORY_EXCLUSION_POLICY,
     DedupIndex,
     InventoryCheckpoint,
     InventoryError,
@@ -39,8 +39,7 @@ def _write(path: Path, payload: bytes = b"fixture") -> None:
 
 def _relative_paths(index: DedupIndex, scan_id: int, root: Path) -> set[str]:
     return {
-        Path(snapshot.path).relative_to(root).as_posix()
-        for snapshot in index.snapshots(scan_id)
+        Path(snapshot.path).relative_to(root).as_posix() for snapshot in index.snapshots(scan_id)
     }
 
 
@@ -106,9 +105,7 @@ def test_policy_signature_is_versioned_canonical_and_non_cryptographic(
     assert first.file_names == frozenset({".coverage", "coverage.xml"})
     assert first.file_suffixes == (".prof", ".pstats")
     assert first.restricted_roots == (str(restricted_root.resolve()),)
-    assert set(first.restricted_allowed_trees) == {
-        str(path.resolve()) for path in allowed_trees
-    }
+    assert set(first.restricted_allowed_trees) == {str(path.resolve()) for path in allowed_trees}
     assert first.restricted_allowed_files == (str(allowed_files[0].resolve()),)
     assert first.restricted_directory_names == frozenset({"cache", "__pycache__"})
     assert first.restricted_file_names == frozenset({"auth.json"})
@@ -124,7 +121,51 @@ def test_default_paths_exclude_codex_cache_and_sandbox_infrastructure() -> None:
         ".codex",
         ".cache",
         ".sbx-denybin",
+        "laboratory",
+        "lab",
+        "checkpoints",
+        "backups",
+        "external_backups",
     )
+    assert all(path.parent == Path.home() / "Neocortex" for path in DEFAULT_EXCLUDED_PATHS[4:])
+
+
+def test_default_policy_excludes_generated_dependencies_without_broad_names(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+
+    for directory_name in (
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "site-packages",
+        "node_modules",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+    ):
+        assert DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
+            project / directory_name,
+            file_attributes=0,
+        )
+
+    assert DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_file(project / "cached.PYC")
+    assert DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_file(project / "optimized.pyo")
+    assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
+        project / "build",
+        file_attributes=0,
+    )
+    assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_directory(
+        project / "dist",
+        file_attributes=0,
+    )
+    assert not DEFAULT_INVENTORY_EXCLUSION_POLICY.excludes_file(project / "document.pdf")
 
 
 def test_restricted_policy_is_fail_closed_and_denials_take_priority(
@@ -144,18 +185,10 @@ def test_restricted_policy_is_fail_closed_and_denials_take_priority(
     )
 
     assert policy.excludes_directory(restricted_root, file_attributes=0) is False
-    assert (
-        policy.excludes_directory(restricted_root / "sessions", file_attributes=0)
-        is False
-    )
+    assert policy.excludes_directory(restricted_root / "sessions", file_attributes=0) is False
     assert policy.excludes_directory(allowed_tree, file_attributes=0) is False
-    assert (
-        policy.excludes_directory(allowed_tree / "nested", file_attributes=0) is False
-    )
-    assert (
-        policy.excludes_directory(restricted_root / "unknown", file_attributes=0)
-        is True
-    )
+    assert policy.excludes_directory(allowed_tree / "nested", file_attributes=0) is False
+    assert policy.excludes_directory(restricted_root / "unknown", file_attributes=0) is True
     assert policy.excludes_directory(allowed_tree / "cache", file_attributes=0)
     assert policy.excludes_file(allowed_file) is False
     assert policy.excludes_file(allowed_tree / "thread.jsonl") is False
@@ -437,6 +470,147 @@ def test_legacy_paths_and_compiled_policy_are_mutually_exclusive(
             index.scan(root, excluded_paths=(), exclusion_policy=policy)
 
 
+def test_interrupted_inventory_is_partial_and_keeps_its_committed_prefix(
+    tmp_path: Path,
+) -> None:
+    class InventoryCancelled(BaseException):
+        pass
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    for number in range(520):
+        _write(root / f"{number:04d}.txt")
+
+    def cancel_after_progress(event) -> None:
+        if event.completed >= 512:
+            raise InventoryCancelled
+
+    with DedupIndex(tmp_path / "inventory.sqlite3") as index:
+        with pytest.raises(InventoryCancelled):
+            index.scan(
+                root,
+                batch_size=100,
+                exclusion_policy=InventoryExclusionPolicy.compile(),
+                progress=cancel_after_progress,
+            )
+        row = index._connection.execute(
+            """SELECT status,completed_ns,files_seen,directories_seen,bytes_seen,
+            skipped_links,excluded_directories,errors,
+            (SELECT COUNT(*) FROM files f WHERE f.scan_id=scans.scan_id),
+            (SELECT COALESCE(SUM(size),0) FROM files f
+             WHERE f.scan_id=scans.scan_id)
+            FROM scans"""
+        ).fetchone()
+
+        assert row is not None
+        assert row[0] == "partial"
+        assert row[1] is not None
+        assert row[2:] == (512, 1, 512 * len(b"fixture"), 0, 0, 0, 512, 3584)
+        assert index.mark_abandoned_scans() == ()
+
+
+def test_abandoned_inventory_recovery_is_idempotent_and_invalidates_publication(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "corpus"
+    root.mkdir()
+    database = tmp_path / "inventory.sqlite3"
+    policy = InventoryExclusionPolicy.compile()
+
+    with DedupIndex(database) as index:
+        cursor = index._connection.execute(
+            """INSERT INTO scans(
+            root,root_volume_id,root_file_id,root_birthtime_ns,started_ns,
+            inventory_policy_signature)
+            VALUES(?,?,?,?,?,?)""",
+            (str(root), bytes(16), bytes(16), 1, 2, policy.signature),
+        )
+        assert cursor.lastrowid is not None
+        scan_id = int(cursor.lastrowid)
+        index._connection.execute(
+            """INSERT INTO files(
+            scan_id,path,volume_id,file_id,size,mtime_ns,birthtime_ns)
+            VALUES(?,?,?,?,?,?,?)""",
+            (scan_id, str(root / "prefix.bin"), bytes(16), bytes(16), 11, 3, 4),
+        )
+        index._connection.execute(
+            """INSERT INTO inventory_checkpoints(
+            root,scan_id,volume,journal_id,next_usn,valid,updated_ns)
+            VALUES(?,?,?,?,?,?,?)""",
+            (str(root), scan_id, None, None, None, 1, 5),
+        )
+        index._connection.commit()
+
+        assert index.mark_abandoned_scans() == (scan_id,)
+        assert index.mark_abandoned_scans() == ()
+        row = index._connection.execute(
+            """SELECT status,completed_ns,files_seen,directories_seen,bytes_seen,
+            skipped_links,excluded_directories,errors FROM scans WHERE scan_id=?""",
+            (scan_id,),
+        ).fetchone()
+        checkpoint = index._connection.execute(
+            "SELECT valid FROM inventory_checkpoints WHERE scan_id=?",
+            (scan_id,),
+        ).fetchone()
+
+        assert row is not None
+        assert row[0] == "partial"
+        assert row[1] is not None
+        assert row[2:] == (1, 0, 11, 0, 0, 0)
+        assert checkpoint == (0,)
+        assert index.file_count(scan_id) == 1
+
+
+def test_prepare_inventory_recovers_abandoned_scan_before_new_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "corpus"
+    root.mkdir()
+    state_directory = tmp_path / "state"
+    state_directory.mkdir()
+    policy = InventoryExclusionPolicy.compile()
+
+    def stop_before_new_scan(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("stop after recovery")
+
+    monkeypatch.setattr(
+        inventory_coordinator_module,
+        "_full_inventory_without_journal",
+        stop_before_new_scan,
+    )
+    with DedupIndex(state_directory / "dedup.sqlite3") as index:
+        cursor = index._connection.execute(
+            """INSERT INTO scans(
+            root,root_volume_id,root_file_id,root_birthtime_ns,started_ns,
+            inventory_policy_signature)
+            VALUES(?,?,?,?,?,?)""",
+            (str(root), bytes(16), bytes(16), 1, 2, policy.signature),
+        )
+        assert cursor.lastrowid is not None
+        abandoned_scan_id = int(cursor.lastrowid)
+        index._connection.commit()
+
+        with FrameworkState(state_directory / "framework.sqlite3") as state:
+            run_id = state.begin_initial_run(root, None)
+            with pytest.raises(RuntimeError, match="stop after recovery"):
+                inventory_coordinator_module.prepare_inventory(
+                    index,
+                    state,
+                    run_id,
+                    root,
+                    None,
+                    progress=lambda _event: None,
+                    exclusion_policy=policy,
+                )
+            state.fail_initial_run(run_id)
+
+        assert index._connection.execute(
+            "SELECT status FROM scans WHERE scan_id=?",
+            (abandoned_scan_id,),
+        ).fetchone() == ("partial",)
+
+
 def test_prepare_inventory_can_bypass_incremental_without_invalidating_checkpoint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -510,9 +684,7 @@ def test_full_inventory_retry_persists_effective_attempt_cursor(
     first_target = JournalCursor("fixture:", 7, 21)
     effective_start = JournalCursor("fixture:", 7, 30)
     effective_target = JournalCursor("fixture:", 7, 31)
-    cursor_sequence = iter(
-        (first_start, first_target, effective_start, effective_target)
-    )
+    cursor_sequence = iter((first_start, first_target, effective_start, effective_target))
     observed_starts: list[JournalCursor] = []
     policy = InventoryExclusionPolicy.compile()
 
@@ -677,4 +849,6 @@ def test_usn_rejects_a_policy_mismatch_before_consuming_changes(
             )
 
     assert consumed is False
+
+
 # endregion [02]
