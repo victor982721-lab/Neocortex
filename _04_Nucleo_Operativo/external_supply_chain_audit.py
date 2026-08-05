@@ -255,6 +255,44 @@ class _RecordVerification:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _InventoryContext:
+    project_name: str
+    pyproject_digest: str
+    declarations: tuple[_ProjectRequirement, ...]
+    marker_environment: Mapping[str, str]
+    rows: tuple[_DistributionRow, ...]
+    rows_by_name: Mapping[str, _DistributionRow]
+    base_evaluations: tuple[_BaseDependencyEvaluation, ...]
+    base_evaluations_by_target: Mapping[str, tuple[_BaseDependencyEvaluation, ...]]
+    project_row: _DistributionRow
+    record: _RecordVerification
+    observed: datetime
+    observed_text: str
+    snapshot_id: str
+    common_metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _PackageInventoryOutputs:
+    metrics: tuple[ExternalProviderMetric, ...]
+    relations: tuple[ExternalProviderRelation, ...]
+    requirement_edges: Mapping[tuple[str, str], tuple[str, ...]]
+    license_available: int
+    license_ambiguous: int
+    license_missing: int
+
+
+@dataclass(frozen=True, slots=True)
+class _InventorySummary:
+    applicable_evaluations: tuple[_BaseDependencyEvaluation, ...]
+    required_installed: int
+    required_missing: int
+    required_compatible: int
+    required_mismatch: int
+    optional_declarations: tuple[_ProjectRequirement, ...]
+
+
 def _normalized_package_name(value: object, *, label: str) -> str:
     name = _required_text(value, label=label, maximum=256)
     if _PACKAGE_NAME_PATTERN.fullmatch(name) is None:
@@ -1162,15 +1200,13 @@ def _license_ambiguity(row: _DistributionRow) -> tuple[bool, tuple[str, ...]]:
     return bool(reasons), tuple(reasons)
 
 
-def execute_installed_package_inventory(
+def _prepare_inventory_context(
     pyproject_path: Path,
     *,
-    distributions: Iterable[importlib.metadata.Distribution] | None = None,
-    installation_root: Path | None = None,
-    observed_at: datetime | None = None,
-) -> InstalledPackageInventoryExecution:
-    """Inventory installed metadata and verify the framework wheel's RECORD."""
-
+    distributions: Iterable[importlib.metadata.Distribution] | None,
+    installation_root: Path | None,
+    observed_at: datetime | None,
+) -> _InventoryContext:
     project_name, pyproject_digest, declarations, marker_environment = _project_metadata(
         pyproject_path
     )
@@ -1182,9 +1218,9 @@ def execute_installed_package_inventory(
     if project_row is None:
         raise ValueError("installed neocortex-framework distribution is unavailable")
     base_evaluations = _evaluate_base_dependencies(declarations, rows_by_name)
-    base_evaluations_by_target: dict[str, list[_BaseDependencyEvaluation]] = defaultdict(list)
+    evaluations_by_target: dict[str, list[_BaseDependencyEvaluation]] = defaultdict(list)
     for evaluation in base_evaluations:
-        base_evaluations_by_target[evaluation.declaration.target].append(evaluation)
+        evaluations_by_target[evaluation.declaration.target].append(evaluation)
     root = Path(sys.prefix) if installation_root is None else installation_root
     record = _record_verification(project_row.distribution, installation_root=root)
     observed = _observation_time(observed_at)
@@ -1254,14 +1290,33 @@ def execute_installed_package_inventory(
         "authority": "advisory",
         "mutation_authority": False,
     }
+    return _InventoryContext(
+        project_name,
+        pyproject_digest,
+        declarations,
+        marker_environment,
+        rows,
+        rows_by_name,
+        base_evaluations,
+        {key: tuple(value) for key, value in evaluations_by_target.items()},
+        project_row,
+        record,
+        observed,
+        observed_text,
+        snapshot_id,
+        common_metadata,
+    )
+
+
+def _build_package_inventory_outputs(context: _InventoryContext) -> _PackageInventoryOutputs:
     metrics: list[ExternalProviderMetric] = []
     relations: list[ExternalProviderRelation] = []
     requirement_edges: dict[tuple[str, str], list[str]] = defaultdict(list)
     license_available = license_ambiguous = license_missing = 0
-    for row in rows:
+    for row in context.rows:
         subject_key = f"package:{row.normalized_name}"
         package_metadata = {
-            **common_metadata,
+            **context.common_metadata,
             "package_name": row.name,
             "normalized_name": row.normalized_name,
             "installed_version": row.version,
@@ -1367,47 +1422,49 @@ def execute_installed_package_inventory(
                     },
                 )
             )
-    for (source_key, target_key), requirements in sorted(requirement_edges.items()):
-        target_name = target_key.removeprefix("package:")
-        relations.append(
-            _relation(
-                INSTALLED_PACKAGE_PROVIDER_ID,
-                relation_kind="package_requires_distribution",
-                source_key=source_key,
-                target_kind="project",
-                target_key=target_key,
-                metadata={
-                    **common_metadata,
-                    "category": "package_integrity",
-                    "requirements": sorted(set(requirements)),
-                    "target_installed": target_name in rows_by_name,
-                    "requirement_markers_evaluated": False,
-                    "version_constraints_evaluated": False,
-                },
-            )
-        )
+    return _PackageInventoryOutputs(
+        tuple(metrics),
+        tuple(relations),
+        {key: tuple(value) for key, value in requirement_edges.items()},
+        license_available,
+        license_ambiguous,
+        license_missing,
+    )
 
+
+def _package_requirement_relations(
+    requirement_edges: Mapping[tuple[str, str], tuple[str, ...]],
+    *,
+    rows_by_name: Mapping[str, _DistributionRow],
+    common_metadata: Mapping[str, object],
+) -> tuple[ExternalProviderRelation, ...]:
+    return tuple(
+        _relation(
+            INSTALLED_PACKAGE_PROVIDER_ID,
+            relation_kind="package_requires_distribution",
+            source_key=source_key,
+            target_kind="project",
+            target_key=target_key,
+            metadata={
+                **common_metadata,
+                "category": "package_integrity",
+                "requirements": sorted(set(requirements)),
+                "target_installed": target_key.removeprefix("package:") in rows_by_name,
+                "requirement_markers_evaluated": False,
+                "version_constraints_evaluated": False,
+            },
+        )
+        for (source_key, target_key), requirements in sorted(requirement_edges.items())
+    )
+
+
+def _project_dependency_relations(context: _InventoryContext) -> tuple[ExternalProviderRelation, ...]:
     direct_edges: dict[str, list[_ProjectRequirement]] = defaultdict(list)
-    for project_declaration in declarations:
-        direct_edges[project_declaration.target].append(project_declaration)
-    applicable_evaluations = [
-        evaluation
-        for evaluation in base_evaluations
-        if evaluation.declaration.marker_applies is True
-    ]
-    required_installed = sum(evaluation.target_installed for evaluation in applicable_evaluations)
-    required_missing = sum(not evaluation.target_installed for evaluation in applicable_evaluations)
-    required_compatible = sum(
-        evaluation.version_compatible is True for evaluation in applicable_evaluations
-    )
-    required_mismatch = sum(
-        evaluation.version_compatible is False for evaluation in applicable_evaluations
-    )
-    optional_declarations = [
-        declaration for declaration in declarations if declaration.group != "required"
-    ]
+    for declaration in context.declarations:
+        direct_edges[declaration.target].append(declaration)
+    relations = []
     for target, edge_declarations in sorted(direct_edges.items()):
-        target_base_evaluations = base_evaluations_by_target.get(target, [])
+        target_base_evaluations = context.base_evaluations_by_target.get(target, ())
         target_optional_declarations = [
             declaration for declaration in edge_declarations if declaration.group != "required"
         ]
@@ -1415,19 +1472,19 @@ def execute_installed_package_inventory(
             _relation(
                 INSTALLED_PACKAGE_PROVIDER_ID,
                 relation_kind="project_declares_dependency",
-                source_key=f"package:{project_name}",
+                source_key=f"package:{context.project_name}",
                 target_kind="project",
                 target_key=f"package:{target}",
                 metadata={
-                    **common_metadata,
+                    **context.common_metadata,
                     "category": "package_integrity",
                     "groups": sorted({declaration.group for declaration in edge_declarations}),
                     "requirements": sorted({declaration.raw for declaration in edge_declarations}),
-                    "target_installed": target in rows_by_name,
+                    "target_installed": target in context.rows_by_name,
                     "base_dependency_evaluations": [
                         _base_evaluation_payload(
                             evaluation,
-                            marker_environment=marker_environment,
+                            marker_environment=context.marker_environment,
                         )
                         for evaluation in target_base_evaluations
                     ],
@@ -1440,8 +1497,31 @@ def execute_installed_package_inventory(
                 },
             )
         )
+    return tuple(relations)
 
-    project_key = f"package:{project_name}"
+
+def _inventory_summary(context: _InventoryContext) -> _InventorySummary:
+    applicable_evaluations = tuple(
+        evaluation
+        for evaluation in context.base_evaluations
+        if evaluation.declaration.marker_applies is True
+    )
+    return _InventorySummary(
+        applicable_evaluations,
+        sum(evaluation.target_installed for evaluation in applicable_evaluations),
+        sum(not evaluation.target_installed for evaluation in applicable_evaluations),
+        sum(
+            evaluation.version_compatible is True for evaluation in applicable_evaluations
+        ),
+        sum(
+            evaluation.version_compatible is False for evaluation in applicable_evaluations
+        ),
+        tuple(declaration for declaration in context.declarations if declaration.group != "required"),
+    )
+
+
+def _record_metrics(context: _InventoryContext) -> tuple[ExternalProviderMetric, ...]:
+    record = context.record
     record_values = (
         ("record_present", int(record.present), "boolean"),
         ("record_entry_count", record.entries, "count"),
@@ -1455,7 +1535,8 @@ def execute_installed_package_inventory(
         ("record_malformed_entry_count", record.malformed_entries, "count"),
         ("wheel_record_integrity_current", int(record.current), "boolean"),
     )
-    metrics.extend(
+    project_key = f"package:{context.project_name}"
+    return tuple(
         _metric(
             INSTALLED_PACKAGE_PROVIDER_ID,
             subject_key=project_key,
@@ -1464,36 +1545,43 @@ def execute_installed_package_inventory(
             value=value,
             unit=unit,
             metadata={
-                **common_metadata,
-                "installed_version": project_row.version,
+                **context.common_metadata,
+                "installed_version": context.project_row.version,
                 "record_sha256": record.digest,
             },
         )
         for name, value, unit in record_values
     )
+
+
+def _summary_metrics(
+    context: _InventoryContext,
+    outputs: _PackageInventoryOutputs,
+    summary: _InventorySummary,
+) -> tuple[ExternalProviderMetric, ...]:
     summary_key = "project:installed-environment"
     summary_values = (
-        ("inventory_observed_at_unix_seconds", int(observed.timestamp()), "unix_seconds"),
+        ("inventory_observed_at_unix_seconds", int(context.observed.timestamp()), "unix_seconds"),
         ("inventory_current_at_observation", 1, "boolean"),
-        ("installed_distribution_count", len(rows), "count"),
-        ("declared_requirement_relation_count", len(requirement_edges), "count"),
-        ("pyproject_direct_requirement_count", len(base_evaluations), "count"),
-        ("pyproject_direct_requirement_installed_count", required_installed, "count"),
+        ("installed_distribution_count", len(context.rows), "count"),
+        ("declared_requirement_relation_count", len(outputs.requirement_edges), "count"),
+        ("pyproject_direct_requirement_count", len(context.base_evaluations), "count"),
+        ("pyproject_direct_requirement_installed_count", summary.required_installed, "count"),
         (
             "pyproject_required_applicable_dependency_count",
-            len(applicable_evaluations),
+            len(summary.applicable_evaluations),
             "count",
         ),
-        ("pyproject_required_missing_dependency_count", required_missing, "count"),
+        ("pyproject_required_missing_dependency_count", summary.required_missing, "count"),
         (
             "pyproject_required_version_compatible_count",
-            required_compatible,
+            summary.required_compatible,
             "count",
         ),
-        ("pyproject_required_version_mismatch_count", required_mismatch, "count"),
-        ("pyproject_optional_dependency_count", len(optional_declarations), "count"),
+        ("pyproject_required_version_mismatch_count", summary.required_mismatch, "count"),
+        ("pyproject_optional_dependency_count", len(summary.optional_declarations), "count"),
     )
-    metrics.extend(
+    metrics = [
         _metric(
             INSTALLED_PACKAGE_PROVIDER_ID,
             subject_key=summary_key,
@@ -1501,38 +1589,59 @@ def execute_installed_package_inventory(
             name=name,
             value=value,
             unit=unit,
-            metadata=common_metadata,
+            metadata=context.common_metadata,
         )
         for name, value, unit in summary_values
-    )
-    for name, value in (
-        ("packages_with_license_metadata", license_available),
-        ("packages_with_ambiguous_license_metadata", license_ambiguous),
-        ("packages_without_license_metadata", license_missing),
-    ):
-        metrics.append(
-            _metric(
-                INSTALLED_PACKAGE_PROVIDER_ID,
-                subject_key=summary_key,
-                category="license_inventory",
-                name=name,
-                value=value,
-                metadata={**common_metadata, "legal_compatibility_assessed": False},
-            )
+    ]
+    metrics.extend(
+        _metric(
+            INSTALLED_PACKAGE_PROVIDER_ID,
+            subject_key=summary_key,
+            category="license_inventory",
+            name=name,
+            value=value,
+            metadata={**context.common_metadata, "legal_compatibility_assessed": False},
         )
+        for name, value in (
+            ("packages_with_license_metadata", outputs.license_available),
+            ("packages_with_ambiguous_license_metadata", outputs.license_ambiguous),
+            ("packages_without_license_metadata", outputs.license_missing),
+        )
+    )
+    return tuple(metrics)
+
+
+def _build_installed_inventory_execution(
+    context: _InventoryContext,
+    outputs: _PackageInventoryOutputs,
+    summary: _InventorySummary,
+) -> InstalledPackageInventoryExecution:
+    metrics = list(outputs.metrics)
+    metrics.extend(_record_metrics(context))
+    metrics.extend(_summary_metrics(context, outputs, summary))
+    relations = list(outputs.relations)
+    relations.extend(
+        _package_requirement_relations(
+            outputs.requirement_edges,
+            rows_by_name=context.rows_by_name,
+            common_metadata=context.common_metadata,
+        )
+    )
+    relations.extend(_project_dependency_relations(context))
+    record = context.record
     counters = InstalledPackageCounters(
-        len(rows),
-        len(requirement_edges),
-        len(base_evaluations),
-        len(applicable_evaluations),
-        required_installed,
-        required_missing,
-        required_compatible,
-        required_mismatch,
-        len(optional_declarations),
-        license_available,
-        license_ambiguous,
-        license_missing,
+        len(context.rows),
+        len(outputs.requirement_edges),
+        len(context.base_evaluations),
+        len(summary.applicable_evaluations),
+        summary.required_installed,
+        summary.required_missing,
+        summary.required_compatible,
+        summary.required_mismatch,
+        len(summary.optional_declarations),
+        outputs.license_available,
+        outputs.license_ambiguous,
+        outputs.license_missing,
         record.entries,
         record.hash_verified,
         record.size_verified,
@@ -1547,18 +1656,37 @@ def execute_installed_package_inventory(
         tuple(sorted(relations, key=lambda item: item.portable_relation_id)),
         counters,
         "python importlib.metadata and installed wheel RECORD",
-        observed_text,
-        observed.date().isoformat(),
-        snapshot_id,
+        context.observed_text,
+        context.observed.date().isoformat(),
+        context.snapshot_id,
         "current_at_observation_only",
-        pyproject_digest,
-        project_row.version,
+        context.pyproject_digest,
+        context.project_row.version,
         record.files_hashed,
         record.bytes_hashed,
         0,
         INSTALLED_PACKAGE_USES_NETWORK,
         _INVENTORY_LIMITATIONS,
     )
+
+
+def execute_installed_package_inventory(
+    pyproject_path: Path,
+    *,
+    distributions: Iterable[importlib.metadata.Distribution] | None = None,
+    installation_root: Path | None = None,
+    observed_at: datetime | None = None,
+) -> InstalledPackageInventoryExecution:
+    """Inventory installed metadata and verify the framework wheel's RECORD."""
+
+    context = _prepare_inventory_context(
+        pyproject_path,
+        distributions=distributions,
+        installation_root=installation_root,
+        observed_at=observed_at,
+    )
+    outputs = _build_package_inventory_outputs(context)
+    return _build_installed_inventory_execution(context, outputs, _inventory_summary(context))
 
 
 __all__ = [
