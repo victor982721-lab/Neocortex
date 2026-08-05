@@ -17,6 +17,10 @@ from .hashing import snapshot_path
 from .inventory_scan import (
     DEFAULT_BATCH_SIZE as DEFAULT_BATCH_SIZE,
     DEFAULT_EXCLUDED_PATHS as DEFAULT_EXCLUDED_PATHS,
+    DEFAULT_GENERATED_DIRECTORY_FRAGMENTS as DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
+    DEFAULT_GENERATED_DIRECTORY_NAMES as DEFAULT_GENERATED_DIRECTORY_NAMES,
+    DEFAULT_GENERATED_DIRECTORY_PREFIXES as DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+    DEFAULT_GENERATED_FILE_SUFFIXES as DEFAULT_GENERATED_FILE_SUFFIXES,
     DEFAULT_INVENTORY_EXCLUSION_POLICY as DEFAULT_INVENTORY_EXCLUSION_POLICY,
     FILE_ATTRIBUTE_HIDDEN as FILE_ATTRIBUTE_HIDDEN,
     FILE_ATTRIBUTE_REPARSE_POINT as FILE_ATTRIBUTE_REPARSE_POINT,
@@ -68,11 +72,11 @@ class DedupIndex:
     ) -> ScanSummary:
         """Inventory files under a legacy root list or compiled policy.
 
-        By default, only ``<home>\\AppData`` and ``<home>\\.codex`` are
-        excluded. Same-named directories elsewhere remain eligible. Path
-        matching follows Windows case-insensitive normalization. Links and
-        junctions are never followed. ``excluded_paths`` remains compatible;
-        callers needing recursive names or file rules pass ``exclusion_policy``.
+        The default policy excludes internal Neocortex work trees, dependency
+        environments, generated caches, and Python bytecode. Path matching
+        follows Windows case-insensitive normalization. Links and junctions are
+        never followed. ``excluded_paths`` remains compatible; callers needing
+        recursive names or file rules pass ``exclusion_policy``.
         """
 
         return InventoryScanner(self._connection).scan(
@@ -82,6 +86,43 @@ class DedupIndex:
             exclusion_policy=exclusion_policy,
             progress=progress,
         )
+
+    def mark_abandoned_scans(self) -> tuple[int, ...]:
+        """Close unpublishable ``building`` scans while preserving their rows."""
+
+        completed_ns = time.time_ns()
+        with self._connection:
+            self._connection.execute(
+                """UPDATE inventory_checkpoints SET valid=0,updated_ns=?
+                WHERE valid=1 AND scan_id IN(
+                    SELECT scan_id FROM scans WHERE status='building'
+                )""",
+                (completed_ns,),
+            )
+            scan_ids = tuple(
+                int(row[0])
+                for row in self._connection.execute(
+                    "SELECT scan_id FROM scans WHERE status='building' ORDER BY scan_id"
+                ).fetchall()
+            )
+            if not scan_ids:
+                return ()
+            result = self._connection.execute(
+                """UPDATE scans SET completed_ns=COALESCE(completed_ns,?),
+                files_seen=(SELECT COUNT(*) FROM files f
+                            WHERE f.scan_id=scans.scan_id),
+                directories_seen=COALESCE(directories_seen,0),
+                bytes_seen=(SELECT COALESCE(SUM(size),0) FROM files f
+                            WHERE f.scan_id=scans.scan_id),
+                skipped_links=COALESCE(skipped_links,0),
+                excluded_directories=COALESCE(excluded_directories,0),
+                errors=COALESCE(errors,0),status='partial'
+                WHERE status='building'""",
+                (completed_ns,),
+            )
+            if result.rowcount != len(scan_ids):
+                raise InventoryError("abandoned inventory recovery changed concurrently")
+        return scan_ids
 
     def inventory_checkpoint(self, root: str | Path) -> InventoryCheckpoint | None:
         """Return the policy-bound checkpoint, including invalid markers."""
@@ -153,9 +194,7 @@ class DedupIndex:
         expected = self._validated_inventory_policy_signature(expected_signature)
         observed = self.scan_inventory_policy_signature(scan_id)
         if observed != expected:
-            raise InventoryError(
-                f"scan {scan_id} inventory policy signature does not match"
-            )
+            raise InventoryError(f"scan {scan_id} inventory policy signature does not match")
 
     def _require_publishable_scan(self, scan_id: int) -> tuple[Path, str]:
         row = self._connection.execute(
@@ -200,16 +239,13 @@ class DedupIndex:
         normalized_scan_root = os.path.abspath(os.fspath(scan_root))
         if os.path.normcase(root_path) != os.path.normcase(normalized_scan_root):
             raise InventoryError(
-                f"checkpoint root {root_path} does not match scan root "
-                f"{normalized_scan_root}"
+                f"checkpoint root {root_path} does not match scan root {normalized_scan_root}"
             )
         if (
             checkpoint.inventory_policy_signature is not None
             and checkpoint.inventory_policy_signature != scan_signature
         ):
-            raise InventoryError(
-                "checkpoint inventory policy signature does not match its scan"
-            )
+            raise InventoryError("checkpoint inventory policy signature does not match its scan")
         return InventoryCheckpoint(
             root_path,
             checkpoint.scan_id,
@@ -229,9 +265,7 @@ class DedupIndex:
             (checkpoint.scan_id, signature),
         ).fetchone()
         if matching_scan is None:
-            raise InventoryError(
-                "checkpoint inventory policy signature does not match its scan"
-            )
+            raise InventoryError("checkpoint inventory policy signature does not match its scan")
         self._connection.execute(
             """INSERT INTO inventory_checkpoints(
                 root,scan_id,volume,journal_id,next_usn,valid,updated_ns)
@@ -369,8 +403,7 @@ class DedupIndex:
 
         while True:
             rows = self._connection.execute(
-                f"SELECT scan_id,path FROM files "
-                f"WHERE scan_id NOT IN ({retained_scans}) LIMIT ?",
+                f"SELECT scan_id,path FROM files WHERE scan_id NOT IN ({retained_scans}) LIMIT ?",
                 (PRUNE_BATCH_SIZE,),
             ).fetchall()
             if not rows:
@@ -504,9 +537,7 @@ class DedupIndex:
             if len(unique) > 1:
                 yield tuple(unique.values())
 
-    def cached_fingerprint(
-        self, snapshot: FileSnapshot, algorithm: str
-    ) -> bytes | None:
+    def cached_fingerprint(self, snapshot: FileSnapshot, algorithm: str) -> bytes | None:
         row = self._connection.execute(
             "SELECT digest FROM fingerprints WHERE volume_id=? AND file_id=? "
             "AND size=? AND mtime_ns=? AND birthtime_ns=? AND algorithm=?",
@@ -521,9 +552,7 @@ class DedupIndex:
         ).fetchone()
         return None if row is None else bytes(row[0])
 
-    def store_fingerprint(
-        self, snapshot: FileSnapshot, algorithm: str, digest: bytes
-    ) -> None:
+    def store_fingerprint(self, snapshot: FileSnapshot, algorithm: str, digest: bytes) -> None:
         with self._connection:
             self._connection.execute(
                 "INSERT OR REPLACE INTO fingerprints"
@@ -578,17 +607,12 @@ class DedupIndex:
         """Apply one USN batch and optionally advance its checkpoint atomically."""
 
         if checkpoint is not None and checkpoint.scan_id != scan_id:
-            raise InventoryError(
-                "checkpoint scan_id does not match reconciliation scan"
-            )
+            raise InventoryError("checkpoint scan_id does not match reconciliation scan")
 
         upsert_rows = list(upserts)
-        path_rows = [
-            (os.path.abspath(os.fspath(path)), scan_id) for path in remove_paths
-        ]
+        path_rows = [(os.path.abspath(os.fspath(path)), scan_id) for path in remove_paths]
         identity_rows = [
-            (_id_blob(volume), _id_blob(file_id), scan_id)
-            for volume, file_id in remove_identities
+            (_id_blob(volume), _id_blob(file_id), scan_id) for volume, file_id in remove_identities
         ]
         with self._connection:
             if checkpoint is not None:
@@ -649,9 +673,7 @@ class DedupIndex:
                     (scan_id, scan_id, scan_id),
                 )
                 if aggregate_result.rowcount != 1:
-                    raise InventoryError(
-                        f"cannot publish reconciliation for scan {scan_id}"
-                    )
+                    raise InventoryError(f"cannot publish reconciliation for scan {scan_id}")
                 self._write_inventory_checkpoint(checkpoint)
 
     def file_count(self, scan_id: int) -> int:
@@ -673,8 +695,7 @@ class DedupIndex:
         """Return the durable volume, file and birth-time identity of a scan root."""
 
         row = self._connection.execute(
-            "SELECT root_volume_id,root_file_id,root_birthtime_ns "
-            "FROM scans WHERE scan_id=?",
+            "SELECT root_volume_id,root_file_id,root_birthtime_ns FROM scans WHERE scan_id=?",
             (scan_id,),
         ).fetchone()
         if row is None:
@@ -794,9 +815,7 @@ class DedupIndex:
         ).fetchone()
         return int(row[0])
 
-    def iter_planning_collision_members(
-        self, stage: str
-    ) -> Iterator[tuple[bytes, FileSnapshot]]:
+    def iter_planning_collision_members(self, stage: str) -> Iterator[tuple[bytes, FileSnapshot]]:
         rows = self._connection.execute(
             """SELECT w.digest,w.path,w.volume_id,w.file_id,w.size,w.mtime_ns,
             w.birthtime_ns FROM planning_fingerprints w JOIN(
@@ -860,9 +879,7 @@ class DedupIndex:
                 "DELETE FROM duplicate_plan_summaries WHERE scan_id=?", (scan_id,)
             )
 
-    def store_duplicate_groups(
-        self, scan_id: int, groups: Iterable[DuplicateGroup]
-    ) -> None:
+    def store_duplicate_groups(self, scan_id: int, groups: Iterable[DuplicateGroup]) -> None:
         """Persist a bounded group batch and its immutable file snapshots."""
 
         with self._connection:
@@ -881,9 +898,7 @@ class DedupIndex:
                     ),
                 )
                 if result.lastrowid is None:
-                    raise InventoryError(
-                        "SQLite did not return a duplicate-group identifier"
-                    )
+                    raise InventoryError("SQLite did not return a duplicate-group identifier")
                 group_id = int(result.lastrowid)
                 members = (group.keep, *group.redundant)
                 self._connection.executemany(
@@ -955,9 +970,7 @@ class DedupIndex:
             birth,
         ) in rows:
             if current_group is not None and group_id != current_group:
-                yield DuplicateGroup(
-                    group_size, members[0], tuple(members[1:]), fingerprint
-                )
+                yield DuplicateGroup(group_size, members[0], tuple(members[1:]), fingerprint)
                 members = []
             current_group = group_id
             group_size = size
@@ -973,13 +986,9 @@ class DedupIndex:
                 )
             )
         if current_group is not None:
-            yield DuplicateGroup(
-                group_size, members[0], tuple(members[1:]), fingerprint
-            )
+            yield DuplicateGroup(group_size, members[0], tuple(members[1:]), fingerprint)
 
-    def snapshots_excluding_planned_redundant(
-        self, scan_id: int
-    ) -> Iterator[FileSnapshot]:
+    def snapshots_excluding_planned_redundant(self, scan_id: int) -> Iterator[FileSnapshot]:
         """Stream files that would survive the persisted dry-run plan."""
 
         rows = self._connection.execute(

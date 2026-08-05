@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+
+from _03_Progreso import ProgressCallback, ProgressEvent, ProgressMetric, emit_progress
 
 __all__ = [
     "run_integrated_all_semantic_index",
@@ -80,9 +83,16 @@ def _validate_semantic_state_write(
     )
 
 
-def _semantic_failure(label: str, exc: BaseException, *, offline: bool) -> int:
-    print(f"ERROR {label} {type(exc).__name__}: {exc}")
-    if offline:
+def _semantic_failure(
+    label: str,
+    exc: BaseException,
+    *,
+    offline: bool,
+    print_output: bool = True,
+) -> int:
+    if print_output:
+        print(f"ERROR {label} {type(exc).__name__}: {exc}")
+    if offline and print_output:
         print(
             "HINT semantic model use is offline-only for this action; if weights "
             "are missing run Neocortex --semantic-prepare-models first"
@@ -313,6 +323,9 @@ def run_semantic_index(
     args: argparse.Namespace,
     *,
     incomplete_is_error: bool = True,
+    progress: ProgressCallback | None = None,
+    result_sink: Callable[[str, object], None] | None = None,
+    print_output: bool = True,
 ) -> int:
     """Incrementally embed durable route state without authorizing downloads."""
 
@@ -348,8 +361,11 @@ def run_semantic_index(
                     local_files_only=True,
                     threads=args.semantic_threads,
                     work_budget=work_budget,
+                    progress=progress,
                 )
                 results.append(("text", text_result))
+                if result_sink is not None:
+                    result_sink("text", text_result)
                 if "code" in text_result.sources and text_result.complete:
                     from .code_semantic_links import (
                         current_code_embedding_link_counts,
@@ -381,16 +397,26 @@ def run_semantic_index(
                             embed_ocr_text=not args.semantic_no_ocr,
                             ocr_model=text_model,
                             work_budget=work_budget,
+                            progress=progress,
                         ),
                     )
                 )
+                if result_sink is not None:
+                    result_sink("image", results[-1][1])
     except Exception as exc:  # model runtimes expose backend-specific exceptions
-        for scope, result in results:
-            _print_semantic_index_result(scope, result)
-        return _semantic_failure("semantic-index", exc, offline=True)
+        if print_output:
+            for scope, result in results:
+                _print_semantic_index_result(scope, result)
+        return _semantic_failure(
+            "semantic-index",
+            exc,
+            offline=True,
+            print_output=print_output,
+        )
     failed = False
     for scope, result in results:
-        _print_semantic_index_result(scope, result)
+        if print_output:
+            _print_semantic_index_result(scope, result)
         scope_failed = not result.complete
         if (
             not incomplete_is_error
@@ -406,17 +432,24 @@ def run_semantic_index(
         active_links,
         current_links,
     ) in code_link_statuses:
-        print(
-            f"SEMANTIC_CODE_LINKS generation={generation_id} "
-            f"model={model_signature} active={active_links} "
-            f"current={current_links} stale={active_links - current_links} "
-            "authority=retrieval_evidence_only "
-            "calibration=uncalibrated_similarity"
-        )
+        if print_output:
+            print(
+                f"SEMANTIC_CODE_LINKS generation={generation_id} "
+                f"model={model_signature} active={active_links} "
+                f"current={current_links} stale={active_links - current_links} "
+                "authority=retrieval_evidence_only "
+                "calibration=uncalibrated_similarity"
+            )
     return 2 if failed else 0
 
 
-def run_integrated_all_semantic_index(args: argparse.Namespace) -> int:
+def run_integrated_all_semantic_index(
+    args: argparse.Namespace,
+    *,
+    progress: ProgressCallback | None = None,
+    result_sink: Callable[[str, object], None] | None = None,
+    print_output: bool = True,
+) -> int:
     """Advance bounded document embeddings after the six ``--all`` routes.
 
     Broad code inventories can contain millions of chunks, so Code remains an
@@ -440,17 +473,82 @@ def run_integrated_all_semantic_index(args: argparse.Namespace) -> int:
         )
     selected_sources = tuple(integrated_args.semantic_source or ())
     if not selected_sources:
-        print("SEMANTIC_ALL status=skipped reason=no_document_or_audio_text_cache")
+        if print_output:
+            print("SEMANTIC_ALL status=skipped reason=no_document_or_audio_text_cache")
+        emit_progress(
+            progress,
+            ProgressEvent(
+                "semantic",
+                "integrated",
+                "Semantic omitido: no hay texto durable",
+                1,
+                1,
+                "fase",
+                True,
+            ),
+        )
         return 0
-    print(
-        "SEMANTIC_ALL status=starting "
-        f"sources={','.join(selected_sources)} "
-        f"max_items={args.semantic_max_items} "
-        f"max_new_jobs={args.semantic_max_new_jobs} "
-        f"time_budget_seconds={args.semantic_time_budget_seconds:g} "
-        f"code_explicit={int('code' in selected_sources)}"
+    if print_output:
+        print(
+            "SEMANTIC_ALL status=starting "
+            f"sources={','.join(selected_sources)} "
+            f"max_items={args.semantic_max_items} "
+            f"max_new_jobs={args.semantic_max_new_jobs} "
+            f"time_budget_seconds={args.semantic_time_budget_seconds:g} "
+            f"code_explicit={int('code' in selected_sources)}"
+        )
+    emit_progress(
+        progress,
+        ProgressEvent(
+            "semantic",
+            "integrated",
+            "Inicializando Semantic",
+            0,
+            1,
+            "fase",
+            metrics=(ProgressMetric("sources", len(selected_sources)),),
+        ),
     )
-    return run_semantic_index(integrated_args, incomplete_is_error=False)
+    semantic_exit_code: int | None = None
+    try:
+        semantic_exit_code = run_semantic_index(
+            integrated_args,
+            incomplete_is_error=False,
+            progress=progress,
+            result_sink=result_sink,
+            print_output=print_output,
+        )
+        return semantic_exit_code
+    finally:
+        emit_progress(
+            progress,
+            ProgressEvent(
+                "semantic",
+                "integrated",
+                (
+                    "Semantic completado"
+                    if semantic_exit_code == 0
+                    else "Semantic interrumpido"
+                    if semantic_exit_code is None
+                    else "Semantic completado con incidencias"
+                ),
+                1 if semantic_exit_code is not None else 0,
+                1,
+                "fase",
+                True,
+                (
+                    ProgressMetric("sources", len(selected_sources)),
+                    ProgressMetric(
+                        "status",
+                        "ok"
+                        if semantic_exit_code == 0
+                        else "interrumpido"
+                        if semantic_exit_code is None
+                        else "error",
+                    ),
+                ),
+            ),
+        )
 
 
 def run_semantic_search(args: argparse.Namespace) -> int:

@@ -52,13 +52,22 @@ La aplicación de acciones pertenece exclusivamente a `_04_Nucleo_Operativo`; es
 punto de entrada directo siempre es no destructivo.
 
 El inventario excluye las rutas configuradas y cualquier directorio con el
-atributo oculto de Windows. La configuración predeterminada excluye exactamente
-`<home>\AppData` y `<home>\.codex`; un directorio con el mismo nombre fuera de
-esos subárboles no se excluye sólo por su nombre. La raíz elegida explícitamente
-no se excluye a sí misma. Antes y después del recorrido se valida su ruta
-canónica e identidad durable; una raíz que sea o pase a ser un enlace, junction
-o punto de reanálisis se rechaza. El inventario tampoco sigue esos objetos
-dentro del árbol.
+atributo oculto de Windows. La configuración predeterminada excluye AppData,
+la infraestructura privada `.codex`/`.cache` y los árboles de trabajo
+`Neocortex\Laboratory`, `Laboratories`, `TestTemp`, `Lab`, `Checkpoints`,
+`Backups`, `external_backups` y `Repository\Laboratory`.
+También omite por nombre metadatos de VCS, entornos y dependencias (`.venv`,
+`venv`, `site-packages`, `node_modules`), caches de herramientas y bytecode
+`.pyc`/`.pyo`, además de árboles `.CDX` y temporales reconocibles de
+`pytest`/`tmp`/`basetemp`/`inline-snapshot`. Nombres ambiguos como `build` y
+`dist` siguen siendo elegibles fuera de las raíces de proyecto conocidas. Los
+árboles `build`, `dist` y `wheelhouse` del repositorio Neocortex, del framework
+EPS canónico y de su referencia histórica en OneDrive se excluyen por ruta
+exacta porque son artefactos reconstruibles, no fuentes del corpus.
+La raíz elegida explícitamente no se excluye a sí misma. Antes y después del
+recorrido se valida su ruta canónica e identidad durable; una raíz que sea o
+pase a ser un enlace, junction o punto de reanálisis se rechaza. El inventario
+tampoco sigue esos objetos dentro del árbol.
 
 Desde el esquema 7, las filas se aíslan por `(scan_id, path)`. Una exploración
 se mantiene `building`, termina como `complete` o `partial`, y sólo una
@@ -66,6 +75,9 @@ generación completa con conteos y bytes consistentes puede publicarse. Para
 leer la generación publicada de una raíz en una sola instantánea use
 `DedupIndex.published_snapshots(root)`; no empareje por separado
 `inventory_checkpoint(root)` y `snapshots(scan_id)` bajo concurrencia.
+Una interrupción cierra la generación como `partial` con el prefijo confirmado;
+al iniciar otro flujo integrado también se recupera idempotentemente cualquier
+`building` heredado de una terminación abrupta.
 
 Los hashes se guardan por identidad de archivo, tamaño, `mtime_ns`,
 `birthtime_ns`, algoritmo y versión, de modo que las ejecuciones posteriores

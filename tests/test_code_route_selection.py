@@ -173,6 +173,49 @@ def test_project_scope_keeps_owned_files_and_rejects_profile_noise(
     assert summary.cache_skips == 1
 
 
+def test_explicit_project_allowlist_rejects_other_marked_projects_and_labs(
+    tmp_path: Path,
+) -> None:
+    neocortex = tmp_path / "Neocortex" / "Repository"
+    bitacoras = tmp_path / "Frameworks" / "Bitacoras-EPS"
+    unwanted = tmp_path / "Other" / "broken-project"
+    files = {
+        neocortex / "pyproject.toml": "[project]\nname='neocortex'\n",
+        neocortex / "src" / "owned.py": "OWNED = True\n",
+        bitacoras / "pyproject.toml": "[project]\nname='bitacoras'\n",
+        bitacoras / "src" / "owned.py": "OWNED = True\n",
+        unwanted / "package.json": '{"name":"unwanted"}\n',
+        unwanted / "broken.js": "broken syntax {{\n",
+        neocortex / "Laboratory" / "pyproject.toml": "not valid toml\n",
+        neocortex / "Laboratory" / "broken.py": "def broken(:\n",
+    }
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    config = CodeRouteConfig(
+        state_path=tmp_path / "state" / "code.sqlite3",
+        dedup_path=tmp_path / "state" / "dedup.sqlite3",
+        candidate_scope="projects",
+        include_generated=False,
+        include_vendored=False,
+        explicit_project_roots=(neocortex, bitacoras),
+    )
+    summary = CodeRoute(
+        config,
+        _Inventory(files),
+        _FrameworkState(),
+        1,
+        1,
+    ).run()
+
+    assert summary.project_roots == 2
+    assert summary.candidates == 4
+    assert summary.outside_project_skips == 2
+    assert summary.generated_scope_skips == 2
+    assert summary.errors == 0
+
+
 def test_explicit_path_overrides_project_discovery(tmp_path: Path) -> None:
     source = tmp_path / "loose.py"
     source.write_text("VALUE = 1\n", encoding="utf-8")

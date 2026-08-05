@@ -120,6 +120,48 @@ def _print_docx_report(result) -> None:
     )
 
 
+def _print_office_report(result) -> None:
+    if result.office is None:
+        return
+    office = result.office
+    print(
+        f"route=office candidate_pool={office.candidate_pool} "
+        f"candidates={office.candidates} processed={office.processed} "
+        f"cache_hits={office.cache_hits} cached_errors={office.cached_errors} "
+        f"extracted={office.extracted} errors={office.errors} "
+        f"review_candidates={office.review_candidates} "
+        f"deletion_candidates={office.deletion_candidates} "
+        f"retryable_errors={office.retryable_errors} "
+        f"catalog_candidates={office.catalog_candidates} "
+        f"catalog_classified={office.catalog_classified} "
+        f"catalog_cache_hits={office.catalog_cache_hits} "
+        f"catalog_review={office.catalog_review_required} "
+        f"catalog_errors={office.catalog_errors}"
+    )
+
+
+def _print_audio_report(result) -> None:
+    if result.audio is None:
+        return
+    audio = result.audio
+    print(
+        f"route=audio candidate_pool={audio.candidate_pool} "
+        f"candidates={audio.candidates} processed={audio.processed} "
+        f"cache_hits={audio.cache_hits} cached_errors={audio.cached_errors} "
+        f"transcribed={audio.transcribed} no_speech={audio.no_speech} "
+        f"errors={audio.errors} review_candidates={audio.review_candidates} "
+        f"deletion_candidates={audio.deletion_candidates} "
+        f"retryable_errors={audio.retryable_errors} "
+        f"transcript_chars={audio.transcript_chars} "
+        f"transcript_segments={audio.transcript_segments} "
+        f"catalog_candidates={audio.catalog_candidates} "
+        f"catalog_classified={audio.catalog_classified} "
+        f"catalog_cache_hits={audio.catalog_cache_hits} "
+        f"catalog_review={audio.catalog_review_required} "
+        f"catalog_errors={audio.catalog_errors}"
+    )
+
+
 def _print_image_report(result) -> None:
     if result.image is None:
         return
@@ -336,6 +378,8 @@ def print_reports(result, args: argparse.Namespace) -> None:
         print(f"run_id={result.run_id} mode=route-only source_run_id={result.source_run_id}")
         _print_pdf_report(result)
         _print_docx_report(result)
+        _print_office_report(result)
+        _print_audio_report(result)
         _print_image_report(result)
         _print_code_report(result)
         _print_global_resource_report(result)
@@ -344,6 +388,8 @@ def print_reports(result, args: argparse.Namespace) -> None:
     _print_inventory_report(result)
     _print_pdf_report(result)
     _print_docx_report(result)
+    _print_office_report(result)
+    _print_audio_report(result)
     _print_image_report(result)
     _print_code_report(result)
     _print_global_resource_report(result)
@@ -351,6 +397,290 @@ def print_reports(result, args: argparse.Namespace) -> None:
     _print_action_report(result, args.dedup_policy)
     _print_organization_report(result)
     _print_duplicate_groups(result, args.show_groups)
+
+
+def _human_count(value: int | float) -> str:
+    return f"{int(value):,}".replace(",", " ")
+
+
+def _human_bytes(value: int) -> str:
+    amount = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024.0 or unit == "TB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
+        amount /= 1024.0
+    raise AssertionError("unreachable")
+
+
+def _route_issue_count(summary: object) -> int:
+    fields = (
+        "errors",
+        "cached_errors",
+        "profile_errors",
+        "page_errors",
+        "partial_documents",
+        "document_timeouts",
+        "catalog_errors",
+        "adult_unavailable",
+        "external_errors",
+    )
+    return sum(int(getattr(summary, field, 0) or 0) for field in fields)
+
+
+def _route_review_count(summary: object) -> int:
+    direct = max(
+        int(getattr(summary, "review_candidates", 0) or 0),
+        int(getattr(summary, "review_candidates_stored", 0) or 0),
+    )
+    return direct + int(getattr(summary, "catalog_review_required", 0) or 0)
+
+
+def _professional_route_rows(result) -> tuple[tuple[str, object], ...]:
+    labels = (
+        ("PDF", "pdf"),
+        ("DOCX", "docx"),
+        ("Office", "office"),
+        ("Audio", "audio"),
+        ("Imágenes", "image"),
+        ("Código", "code"),
+    )
+    return tuple(
+        (label, summary)
+        for label, attribute in labels
+        if (summary := getattr(result, attribute, None)) is not None
+    )
+
+
+def _semantic_totals(
+    semantic_results: tuple[tuple[str, object], ...],
+) -> dict[str, int]:
+    totals = {
+        "items": 0,
+        "chunks": 0,
+        "new_jobs": 0,
+        "reused": 0,
+        "embedded": 0,
+        "pending": 0,
+        "errors": 0,
+        "stale": 0,
+        "incomplete": 0,
+        "truncated": 0,
+    }
+    for _scope, result in semantic_results:
+        totals["items"] += int(getattr(result, "items_staged", 0))
+        totals["chunks"] += int(getattr(result, "chunks_staged", 0))
+        totals["new_jobs"] += int(getattr(result, "new_jobs_staged", 0))
+        totals["errors"] += int(getattr(result, "errors", 0))
+        totals["stale"] += int(getattr(result, "stale", 0))
+        totals["incomplete"] += int(getattr(result, "incomplete", 0))
+        totals["truncated"] += int(bool(getattr(result, "truncated", False)))
+        for work in getattr(result, "generations", ()):
+            summary = work.summary
+            embedded = int(getattr(work, "embedded", 0))
+            totals["reused"] += max(
+                int(getattr(work, "reused", 0)),
+                int(summary.done) - embedded,
+            )
+            totals["embedded"] += embedded
+            totals["pending"] += int(summary.pending) + int(summary.leased)
+    return totals
+
+
+def print_professional_summary(
+    result,
+    args: argparse.Namespace,
+    *,
+    semantic_results: tuple[tuple[str, object], ...] = (),
+    semantic_exit_code: int = 0,
+    semantic_attempted: bool = True,
+) -> None:
+    """Render one concise human terminal report while raw output stays pipe-safe."""
+
+    from rich.console import Console, Group
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+
+    console = Console()
+    route_rows = _professional_route_rows(result)
+    route_issues = sum(_route_issue_count(summary) for _, summary in route_rows)
+    action_errors = int(getattr(getattr(result, "actions", None), "errors", 0) or 0)
+    semantic_totals = _semantic_totals(semantic_results)
+    semantic_issues = (
+        semantic_exit_code != 0
+        or semantic_totals["errors"] > 0
+        or semantic_totals["stale"] > 0
+        or semantic_totals["incomplete"] > 0
+        or semantic_totals["truncated"] > 0
+    )
+    has_attention = bool(
+        route_issues or action_errors or semantic_issues or has_organization_errors(result)
+    )
+    status = Text(
+        "COMPLETADA CON INCIDENCIAS" if has_attention else "COMPLETADA",
+        style="bold yellow" if has_attention else "bold green",
+    )
+    run_id = getattr(result, "run_id", "-")
+    header = Table.grid(expand=True)
+    header.add_column(ratio=1)
+    header.add_column(justify="right")
+    command_label = (
+        "Neocortex --all"
+        if args.all
+        else f"Neocortex · ruta {getattr(args, 'route', 'seleccionada')}"
+    )
+    header.add_row(
+        Text(f"{command_label} · ejecución {run_id}", style="bold cyan"),
+        status,
+    )
+    console.print(Panel(header, border_style="cyan", padding=(0, 1)))
+
+    routes = Table(
+        title="Cobertura del framework",
+        header_style="bold",
+        border_style="bright_black",
+        show_lines=False,
+        expand=True,
+    )
+    routes.add_column("Ruta", style="bold")
+    routes.add_column("Estado", min_width=8, no_wrap=True)
+    routes.add_column("Candidatos", justify="right")
+    routes.add_column("Caché", justify="right")
+    routes.add_column("Trabajo real", justify="right")
+    routes.add_column("Incidencias", justify="right")
+    routes.add_column("Revisión", justify="right")
+    for label, summary in route_rows:
+        candidates = int(getattr(summary, "candidates", 0) or 0)
+        cache_hits = int(getattr(summary, "cache_hits", 0) or 0)
+        processed = int(getattr(summary, "processed", 0) or 0)
+        work = max(processed - cache_hits, 0)
+        issues = _route_issue_count(summary)
+        review = _route_review_count(summary)
+        routes.add_row(
+            label,
+            Text("ATENCIÓN" if issues else "OK", style="yellow" if issues else "green"),
+            _human_count(candidates),
+            _human_count(cache_hits),
+            _human_count(work),
+            Text(_human_count(issues), style="yellow" if issues else "green"),
+            Text(_human_count(review), style="yellow" if review else "bright_black"),
+        )
+    console.print(routes)
+
+    if semantic_results:
+        semantic_ok = not semantic_issues and semantic_totals["pending"] == 0
+        semantic_status = "PUBLICADO" if semantic_ok else "REANUDABLE"
+        semantic = Table(
+            title=Text.assemble(
+                "Semantic · ",
+                (semantic_status, "green" if semantic_ok else "yellow"),
+            ),
+            header_style="bold",
+            border_style="bright_black",
+            expand=True,
+        )
+        semantic.add_column("Fuentes")
+        semantic.add_column("Elementos", justify="right")
+        semantic.add_column("Fragmentos", justify="right")
+        semantic.add_column("Reutilizados", justify="right")
+        semantic.add_column("Vectores nuevos", justify="right")
+        semantic.add_column("Pendientes", justify="right")
+        sources = tuple(
+            dict.fromkeys(
+                source
+                for _scope, semantic_result in semantic_results
+                for source in getattr(semantic_result, "sources", ())
+            )
+        )
+        semantic.add_row(
+            ", ".join(sources) or "-",
+            _human_count(semantic_totals["items"]),
+            _human_count(semantic_totals["chunks"]),
+            _human_count(semantic_totals["reused"]),
+            _human_count(semantic_totals["embedded"]),
+            Text(
+                _human_count(semantic_totals["pending"]),
+                style="yellow" if semantic_totals["pending"] else "green",
+            ),
+        )
+        console.print(semantic)
+    elif args.all:
+        if semantic_exit_code:
+            semantic_state = "ERROR"
+        elif semantic_attempted:
+            semantic_state = "SIN TRABAJO PUBLICADO"
+        else:
+            semantic_state = "OMITIDO POR INCIDENCIAS PREVIAS"
+        console.print(
+            Panel(
+                f"Semantic: {semantic_state}",
+                title="Semantic",
+                border_style="red" if semantic_exit_code else "yellow",
+            )
+        )
+
+    details: list[Text] = []
+    scan = getattr(result, "scan", None)
+    if scan is not None:
+        details.append(
+            Text.assemble(
+                ("Inventario: ", "bold"),
+                _human_count(scan.files_seen),
+                " archivos · ",
+                _human_count(scan.errors),
+                " errores",
+            )
+        )
+    plan = getattr(result, "dedup_plan", None)
+    if plan is not None:
+        details.append(
+            Text.assemble(
+                ("Duplicados: ", "bold"),
+                _human_count(plan.group_count),
+                " grupos · ",
+                _human_bytes(plan.reclaimable_bytes),
+                " recuperables",
+            )
+        )
+    actions = getattr(result, "actions", None)
+    if actions is not None:
+        changed = (
+            int(getattr(actions, "duplicates_trashed", 0) or 0)
+            + int(getattr(actions, "files_renamed", 0) or 0)
+            + int(getattr(actions, "empty_directories_trashed", 0) or 0)
+        )
+        details.append(
+            Text.assemble(
+                ("Acciones: ", "bold"),
+                ("aplicadas" if getattr(actions, "apply_actions", False) else "simulación segura"),
+                " · ",
+                _human_count(changed),
+                " cambios en archivos",
+            )
+        )
+        details.append(
+            Text.assemble(
+                ("Tipos: ", "bold"),
+                _human_count(getattr(actions, "types_detected", 0) or 0),
+                " identificados · ",
+                _human_count(getattr(actions, "unknown_types", 0) or 0),
+                " aún desconocidos",
+            )
+        )
+    if getattr(result, "inventory_mode", None) == "full":
+        details.append(
+            Text(
+                "Incremental NTFS no disponible: esta ejecución hizo inventario completo.",
+                style="yellow",
+            )
+        )
+    console.print(
+        Panel(
+            Group(*details),
+            title="Resultado operativo",
+            border_style="yellow" if has_attention else "green",
+        )
+    )
 
 
 # endregion [02]

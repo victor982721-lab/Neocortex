@@ -75,8 +75,7 @@ def _empty_default_protected_policy(
         lambda: policy,
     )
     monkeypatch.setattr(
-        "_04_Nucleo_Operativo.framework_state_common."
-        "canonical_protected_content_policy",
+        "_04_Nucleo_Operativo.framework_state_common.canonical_protected_content_policy",
         lambda: policy,
     )
 
@@ -85,8 +84,8 @@ def test_fresh_state_materialization_is_fenced_and_policy_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture, repository, runtime, application_data, _, launcher = (
-        _internal_policy_factory(tmp_path / "internal")
+    capture, repository, runtime, application_data, _, launcher = _internal_policy_factory(
+        tmp_path / "internal"
     )
     repository.mkdir(parents=True)
     launcher.parent.mkdir(parents=True)
@@ -116,10 +115,7 @@ def test_fresh_state_materialization_is_fenced_and_policy_bound(
     assert layout.path == state
     assert state.is_dir()
     assert runtime.is_dir()
-    assert (
-        boundary.internal_paths_policy.signature
-        == layout.internal_paths_policy.signature
-    )
+    assert boundary.internal_paths_policy.signature == layout.internal_paths_policy.signature
     boundary.verify()
 
 
@@ -127,8 +123,8 @@ def test_state_setup_never_creates_inside_repository(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture, repository, _, application_data, self_analysis, launcher = (
-        _internal_policy_factory(tmp_path / "internal")
+    capture, repository, _, application_data, self_analysis, launcher = _internal_policy_factory(
+        tmp_path / "internal"
     )
     repository.mkdir(parents=True)
     launcher.parent.mkdir(parents=True)
@@ -237,9 +233,7 @@ def test_boundary_compiles_restricted_codex_allowlist_and_v2_signature(
     )
 
     assert boundary.protected_content_policy == protected_policy
-    assert boundary.effective_signature.startswith(
-        "effective-inventory-policy-v2:xxh3_128:"
-    )
+    assert boundary.effective_signature.startswith("effective-inventory-policy-v2:xxh3_128:")
     assert not boundary.exclusion_policy.excludes_directory(codex)
     assert not boundary.exclusion_policy.excludes_directory(sessions)
     assert not boundary.exclusion_policy.excludes_file(agents)
@@ -247,7 +241,71 @@ def test_boundary_compiles_restricted_codex_allowlist_and_v2_signature(
     assert boundary.exclusion_policy.excludes_directory(sessions / "cache")
     assert boundary.exclusion_policy.excludes_file(sessions / "auth.json")
     assert not boundary.exclusion_policy.excludes_file(sessions / "visible.jsonl")
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / ".venv",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "site-packages",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "node_modules",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "tmp1mfujc__",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "title-review-pytest",
+        file_attributes=0,
+    )
+    assert boundary.exclusion_policy.excludes_file(profile / "project" / "cached.pyc")
+    assert not boundary.exclusion_policy.excludes_directory(
+        profile / "project" / "build",
+        file_attributes=0,
+    )
     boundary.verify()
+
+
+def test_normal_inventory_omits_generated_trees_but_keeps_ambiguous_names(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "corpus"
+    state = tmp_path / "state"
+    root.mkdir()
+    state.mkdir()
+    expected = {
+        "visible.txt",
+        "build/artifact.txt",
+        "dist/deliverable.txt",
+    }
+    for relative_path in (
+        *expected,
+        ".venv/dependency.py",
+        "project/site-packages/dependency.py",
+        "web/node_modules/dependency.js",
+        "source/__pycache__/cached.pyc",
+        "source/orphan.pyc",
+        ".CDX/reconstruction.xml",
+        "tests/tmp1mfujc__/cache.bin",
+        "tests/title-review-pytest/cache.bin",
+        "tests/inline-snapshot-abcd/cache.bin",
+    ):
+        target = root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("fixture", encoding="utf-8")
+
+    boundary = build_normal_inventory_boundary(root, state)
+    with DedupIndex(state / "dedup.sqlite3") as index:
+        scan = index.scan(root, exclusion_policy=boundary.exclusion_policy)
+        observed = {
+            Path(snapshot.path).relative_to(root).as_posix()
+            for snapshot in index.snapshots(scan.scan_id)
+        }
+
+    assert observed == expected
 
 
 def test_state_setup_rejects_excluded_corpus_before_mkdir(tmp_path: Path) -> None:
@@ -514,17 +572,15 @@ def test_signed_normal_run_helper_persists_exact_effective_signature(
             internal_paths_policy=internal_paths_policy,
         )
 
-        assert state.source_inventory_policy_signature(run_id) == (
-            expected.effective_signature
-        )
+        assert state.source_inventory_policy_signature(run_id) == (expected.effective_signature)
 
 
 def test_fresh_self_analysis_state_captures_both_authorized_transitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    capture, repository, _, application_data, self_analysis, launcher = (
-        _internal_policy_factory(tmp_path / "internal")
+    capture, repository, _, application_data, self_analysis, launcher = _internal_policy_factory(
+        tmp_path / "internal"
     )
     repository.mkdir(parents=True)
     launcher.parent.mkdir(parents=True)
@@ -721,4 +777,6 @@ def test_failed_checkpoint_owner_forces_full_inventory(
     assert not allowed
     assert reason == "checkpoint_scan_mismatch"
     assert source_run_id is not None
+
+
 # endregion [02]

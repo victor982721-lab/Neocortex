@@ -146,11 +146,7 @@ def _run_tesseract(pytesseract, image, config: IsolatedExtractionConfig) -> str:
                 image,
                 lang=config.ocr_lang,
                 timeout=config.ocr_timeout_seconds,
-                config=(
-                    f'--tessdata-dir "{config.tessdata_dir}"'
-                    if config.tessdata_dir
-                    else ""
-                ),
+                config=(f'--tessdata-dir "{config.tessdata_dir}"' if config.tessdata_dir else ""),
             )
         except PermissionError as exc:
             if attempt or getattr(exc, "winerror", None) != 32:
@@ -179,15 +175,17 @@ def _ocr_page(page, fitz, config: IsolatedExtractionConfig, ocr_admission) -> st
         )
 
     with ocr_admission:
-        for scale in _ocr_scales(scale):
-            render_pixels = int(page.rect.width * scale) * int(page.rect.height * scale)
+        for current_scale in _ocr_scales(scale):
+            render_pixels = int(page.rect.width * current_scale) * int(
+                page.rect.height * current_scale
+            )
             if render_pixels > config.max_render_pixels:
                 raise RuntimeError(
                     f"OCR render would require {render_pixels} pixels; "
                     f"limit={config.max_render_pixels}"
                 )
             pixmap = page.get_pixmap(
-                matrix=fitz.Matrix(scale, scale),
+                matrix=fitz.Matrix(current_scale, current_scale),
                 colorspace=fitz.csGRAY,
                 alpha=False,
             )
@@ -200,7 +198,7 @@ def _ocr_page(page, fitz, config: IsolatedExtractionConfig, ocr_admission) -> st
             try:
                 return _run_tesseract(pytesseract, image, config)
             except Exception as exc:
-                if not is_ocr_scale_retryable_failure(exc) or scale <= 1.01:
+                if not is_ocr_scale_retryable_failure(exc) or current_scale <= 1.01:
                     raise
             finally:
                 image.close()
@@ -227,9 +225,7 @@ def _page_bounds(page_count: int, config: IsolatedExtractionConfig) -> tuple[int
     if config.max_pages is not None:
         end = min(end, start + config.max_pages)
     if start >= page_count:
-        raise ValueError(
-            f"page range starts at {start + 1}, but document has {page_count} pages"
-        )
+        raise ValueError(f"page range starts at {start + 1}, but document has {page_count} pages")
     return start, end
 
 
@@ -276,20 +272,15 @@ def _extract_with_pdfminer(
             continue
         try:
             text = "".join(
-                element.get_text()
-                for element in layout
-                if isinstance(element, LTTextContainer)
+                element.get_text() for element in layout if isinstance(element, LTTextContainer)
             )
             if len(text) > config.max_page_text_chars:
                 raise RuntimeError(
-                    f"page text has {len(text)} characters; "
-                    f"limit={config.max_page_text_chars}"
+                    f"page text has {len(text)} characters; limit={config.max_page_text_chars}"
                 )
             channel.put(("page", page_number, "pdfminer", text))
         except Exception as exc:
-            channel.put(
-                ("page_error", page_number, type(exc).__name__, str(exc)[:2000])
-            )
+            channel.put(("page_error", page_number, type(exc).__name__, str(exc)[:2000]))
             if config.fail_fast_pages:
                 raise
     if page_count == 0:
@@ -353,21 +344,17 @@ def _qpdf_repaired_copy(
                     creationflags=creation_flags,
                 )
             except subprocess.TimeoutExpired as exc:
-                raise RuntimeError(
-                    f"qpdf recovery exceeded {timeout_seconds} seconds"
-                ) from exc
+                raise RuntimeError(f"qpdf recovery exceeded {timeout_seconds} seconds") from exc
         sample = _read_file_tail(diagnostics, 8192).decode("utf-8", "replace")
         if completed.returncode not in {0, 2, 3} or not output.is_file():
             raise RuntimeError(
-                f"qpdf recovery exited with code {completed.returncode}: "
-                f"{sample[-1000:]}"
+                f"qpdf recovery exited with code {completed.returncode}: {sample[-1000:]}"
             )
         output_size = output.stat().st_size
         maximum_size = max(snapshot.size * 2, snapshot.size + 64 * 1024 * 1024)
         if output_size < 5 or output_size > maximum_size:
             raise RuntimeError(
-                f"qpdf recovery produced invalid size {output_size}; "
-                f"limit={maximum_size}"
+                f"qpdf recovery produced invalid size {output_size}; limit={maximum_size}"
             )
         with output.open("rb") as stream:
             if not stream.read(1024).lstrip().startswith(b"%PDF-"):
@@ -447,8 +434,7 @@ class _ChildExtractionSession:
             and _normalized_length(native_text) < self.config.min_page_chars
         )
         ocr_available = (
-            self.config.max_ocr_pages is None
-            or self.ocr_attempted < self.config.max_ocr_pages
+            self.config.max_ocr_pages is None or self.ocr_attempted < self.config.max_ocr_pages
         )
         if should_ocr and ocr_available:
             self.ocr_attempted += 1
@@ -471,9 +457,7 @@ class _ChildExtractionSession:
         error: Exception,
         recovery: dict[str, object] | None,
     ) -> bool:
-        self.channel.put(
-            ("page_error", page_number, type(error).__name__, str(error)[:2000])
-        )
+        self.channel.put(("page_error", page_number, type(error).__name__, str(error)[:2000]))
         if self.config.fail_fast_pages:
             raise error
         if consecutive_errors < MAX_CONSECUTIVE_PAGE_ERRORS:
@@ -520,9 +504,7 @@ class _ChildExtractionSession:
                 consecutive_errors = 0
             except Exception as exc:
                 consecutive_errors += 1
-                if self._emit_page_error(
-                    page_number, end, consecutive_errors, exc, recovery
-                ):
+                if self._emit_page_error(page_number, end, consecutive_errors, exc, recovery):
                     break
             finally:
                 self.drain_warnings()
@@ -600,9 +582,7 @@ class _ChildExtractionSession:
                 self.channel.put(("restart", "pdfminer_recovery", qpdf_error[:2000]))
                 self.header_sent = False
             if not self.config.pdfminer_fallback:
-                raise PdfStructuralRecoveryFailed(
-                    f"{primary_detail}; {qpdf_error}"
-                ) from repair_exc
+                raise PdfStructuralRecoveryFailed(f"{primary_detail}; {qpdf_error}") from repair_exc
             return qpdf_error
 
     def _extract_with_pdfminer_recovery(
@@ -653,9 +633,7 @@ def _extract_child(snapshot, config, channel, ocr_control) -> None:
         session.run()
     except BaseException as exc:
         session.emit_warnings()
-        diagnostic = classify_pdf_failure(
-            type(exc).__name__, str(exc), phase=session.phase
-        )
+        diagnostic = classify_pdf_failure(type(exc).__name__, str(exc), phase=session.phase)
         channel.put(
             (
                 "fatal",
@@ -693,12 +671,13 @@ def _profile_child(path: str, state_path: str, file_key: str, channel) -> None:
             channel.put(("warnings", warning_count, tuple(warning_samples)))
 
     try:
-        import fitz  # type: ignore[import-untyped]
+        import fitz
 
         fitz.TOOLS.mupdf_display_errors(False)
         fitz.TOOLS.mupdf_display_warnings(False)
         fitz.TOOLS.reset_mupdf_warnings()
 
+        from .pdf_layout import LAYOUT_VERSION
         from .pdf_profile import profile_page
 
         with (
@@ -717,8 +696,12 @@ def _profile_child(path: str, state_path: str, file_key: str, channel) -> None:
             if int(connection.execute("PRAGMA foreign_keys").fetchone()[0]) != 1:
                 raise RuntimeError("PDF profile reader could not enable foreign keys")
             rows = connection.execute(
-                "SELECT page_number FROM pages WHERE file_key=? ORDER BY page_number",
-                (file_key,),
+                """SELECT p.page_number FROM pages p
+                LEFT JOIN page_layouts l ON l.file_key=p.file_key
+                    AND l.page_number=p.page_number AND l.algorithm_version=?
+                WHERE p.file_key=? AND (p.profile_json IS NULL OR l.file_key IS NULL)
+                ORDER BY p.page_number""",
+                (LAYOUT_VERSION, file_key),
             )
             for (page_number,) in rows:
                 number = int(page_number)
@@ -764,8 +747,7 @@ class _ParentOcrLease:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise PdfDocumentTimeout(
-                    f"PDF extraction exceeded its deadline waiting for an OCR "
-                    f"slot: {path}"
+                    f"PDF extraction exceeded its deadline waiting for an OCR slot: {path}"
                 )
             if self._slots.acquire(timeout=min(0.1, remaining)):
                 self.acquired = True
@@ -811,7 +793,7 @@ def _next_extraction_message(
                 exit_code=process.exitcode,
                 phase=last_phase,
                 memory_limit_bytes=memory_limit_bytes,
-            )
+            ) from None
         return None
 
 
@@ -992,7 +974,7 @@ def stream_isolated_profiles(
                 if not process.is_alive():
                     raise PdfChildProcessError(
                         f"PDF profiler exited with code {process.exitcode}: {path}"
-                    )
+                    ) from None
                 continue
             yield message
             complete = message[0] in {"done", "fatal"}
@@ -1004,9 +986,7 @@ def stream_isolated_profiles(
         if process.is_alive():
             raise PdfDocumentTimeout(f"PDF profiler did not exit: {path}")
         if process.exitcode not in {0, None}:
-            raise PdfChildProcessError(
-                f"PDF profiler exited with code {process.exitcode}: {path}"
-            )
+            raise PdfChildProcessError(f"PDF profiler exited with code {process.exitcode}: {path}")
     finally:
         try:
             _terminate_process_tree(process)

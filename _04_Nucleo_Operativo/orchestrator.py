@@ -1159,6 +1159,7 @@ class FrameworkOrchestrator:
                         # always revalidates exact bytes immediately before trashing.
                         verify_bytes_before_trash=True,
                         excluded_paths=excluded_paths,
+                        exclusion_policy=inventory_policy,
                         progress=self.progress,
                     )
                     state.set_run_phase(run_id, "actions")

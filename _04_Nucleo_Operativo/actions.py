@@ -4,7 +4,6 @@
 # Propósito: documentación embebida y separación visual de regiones.
 # endregion [00]
 
-
 # region [01] Dependencias del módulo
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ from _02_Deduplicacion import (
 )
 from _02_Deduplicacion.inventory import (
     DEFAULT_EXCLUDED_PATHS,
-    exclusion_path_keys,
+    InventoryExclusionPolicy,
     validate_inventory_root,
 )
 from _03_Progreso import ProgressCallback, ProgressEvent, emit_progress
@@ -81,6 +80,7 @@ class FrameworkActions:
         apply: bool,
         verify_bytes_before_trash: bool = True,
         excluded_paths: Iterable[str | Path] = DEFAULT_EXCLUDED_PATHS,
+        exclusion_policy: InventoryExclusionPolicy | None = None,
         progress: ProgressCallback | None = None,
     ):
         self._index = index
@@ -91,12 +91,12 @@ class FrameworkActions:
         # Destructive mode never relies on a non-cryptographic fingerprint
         # alone, even when candidate reduction used the fast policy.
         self._verify_bytes_before_trash = apply or verify_bytes_before_trash
-        self._excluded_path_keys = exclusion_path_keys(excluded_paths)
+        self._exclusion_policy = exclusion_policy or InventoryExclusionPolicy.compile(
+            excluded_paths
+        )
         self._progress = progress
 
-    def execute(
-        self, plan: DedupPlan, *, cleanup_empty_directories: bool = True
-    ) -> ActionSummary:
+    def execute(self, plan: DedupPlan, *, cleanup_empty_directories: bool = True) -> ActionSummary:
         self._validate_apply_root()
         summary = ActionSummary(apply_actions=self._apply)
         started = time.perf_counter_ns()
@@ -148,9 +148,7 @@ class FrameworkActions:
         flush()
         return applied, failed, protected
 
-    def _record_phase(
-        self, phase: str, started_ns: int, summary: ActionSummary
-    ) -> None:
+    def _record_phase(self, phase: str, started_ns: int, summary: ActionSummary) -> None:
         self._state.record_event(
             self._run_id,
             "info",
@@ -166,9 +164,7 @@ class FrameworkActions:
             },
         )
 
-    def cleanup_empty_directories(
-        self, plan: DedupPlan, summary: ActionSummary
-    ) -> ActionSummary:
+    def cleanup_empty_directories(self, plan: DedupPlan, summary: ActionSummary) -> ActionSummary:
         """Run final directory cleanup after an optional content route."""
 
         self._validate_apply_root()
@@ -178,9 +174,7 @@ class FrameworkActions:
         self._state.store_action_summary(self._run_id, result)
         return result
 
-    def _trash_empty_directories(
-        self, plan: DedupPlan, summary: ActionSummary
-    ) -> ActionSummary:
+    def _trash_empty_directories(self, plan: DedupPlan, summary: ActionSummary) -> ActionSummary:
         root = self._index.scan_root(plan.scan_id)
         traversal_error_count = [0]
         pending: list[tuple[str, str, FileSnapshot]] = []
@@ -233,7 +227,7 @@ class FrameworkActions:
             )
 
         for directory in _postorder_directories(
-            root, self._excluded_path_keys, traversal_error_count
+            root, self._exclusion_policy, traversal_error_count
         ):
             directory_snapshot = self._empty_directory_snapshot(
                 directory,
@@ -246,9 +240,7 @@ class FrameworkActions:
             path = str(directory)
             pending.append((path, "directory-empty;policy=trash", directory_snapshot))
             parent_key = _path_key(directory.parent)
-            logical_child_counts[parent_key] = (
-                logical_child_counts.get(parent_key, 0) + 1
-            )
+            logical_child_counts[parent_key] = logical_child_counts.get(parent_key, 0) + 1
             candidates += 1
             if len(pending) >= TRASH_BATCH_SIZE:
                 flush()
@@ -257,9 +249,7 @@ class FrameworkActions:
             summary,
             empty_directory_candidates=candidates,
             empty_directories_trashed=applied_total,
-            empty_directory_skips=(
-                failed_total + protected_total + traversal_error_count[0]
-            ),
+            empty_directory_skips=(failed_total + protected_total + traversal_error_count[0]),
             errors=summary.errors + failed_total + traversal_error_count[0],
         )
         emit_progress(
@@ -405,14 +395,10 @@ class FrameworkActions:
         tuple[FileSnapshot | None, ...],
         tuple[FileSnapshot | None, ...],
     ]:
-        expected = (
-            (None,) * len(batch) if expected_snapshots is None else expected_snapshots
-        )
+        expected = (None,) * len(batch) if expected_snapshots is None else expected_snapshots
         if len(expected) != len(batch):
             raise ValueError("expected snapshot count does not match trash batch")
-        references = (
-            (None,) * len(batch) if reference_snapshots is None else reference_snapshots
-        )
+        references = (None,) * len(batch) if reference_snapshots is None else reference_snapshots
         if len(references) != len(batch):
             raise ValueError("reference snapshot count does not match trash batch")
         return expected, references
@@ -596,9 +582,7 @@ class FrameworkActions:
             raise RuntimeError("trash source disappeared before the operation")
         if planned is not None and not stat_matches_snapshot(planned, current_stat):
             raise RuntimeError("metadata changed after the trash candidate was planned")
-        if original_stat is not None and not self._same_runtime_stat(
-            original_stat, current_stat
-        ):
+        if original_stat is not None and not self._same_runtime_stat(original_stat, current_stat):
             raise RuntimeError("trash source changed after mutation preflight")
         if action_type == "trash_empty_directory":
             if planned is None:
@@ -611,9 +595,7 @@ class FrameworkActions:
                 reference.path,
                 role="trash keeper/reference",
             )
-            if reference_stat is None or not stat_matches_snapshot(
-                reference, reference_stat
-            ):
+            if reference_stat is None or not stat_matches_snapshot(reference, reference_stat):
                 raise RuntimeError("keeper changed after exact duplicate comparison")
         return current_stat
 
@@ -667,9 +649,7 @@ class FrameworkActions:
         current_birthtime = getattr(current, "st_birthtime_ns", current.st_ctime_ns)
         return bool(original_birthtime == current_birthtime)
 
-    def _trash_empty_files(
-        self, plan: DedupPlan, summary: ActionSummary
-    ) -> ActionSummary:
+    def _trash_empty_files(self, plan: DedupPlan, summary: ActionSummary) -> ActionSummary:
         candidates = self._index.file_count_by_size(plan.scan_id, 0)
         if not candidates:
             return summary
@@ -692,17 +672,13 @@ class FrameworkActions:
         completed = 0
         with DedupIndex(self._index.path) as read_index:
             for snapshot in read_index.snapshots_by_size(plan.scan_id, 0):
-                pending.append(
-                    (snapshot.path, "size=0;policy=trash-all-empty", snapshot)
-                )
+                pending.append((snapshot.path, "size=0;policy=trash-all-empty", snapshot))
                 if len(pending) < TRASH_BATCH_SIZE:
                     continue
                 applied, failed, protected = self._apply_trash_batch(
                     "trash_empty_file",
                     tuple((path, evidence) for path, evidence, _snapshot in pending),
-                    expected_snapshots=tuple(
-                        snapshot for _path, _evidence, snapshot in pending
-                    ),
+                    expected_snapshots=tuple(snapshot for _path, _evidence, snapshot in pending),
                 )
                 completed += len(pending)
                 pending.clear()
@@ -727,9 +703,7 @@ class FrameworkActions:
             applied, failed, protected = self._apply_trash_batch(
                 "trash_empty_file",
                 tuple((path, evidence) for path, evidence, _snapshot in pending),
-                expected_snapshots=tuple(
-                    snapshot for _path, _evidence, snapshot in pending
-                ),
+                expected_snapshots=tuple(snapshot for _path, _evidence, snapshot in pending),
             )
             completed += len(pending)
             summary = replace(
@@ -752,9 +726,7 @@ class FrameworkActions:
         )
         return summary
 
-    def _trash_duplicates(
-        self, plan: DedupPlan, summary: ActionSummary
-    ) -> ActionSummary:
+    def _trash_duplicates(self, plan: DedupPlan, summary: ActionSummary) -> ActionSummary:
         candidates = plan.redundant_files
         summary = replace(
             summary,
@@ -791,15 +763,9 @@ class FrameworkActions:
             nonlocal completed, summary
             if not pending:
                 return
-            batch = tuple(
-                (path, evidence) for path, evidence, _snapshot, _reference in pending
-            )
-            expected = tuple(
-                snapshot for _path, _evidence, snapshot, _reference in pending
-            )
-            references = tuple(
-                reference for _path, _evidence, _snapshot, reference in pending
-            )
+            batch = tuple((path, evidence) for path, evidence, _snapshot, _reference in pending)
+            expected = tuple(snapshot for _path, _evidence, snapshot, _reference in pending)
+            references = tuple(reference for _path, _evidence, _snapshot, reference in pending)
             pending.clear()
             applied, failed, protected = self._apply_trash_batch(
                 "trash_duplicate",
@@ -862,16 +828,12 @@ class FrameworkActions:
                     try:
                         redundant_now = snapshot_path(redundant.path)
                         if not _same_snapshot(redundant, redundant_now):
-                            raise RuntimeError(
-                                "metadata changed after exact duplicate planning"
-                            )
+                            raise RuntimeError("metadata changed after exact duplicate planning")
                         assert keep_now is not None
                         if self._verify_bytes_before_trash and not files_equal_exact(
                             keep_now, redundant_now
                         ):
-                            raise RuntimeError(
-                                "content changed after exact duplicate planning"
-                            )
+                            raise RuntimeError("content changed after exact duplicate planning")
                     except (OSError, RuntimeError, FileChangedError) as exc:
                         fail_candidate(redundant.path, evidence, str(exc))
                         continue
@@ -907,9 +869,7 @@ class FrameworkActions:
             return None, str(exc)
         return current, None
 
-    def _validate_extensions(
-        self, plan: DedupPlan, summary: ActionSummary
-    ) -> ActionSummary:
+    def _validate_extensions(self, plan: DedupPlan, summary: ActionSummary) -> ActionSummary:
         total = self._index.file_count(self._scan_id) - self._index.file_count_by_size(
             self._scan_id, 0
         )
@@ -968,8 +928,8 @@ class FrameworkActions:
                 if planned.size == 0:
                     continue
                 completed += 1
-                summary, route_candidate, cache_update = (
-                    self._inspect_content_type_candidate(planned, summary)
+                summary, route_candidate, cache_update = self._inspect_content_type_candidate(
+                    planned, summary
                 )
                 if cache_update is not None:
                     cache_updates.append(cache_update)
@@ -984,9 +944,7 @@ class FrameworkActions:
         flush_cache_updates()
         summary = replace(
             summary,
-            type_cache_pruned=self._state.prune_content_type_cache(
-                self._run_id, DETECTOR_VERSION
-            ),
+            type_cache_pruned=self._state.prune_content_type_cache(self._run_id, DETECTOR_VERSION),
         )
         emit_progress(
             self._progress,
@@ -1126,9 +1084,7 @@ class FrameworkActions:
         summary = self._rename_mismatch(planned, detected, summary)
         target = _corrected_path(Path(planned.path), detected.canonical_extension)
         actual_path = (
-            target
-            if target.is_file() and not Path(planned.path).exists()
-            else Path(planned.path)
+            target if target.is_file() and not Path(planned.path).exists() else Path(planned.path)
         )
         return summary, (detected.mime, replace(planned, path=str(actual_path)))
 
@@ -1164,9 +1120,7 @@ class FrameworkActions:
         )
         self._state.finish_file_action(action_id, "failed", str(error))
 
-    def _rename_mismatch(
-        self, planned, detected, summary: ActionSummary
-    ) -> ActionSummary:
+    def _rename_mismatch(self, planned, detected, summary: ActionSummary) -> ActionSummary:
         self._validate_apply_root()
         source = Path(planned.path)
         target = _corrected_path(source, detected.canonical_extension)
@@ -1205,9 +1159,7 @@ class FrameworkActions:
                     source,
                     role="rename source",
                 )
-                if source_stat is None or not stat_matches_snapshot(
-                    planned, source_stat
-                ):
+                if source_stat is None or not stat_matches_snapshot(planned, source_stat):
                     raise RuntimeError("rename source changed after mutation preflight")
                 target_stat = self._validate_action_path(
                     target,
@@ -1223,9 +1175,7 @@ class FrameworkActions:
             revalidate_rename_boundary()
             frontier_snapshot = snapshot_path(source)
             if not _same_snapshot(planned, frontier_snapshot):
-                raise RuntimeError(
-                    "rename source changed immediately before mutation frontier"
-                )
+                raise RuntimeError("rename source changed immediately before mutation frontier")
 
             def persist_mutation_frontier() -> None:
                 nonlocal frontier_crossed
@@ -1261,8 +1211,7 @@ class FrameworkActions:
                 or not _same_snapshot(frontier_snapshot, renamed)
             ):
                 raise RuntimeError(
-                    "rename receipt or destination snapshot does not match "
-                    "the authorized source"
+                    "rename receipt or destination snapshot does not match the authorized source"
                 )
             self._state.confirm_file_actions_applied(
                 (
@@ -1335,8 +1284,8 @@ class FrameworkActions:
         mutation_guard = self._effective_mutation_guard()
         mutation_guard.reject_run_mutation()
         recorded_root = self._index.scan_root(self._scan_id)
-        recorded_volume, recorded_file, recorded_birthtime = (
-            self._index.scan_root_identity(self._scan_id)
+        recorded_volume, recorded_file, recorded_birthtime = self._index.scan_root_identity(
+            self._scan_id
         )
         run_policy = mutation_guard.policy
         run_identity = (
@@ -1365,8 +1314,7 @@ class FrameworkActions:
             or current.birthtime_ns != recorded_birthtime
         ):
             raise RuntimeError(
-                "inventory root identity changed after the scan was recorded: "
-                f"{recorded_root}"
+                f"inventory root identity changed after the scan was recorded: {recorded_root}"
             )
         return current_root
 
@@ -1374,4 +1322,6 @@ class FrameworkActions:
         """Reload the current fail-closed guard at every mutation boundary."""
 
         return self._state.corpus_mutation_guard(self._run_id)
+
+
 # endregion [02]

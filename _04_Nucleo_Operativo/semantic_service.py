@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import TypeVar
+
+from _03_Progreso import ProgressCallback
 
 from . import semantic_classification_service as _classification
 from . import semantic_generation_worker as _worker
@@ -151,13 +154,13 @@ _T = TypeVar("_T")
 __all__ = (
     "DEFAULT_SEARCH_MAX_VECTORS",
     "EVIDENCE_PAGE_SIZE",
-    "FusedResolvedHit",
-    "GenerationWorkResult",
     "IMAGE_OCR_TEXT_CHANNEL",
-    "ModelPreparation",
     "SEMANTIC_DATABASE_NAME",
     "SEMANTIC_ONTOLOGY_ID",
     "SEMANTIC_PROTOTYPE_VERSION",
+    "FusedResolvedHit",
+    "GenerationWorkResult",
+    "ModelPreparation",
     "SemanticClassificationResult",
     "SemanticCostCalibration",
     "SemanticEvidencePassResult",
@@ -329,6 +332,7 @@ def _run_generation(
     queued: int,
     work_budget: SemanticWorkBudget,
     publish_if_complete: bool,
+    progress: ProgressCallback | None = None,
 ) -> GenerationWorkResult:
     return _worker.run_generation(
         database,
@@ -338,6 +342,7 @@ def _run_generation(
         work_budget=work_budget,
         publish_if_complete=publish_if_complete,
         heartbeat_jobs=heartbeat_embedding_jobs,
+        progress=progress,
     )
 
 
@@ -405,6 +410,7 @@ def index_text_embeddings(
     threads: int | None = None,
     chunking: TextChunkingConfig | None = None,
     work_budget: SemanticWorkBudget | None = None,
+    progress: ProgressCallback | None = None,
 ) -> SemanticIndexResult:
     """Incrementally embed extracted text; source files are never rescanned."""
 
@@ -420,14 +426,13 @@ def index_text_embeddings(
             chunking=chunking,
             backend_factory=_index_backend_factory(budget),
             source_record_iterator=iter_text_source_records,
-            generation_runner=_run_generation,
+            generation_runner=partial(_run_generation, progress=progress),
             work_budget=budget,
+            progress=progress,
         )
         if "code" in result.sources and result.complete:
             if len(result.generations) != 1:
-                raise RuntimeError(
-                    "Code Semantic linking requires exactly one text generation"
-                )
+                raise RuntimeError("Code Semantic linking requires exactly one text generation")
             from .code_semantic_links import synchronize_code_embedding_links
 
             summary = result.generations[0].summary
@@ -472,6 +477,7 @@ def index_image_embeddings(
     ocr_model: EmbeddingModelSpec | None = None,
     chunking: TextChunkingConfig | None = None,
     work_budget: SemanticWorkBudget | None = None,
+    progress: ProgressCallback | None = None,
 ) -> SemanticIndexResult:
     """Index visual CLIP vectors and retained OCR in separate compatible spaces."""
 
@@ -487,8 +493,9 @@ def index_image_embeddings(
             chunking=chunking,
             backend_factory=_index_backend_factory(budget),
             source_record_iterator=iter_image_source_records,
-            generation_runner=_run_generation,
+            generation_runner=partial(_run_generation, progress=progress),
             work_budget=budget,
+            progress=progress,
         )
     finally:
         budget.close_registered_resources()
@@ -778,9 +785,7 @@ def classify_semantic_index(
 # region [06] Read-only status facade
 
 
-def semantic_status(
-    state_directory: Path, *, generation_limit: int = 10
-) -> SemanticStatus:
+def semantic_status(state_directory: Path, *, generation_limit: int = 10) -> SemanticStatus:
     """Return bounded state counts without creating or migrating the database."""
 
     return _status.semantic_status(

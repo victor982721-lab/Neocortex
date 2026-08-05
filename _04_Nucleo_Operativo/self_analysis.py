@@ -8,6 +8,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from _02_Deduplicacion import InventoryExclusionPolicy
+from _02_Deduplicacion.inventory import (
+    DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
+    DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+)
 
 from .code_contracts import (
     _legacy_deep_configuration_payload,
@@ -137,6 +141,8 @@ def build_self_analysis_inventory_policy(
     return InventoryExclusionPolicy.compile(
         explicit_roots,
         directory_names=_EXCLUDED_DIRECTORY_NAMES,
+        directory_prefixes=DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+        directory_fragments=DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
         file_names=_EXCLUDED_FILE_NAMES,
         file_suffixes=_EXCLUDED_FILE_SUFFIXES,
     )
@@ -149,6 +155,8 @@ def inventory_policy_manifest(
 
     explicit_roots = list(policy.explicit_roots)
     directory_names = sorted(policy.directory_names)
+    directory_prefixes = list(policy.directory_prefixes)
+    directory_fragments = list(policy.directory_fragments)
     file_names = sorted(policy.file_names)
     file_suffixes = list(policy.file_suffixes)
     manifest: dict[str, object] = {
@@ -157,12 +165,16 @@ def inventory_policy_manifest(
         "signature_version": policy.signature_version,
         "explicit_roots": explicit_roots,
         "directory_names": directory_names,
+        "directory_prefixes": directory_prefixes,
+        "directory_fragments": directory_fragments,
         "file_names": file_names,
         "file_suffixes": file_suffixes,
     }
     rebuilt = InventoryExclusionPolicy.compile(
         explicit_roots,
         directory_names=directory_names,
+        directory_prefixes=directory_prefixes,
+        directory_fragments=directory_fragments,
         file_names=file_names,
         file_suffixes=file_suffixes,
     )

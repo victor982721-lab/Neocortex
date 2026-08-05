@@ -9,6 +9,8 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from _03_Progreso import ProgressCallback, ProgressEvent, ProgressMetric, emit_progress
+
 from .semantic_chunking import TextChunkingConfig, TextTokenCounter, iter_text_chunks
 from .semantic_config import (
     SEMANTIC_PIPELINE_VERSION,
@@ -70,6 +72,7 @@ from .sqlite_cancellation import (
 )
 
 TextRecordIterator = Callable[[Path, str], Iterator[TextSourceRecord]]
+SEMANTIC_PROGRESS_ITEM_INTERVAL = 25
 
 
 # region [01] Source grouping and staging
@@ -219,11 +222,13 @@ def _stage_source(
     source_record_iterator: TextRecordIterator,
     work_budget: SemanticWorkBudget | None = None,
     cancellation_check: CancellationCheck | None = None,
+    progress: ProgressCallback | None = None,
 ) -> tuple[int, int, int, bool]:
     if not source_kind.strip() or not refresh_token.strip():
         raise ValueError("source_kind and refresh_token cannot be blank")
     budget = work_budget or unlimited_semantic_work_budget()
     source_items = chunks_staged = queued = 0
+    source_new_jobs_before = budget.new_jobs_admitted
     groups = grouped_text_records(
         state_directory,
         source_kind,
@@ -236,6 +241,22 @@ def _stage_source(
         budget.checkpoint()
 
     bridge = SQLiteCancellationBridge(staging_checkpoint)
+    emit_progress(
+        progress,
+        ProgressEvent(
+            "semantic",
+            f"stage:{source_kind}",
+            f"Preparando texto {source_kind.upper()}",
+            0,
+            None,
+            "documentos",
+            metrics=(
+                ProgressMetric("chunks", 0),
+                ProgressMetric("queued_work", 0),
+                ProgressMetric("new_jobs", 0),
+            ),
+        ),
+    )
     with semantic_database(database) as connection:
         with sqlite_cancellation_scope(connection, bridge):
             session = _SemanticTextStagingSession(
@@ -262,22 +283,63 @@ def _stage_source(
                     (first.section,),
                     (record.section for record in iterator),
                 )
-                item_chunks, item_jobs, item_new_jobs, item_complete = (
-                    session.stage_item(item, sections)
+                item_chunks, item_jobs, item_new_jobs, item_complete = session.stage_item(
+                    item, sections
                 )
                 source_items += 1
                 chunks_staged += item_chunks
                 queued += item_jobs
+                if source_items % SEMANTIC_PROGRESS_ITEM_INTERVAL == 0:
+                    emit_progress(
+                        progress,
+                        ProgressEvent(
+                            "semantic",
+                            f"stage:{source_kind}",
+                            f"Preparando texto {source_kind.upper()}",
+                            source_items,
+                            None,
+                            "documentos",
+                            metrics=(
+                                ProgressMetric("chunks", chunks_staged),
+                                ProgressMetric("queued_work", queued),
+                                ProgressMetric(
+                                    "new_jobs",
+                                    budget.new_jobs_admitted - source_new_jobs_before,
+                                ),
+                            ),
+                        ),
+                    )
                 if not item_complete:
                     source_complete = False
                     break
-                if (
-                    item_new_jobs == 0
-                    and budget.rebound_members == item_rebounds_before
-                ):
+                if item_new_jobs == 0 and budget.rebound_members == item_rebounds_before:
                     budget.refund_replayed_item()
             if source_complete:
                 session.finalize_source()
+    emit_progress(
+        progress,
+        ProgressEvent(
+            "semantic",
+            f"stage:{source_kind}",
+            (
+                f"Texto {source_kind.upper()} preparado"
+                if source_complete
+                else f"Texto {source_kind.upper()} pausado"
+            ),
+            source_items,
+            source_items,
+            "documentos",
+            True,
+            (
+                ProgressMetric("chunks", chunks_staged),
+                ProgressMetric("queued_work", queued),
+                ProgressMetric(
+                    "new_jobs",
+                    budget.new_jobs_admitted - source_new_jobs_before,
+                ),
+            ),
+        ),
+    )
     return source_items, chunks_staged, queued, source_complete
 
 
@@ -300,15 +362,14 @@ def index_text_embeddings(
     source_record_iterator: TextRecordIterator,
     generation_runner: GenerationRunner,
     work_budget: SemanticWorkBudget | None = None,
+    progress: ProgressCallback | None = None,
 ) -> SemanticIndexResult:
     """Incrementally embed extracted text; source files are never rescanned."""
 
     budget = work_budget or unlimited_semantic_work_budget()
     new_jobs_before = budget.new_jobs_admitted
     selected_sources = tuple(dict.fromkeys(source_kinds))
-    if not selected_sources or any(
-        kind not in TEXT_SOURCE_KINDS for kind in selected_sources
-    ):
+    if not selected_sources or any(kind not in TEXT_SOURCE_KINDS for kind in selected_sources):
         raise ValueError("semantic text sources must name supported durable caches")
     selected_model = model or multilingual_text_model()
     if selected_model.modality is not EmbeddingModality.TEXT:
@@ -376,6 +437,7 @@ def index_text_embeddings(
             token_counter=token_guard.counter,
             source_record_iterator=source_record_iterator,
             work_budget=budget,
+            progress=progress,
         )
         items_staged += source_items
         chunks_staged += source_chunks

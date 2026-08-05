@@ -32,20 +32,28 @@ def dispatch_direct(args: argparse.Namespace) -> int | None:
 # region [03] Framework configuration and execution
 
 
-def run_framework(args: argparse.Namespace):
-    """Build the validated configuration and run the integrated framework."""
-
-    from _03_Progreso import RichProgress
+def _run_framework_with_progress(args: argparse.Namespace, progress):
+    """Execute the framework with one caller-owned progress reporter."""
 
     from .cli_config import framework_config_from_args
     from .console_cancellation import ConsoleCancellationBridge
     from .orchestrator import FrameworkOrchestrator
 
     config = framework_config_from_args(args)
+    orchestrator = FrameworkOrchestrator(config, progress=progress)
+    with ConsoleCancellationBridge(orchestrator.request_cancellation):
+        return orchestrator.run()
+
+
+def run_framework(args: argparse.Namespace, *, progress=None):
+    """Build the validated configuration and run the integrated framework."""
+
+    from _03_Progreso import RichProgress
+
+    if progress is not None:
+        return _run_framework_with_progress(args, progress)
     with RichProgress() as progress:
-        orchestrator = FrameworkOrchestrator(config, progress=progress)
-        with ConsoleCancellationBridge(orchestrator.request_cancellation):
-            return orchestrator.run()
+        return _run_framework_with_progress(args, progress)
 
 
 # endregion [03]
@@ -74,23 +82,50 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if direct_exit_code is not None:
         return direct_exit_code
 
-    result = run_framework(args)
+    from _03_Progreso import RichProgress
+    from rich.console import Console
 
     from .cli_reporting import (
         has_organization_errors,
         has_strict_route_errors,
+        print_professional_summary,
         print_reports,
     )
 
-    print_reports(result, args)
+    professional_output = Console().is_terminal
+    semantic_results: list[tuple[str, object]] = []
+    semantic_exit_code = 0
+    semantic_attempted = False
+    with RichProgress() as progress:
+        result = run_framework(args, progress=progress)
+        actions = getattr(result, "actions", None)
+        framework_failed = bool(
+            (actions is not None and actions.errors) or has_organization_errors(result)
+        )
+        if args.all and not framework_failed:
+            from .cli_semantic import run_integrated_all_semantic_index
+
+            semantic_attempted = True
+            semantic_exit_code = run_integrated_all_semantic_index(
+                args,
+                progress=progress,
+                result_sink=lambda scope, value: semantic_results.append((scope, value)),
+                print_output=not professional_output,
+            )
+
+    if professional_output:
+        print_professional_summary(
+            result,
+            args,
+            semantic_results=tuple(semantic_results),
+            semantic_exit_code=semantic_exit_code,
+            semantic_attempted=semantic_attempted,
+        )
+    else:
+        print_reports(result, args)
     actions = getattr(result, "actions", None)
     if (actions is not None and actions.errors) or has_organization_errors(result):
         return 2
-    semantic_exit_code = 0
-    if args.all:
-        from .cli_semantic import run_integrated_all_semantic_index
-
-        semantic_exit_code = run_integrated_all_semantic_index(args)
     if semantic_exit_code != 0:
         return 2
     if args.strict_exit_codes and has_strict_route_errors(result):

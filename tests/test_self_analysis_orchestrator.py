@@ -17,7 +17,11 @@ import pytest
 import _04_Nucleo_Operativo.orchestrator as orchestrator_module
 from _01_Enumeracion import VolumeAccessError
 from _02_Deduplicacion import DedupIndex
-from _02_Deduplicacion.inventory import DEFAULT_EXCLUDED_PATHS
+from _02_Deduplicacion.inventory import (
+    DEFAULT_EXCLUDED_PATHS,
+    DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
+    DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+)
 from _04_Nucleo_Operativo.code_contracts import CodeRouteSummary
 from _04_Nucleo_Operativo.models import FrameworkConfig, SelfAnalysisRunResult
 from _04_Nucleo_Operativo.orchestrator import (
@@ -78,7 +82,7 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
         transient.mkdir()
     policy = build_self_analysis_inventory_policy(root, state)
 
-    assert policy.signature.startswith("inventory-exclusion-policy-v2:xxh3_128:")
+    assert policy.signature.startswith("inventory-exclusion-policy-v3:xxh3_128:")
     assert set(policy.explicit_roots) == {
         str(state.resolve()),
         str((root / ".codex-lab").resolve()),
@@ -92,6 +96,8 @@ def test_self_analysis_policy_is_explicit_and_has_no_home_defaults(
     assert {".git", ".venv", "__pycache__", "node_modules", "dist", "target"}.issubset(
         policy.directory_names
     )
+    assert set(DEFAULT_GENERATED_DIRECTORY_PREFIXES).issubset(policy.directory_prefixes)
+    assert set(DEFAULT_GENERATED_DIRECTORY_FRAGMENTS).issubset(policy.directory_fragments)
 
 
 @pytest.mark.parametrize(

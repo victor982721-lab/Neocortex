@@ -10,13 +10,21 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Protocol, TypeVar
 
+from _03_Progreso import ProgressCallback, ProgressEvent, ProgressMetric, emit_progress
+
 from .semantic_backends import (
     EmbeddingBackend,
     SourceRevisionMismatchError,
     TextTokenLimitExceededError,
 )
 from .semantic_config import SEMANTIC_PIPELINE_VERSION
-from .semantic_models import BackendEmbedding, EmbeddingJobLease, EmbeddingRequest
+from .semantic_models import (
+    BackendEmbedding,
+    EmbeddingJobLease,
+    EmbeddingModality,
+    EmbeddingRequest,
+    GenerationSummary,
+)
 from .semantic_service_contracts import (
     JOB_BATCH_SIZE,
     LEASE_HEARTBEAT_INTERVAL_SECONDS,
@@ -114,9 +122,7 @@ def embed_requests_isolated(
             submit(start, batch[:midpoint])
             submit(start + midpoint, batch[midpoint:])
             return
-        successes.extend(
-            (start + offset, output) for offset, output in enumerate(outputs)
-        )
+        successes.extend((start + offset, output) for offset, output in enumerate(outputs))
 
     submit(0, requests)
     successes.sort(key=lambda value: value[0])
@@ -313,6 +319,75 @@ def _release_timed_out_leases(
         )
 
 
+def _generation_description(
+    summary: GenerationSummary,
+    backend: EmbeddingBackend,
+    *,
+    finished: bool,
+    truncated: bool,
+) -> str:
+    selected_sources = summary.cursor.get("selected_sources", ())
+    sources = (
+        {str(value) for value in selected_sources if isinstance(value, str)}
+        if isinstance(selected_sources, (list, tuple))
+        else set()
+    )
+    if backend.model.modality is EmbeddingModality.IMAGE:
+        label = "Embeddings visuales"
+    elif "image-ocr" in sources:
+        label = "Embeddings OCR de imágenes"
+    else:
+        label = "Embeddings de texto"
+    if not finished:
+        return label
+    if truncated or summary.unfinished:
+        return f"{label} pausados"
+    if summary.errors or summary.stale:
+        return f"{label} completados con incidencias"
+    return f"{label} publicados"
+
+
+def _emit_generation_progress(
+    progress: ProgressCallback | None,
+    summary: GenerationSummary,
+    backend: EmbeddingBackend,
+    *,
+    reused: int,
+    embedded: int,
+    failed: int,
+    finished: bool = False,
+    truncated: bool = False,
+) -> None:
+    completed = summary.done + summary.errors + summary.stale
+    total = completed + summary.unfinished
+    observed_reused = max(reused, summary.done - embedded)
+    emit_progress(
+        progress,
+        ProgressEvent(
+            "semantic",
+            f"generation:{summary.generation_id}",
+            _generation_description(
+                summary,
+                backend,
+                finished=finished,
+                truncated=truncated,
+            ),
+            completed,
+            total,
+            "vectores",
+            finished,
+            (
+                ProgressMetric("reused", observed_reused),
+                ProgressMetric("embedded", embedded),
+                ProgressMetric("errors", max(summary.errors, failed)),
+                ProgressMetric("remaining", summary.unfinished),
+                ProgressMetric("generation", summary.generation_id),
+                ProgressMetric("status", summary.status),
+            ),
+        ),
+    )
+
+
 def run_generation(
     database: Path,
     generation_id: int,
@@ -322,6 +397,7 @@ def run_generation(
     work_budget: SemanticWorkBudget | None = None,
     publish_if_complete: bool = True,
     heartbeat_jobs: Callable[..., int] = heartbeat_embedding_jobs,
+    progress: ProgressCallback | None = None,
 ) -> GenerationWorkResult:
     budget = work_budget or unlimited_semantic_work_budget()
     reused = 0
@@ -329,12 +405,29 @@ def run_generation(
     worker_id = f"semantic-worker:{os.getpid()}:{generation_id}"
     while True:
         summary = generation_summary(database, generation_id)
+        _emit_generation_progress(
+            progress,
+            summary,
+            backend,
+            reused=reused,
+            embedded=embedded,
+            failed=failed,
+        )
         if budget.deadline_expired():
             break
         if not summary.unfinished:
             break
         while count := reuse_cached_jobs(database, generation_id):
             reused += count
+            summary = generation_summary(database, generation_id)
+            _emit_generation_progress(
+                progress,
+                summary,
+                backend,
+                reused=reused,
+                embedded=embedded,
+                failed=failed,
+            )
             if budget.deadline_expired():
                 break
         summary = generation_summary(database, generation_id)
@@ -404,6 +497,16 @@ def run_generation(
             generation_id,
             allow_partial=True,
         )
+    _emit_generation_progress(
+        progress,
+        summary,
+        backend,
+        reused=reused,
+        embedded=embedded,
+        failed=failed,
+        finished=True,
+        truncated=budget.truncated or deadline_expired,
+    )
     return GenerationWorkResult(summary, queued, reused, embedded, failed)
 
 

@@ -401,6 +401,9 @@ def test_code_status_json_exposes_valid_current_manifest_read_only(
     self_analysis = payload["self_analysis"]
     assert self_analysis["manifest_status"] == "valid"
     assert self_analysis["manifest"]["run"]["run_id"] == prepared_status.run_id
+    policy = self_analysis["manifest"]["inventory"]["policy"]
+    assert policy["directory_prefixes"]
+    assert policy["directory_fragments"]
     assert self_analysis["manifest"]["safety"] == {
         "route_candidates": 0,
         "file_actions": 0,
