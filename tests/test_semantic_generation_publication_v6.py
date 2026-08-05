@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -467,6 +468,92 @@ def test_base_clone_deadline_persists_cursor_and_replays_to_completion(
     assert resumed_cursor["scanned_members"] == 5
     assert resumed_cursor["base_member_count"] == 5
     assert resumed_cursor["complete"] is True
+
+
+def test_base_clone_page_rolls_back_before_retrying(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = tmp_path / "semantic.sqlite3"
+    model, baseline = _published_fixture_with_members(database, extra_members=2)
+    candidate = start_embedding_generation(
+        database,
+        model_signature=model.model_signature,
+        processing_signature="clone-rollback-v1",
+        provenance={"fixture": "clone-rollback-v1"},
+        materialize_base=False,
+        started_ns=120,
+    )
+    insert_page = semantic_generation_repository._insert_base_clone_rows
+
+    def fail_after_insert(
+        connection: sqlite3.Connection,
+        generation_id: int,
+        rows: Sequence[sqlite3.Row],
+    ) -> None:
+        insert_page(connection, generation_id, rows)
+        raise RuntimeError("injected base clone failure")
+
+    monkeypatch.setattr(
+        semantic_generation_repository,
+        "_insert_base_clone_rows",
+        fail_after_insert,
+    )
+    with pytest.raises(RuntimeError, match="injected base clone failure"):
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
+        )
+
+    with semantic_database(database, readonly=True) as connection:
+        candidate_row = connection.execute(
+            """SELECT base_clone_complete,cursor_json
+            FROM embedding_generations WHERE generation_id=?""",
+            (candidate,),
+        ).fetchone()
+        candidate_members = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_generation_members
+                WHERE generation_id=?""",
+                (candidate,),
+            ).fetchone()[0]
+        )
+    assert candidate_row is not None
+    assert int(candidate_row["base_clone_complete"]) == 0
+    assert json.loads(str(candidate_row["cursor_json"])) == {}
+    assert candidate_members == 0
+
+    monkeypatch.setattr(
+        semantic_generation_repository,
+        "_insert_base_clone_rows",
+        insert_page,
+    )
+    assert (
+        prepare_embedding_generation(
+            database,
+            candidate,
+            enumeration_complete=True,
+        )
+        is None
+    )
+    with semantic_database(database, readonly=True) as connection:
+        completed = connection.execute(
+            """SELECT base_clone_complete FROM embedding_generations
+            WHERE generation_id=?""",
+            (candidate,),
+        ).fetchone()
+        member_count = int(
+            connection.execute(
+                """SELECT COUNT(*) FROM embedding_generation_members
+                WHERE generation_id=?""",
+                (candidate,),
+            ).fetchone()[0]
+        )
+    assert completed is not None
+    assert int(completed["base_clone_complete"]) == 1
+    assert member_count == 3
+    assert baseline > 0
 
 
 def test_base_clone_rejects_a_changed_pinned_snapshot(

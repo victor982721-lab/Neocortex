@@ -127,21 +127,24 @@ def _is_exact_trusted_deep_root(root: Path) -> bool:
     return resolved_root == resolved_expected and resolved_root.samefile(resolved_expected)
 
 
-def apply_self_analysis_preset(args: argparse.Namespace) -> None:
-    """Expand the protected code-only preset and reject unused controls."""
-
-    explicit = set(getattr(args, "_explicit_options", ()))
-    explicit_deep = sorted(explicit & _TRUSTED_DEEP_OPTIONS)
-    if not args.self_analysis:
-        if "analysis_profile" in explicit:
-            raise SystemExit("--analysis-profile requires --self-analysis")
-        if explicit_deep:
+def _validate_self_analysis_mode(
+    args: argparse.Namespace,
+    explicit_deep: list[str],
+) -> bool:
+    if args.self_analysis:
+        if args.analysis_profile != "trusted-deep" and explicit_deep:
             option = "--" + explicit_deep[0].replace("_", "-")
-            raise SystemExit(f"{option} requires --self-analysis --analysis-profile trusted-deep")
-        return
-    if args.analysis_profile != "trusted-deep" and explicit_deep:
+            raise SystemExit(f"{option} requires --analysis-profile trusted-deep")
+        return True
+    if "analysis_profile" in getattr(args, "_explicit_options", ()):
+        raise SystemExit("--analysis-profile requires --self-analysis")
+    if explicit_deep:
         option = "--" + explicit_deep[0].replace("_", "-")
-        raise SystemExit(f"{option} requires --analysis-profile trusted-deep")
+        raise SystemExit(f"{option} requires --self-analysis --analysis-profile trusted-deep")
+    return False
+
+
+def _reject_duplicate_self_analysis_mutations(args: argparse.Namespace) -> None:
     explicit_counts = getattr(args, "_explicit_option_counts", {})
     duplicated_mutation_options = sorted(
         name for name in _DEEP_MUTATION_OPTIONS if explicit_counts.get(name, 0) > 1
@@ -149,6 +152,9 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     if duplicated_mutation_options:
         option = "--" + duplicated_mutation_options[0].replace("_", "-")
         raise SystemExit(f"{option} cannot be repeated")
+
+
+def _normalize_self_analysis_deep_controls(args: argparse.Namespace) -> None:
     try:
         args.deep_test_selectors = normalize_deep_test_selectors(args.deep_test_selectors)
     except ValueError as exc:
@@ -167,12 +173,21 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         args.deep_mutation_symbol = normalize_deep_mutation_symbol(args.deep_mutation_symbol)
     except ValueError as exc:
         raise SystemExit(f"invalid --deep-mutation-symbol: {exc}") from exc
+
+
+def _validate_self_analysis_deep_limits(args: argparse.Namespace) -> None:
     if not 1 <= args.deep_mutation_max_mutants <= 100:
         raise SystemExit("--deep-mutation-max-mutants must be between 1 and 100")
     if not 1 <= args.deep_mutation_timeout_seconds <= 120:
         raise SystemExit("--deep-mutation-timeout-seconds must be between 1 and 120")
     if not 10 <= args.deep_mutation_time_budget_seconds <= 900:
         raise SystemExit("--deep-mutation-time-budget-seconds must be between 10 and 900")
+
+
+def _validate_self_analysis_mutation_dependencies(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
     explicit_mutation = explicit & _DEEP_MUTATION_OPTIONS
     if args.deep_mutation_symbol is not None and args.deep_mutation_target is None:
         raise SystemExit("--deep-mutation-symbol requires --deep-mutation-target")
@@ -187,6 +202,28 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         or args.deep_mutation_time_budget_seconds != DEFAULT_DEEP_MUTATION_TIME_BUDGET_SECONDS
     ):
         raise SystemExit("deep mutation limits require --deep-mutation-target")
+
+
+def _validate_self_analysis_deep_controls(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
+    _reject_duplicate_self_analysis_mutations(args)
+    _normalize_self_analysis_deep_controls(args)
+    if not 1 <= args.deep_max_tests <= 5000:
+        raise SystemExit("--deep-max-tests must be between 1 and 5000")
+    if not 30 <= args.deep_time_budget_seconds <= 900:
+        raise SystemExit("--deep-time-budget-seconds must be between 30 and 900")
+    if not 1 <= args.deep_shard_size <= 50:
+        raise SystemExit("--deep-shard-size must be between 1 and 50")
+    _validate_self_analysis_deep_limits(args)
+    _validate_self_analysis_mutation_dependencies(args, explicit)
+
+
+def _validate_self_analysis_required_scope(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
     if "root" not in explicit:
         raise SystemExit("--self-analysis requires explicit --root")
     if "state_directory" not in explicit:
@@ -200,6 +237,11 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     if selected_direct_operations(args):
         raise SystemExit("--self-analysis cannot be combined with direct operations")
 
+
+def _validate_self_analysis_route(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
     if "route" in explicit:
         try:
             requested_routes = normalize_route_selection(args.route, BUILTIN_ROUTE_ORDER)
@@ -208,6 +250,11 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         if requested_routes != ("code",):
             raise SystemExit("--self-analysis permits only --route code")
 
+
+def _validate_self_analysis_unused_options(
+    args: argparse.Namespace,
+    explicit: set[str],
+) -> None:
     unused = sorted(
         name
         for name in explicit
@@ -223,6 +270,8 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
     if "code_candidate_scope" in explicit and args.code_candidate_scope != "projects":
         raise SystemExit("--self-analysis rejects --code-scope broad")
 
+
+def _validate_self_analysis_paths(args: argparse.Namespace) -> None:
     from _02_Deduplicacion import InventoryError
     from _02_Deduplicacion.inventory import validate_inventory_root
 
@@ -250,6 +299,20 @@ def apply_self_analysis_preset(args: argparse.Namespace) -> None:
         ) from exc
     if intersects:
         raise SystemExit("--self-analysis root and state directory must be disjoint")
+
+
+def apply_self_analysis_preset(args: argparse.Namespace) -> None:
+    """Expand the protected code-only preset and reject unused controls."""
+
+    explicit = set(getattr(args, "_explicit_options", ()))
+    explicit_deep = sorted(explicit & _TRUSTED_DEEP_OPTIONS)
+    if not _validate_self_analysis_mode(args, explicit_deep):
+        return
+    _validate_self_analysis_deep_controls(args, explicit)
+    _validate_self_analysis_required_scope(args, explicit)
+    _validate_self_analysis_route(args, explicit)
+    _validate_self_analysis_unused_options(args, explicit)
+    _validate_self_analysis_paths(args)
     args.route = "code"
     args.no_document_catalog = True
     args.code_candidate_scope = "projects"
