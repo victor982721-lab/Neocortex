@@ -312,13 +312,12 @@ def _rematerialize_replay_projection(
         raise ValueError("external provider replay projection verification failed")
 
 
-def _publish_external_provider(
+def _publish_provider_run_and_contract(
     connection: sqlite3.Connection,
     analysis_run_id: int,
     publication: ExternalProviderPublication,
 ) -> int:
-    """Publish one provider beneath a running Code owner transaction."""
-
+    """Create the provider run and its immutable publication contract."""
     owner = connection.execute(
         "SELECT status FROM analysis_runs WHERE analysis_run_id=?",
         (analysis_run_id,),
@@ -389,6 +388,15 @@ def _publish_external_provider(
             ),
         ),
     )
+    return tool_run_id
+
+
+def _publish_provider_inputs_and_counters(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+) -> None:
+    """Persist bounded inputs and counters for one provider run."""
     if len(publication.inputs) > 2_000:
         raise ValueError("external provider input normalization exceeds its bound")
     for item in publication.inputs:
@@ -419,6 +427,14 @@ def _publish_external_provider(
             "INSERT INTO external_run_counters(tool_run_id,name,value) VALUES(?,?,?)",
             (tool_run_id, name, value),
         )
+
+
+def _publish_provider_replay(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+) -> bool:
+    """Validate and rematerialize a replay publication when requested."""
     if publication.replay_source_tool_run_id is not None:
         if publication.execution != "cache_replay" or not publication.verification_signature:
             raise ValueError("external provider replay contract is incomplete")
@@ -435,18 +451,18 @@ def _publish_external_provider(
                 int(publication.counters.get("bytes_verified", 0)),
             ),
         )
-        return tool_run_id
-    _delete_provider_projection(connection, source=descriptor.source)
-    if publication.publication.status != "completed":
-        return tool_run_id
+        return True
+    return False
+
+
+def _publish_provider_findings(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+) -> None:
+    """Persist bounded findings and their diagnostic projections."""
     if len(publication.findings) > _FINDING_LIMIT:
         raise ValueError("external provider findings exceed their bound")
-    if publication.result_digest != external_provider_result_digest(
-        publication.findings,
-        publication.metrics,
-        publication.relations,
-    ):
-        raise ValueError("external provider result digest is inconsistent")
     for finding in publication.findings:
         if not _current_version_exists(connection, finding.version_id):
             raise RuntimeError("external finding version is no longer current")
@@ -489,6 +505,14 @@ def _publish_external_provider(
                 diagnostic_id,
             ),
         )
+
+
+def _publish_provider_metrics(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+) -> None:
+    """Persist bounded metrics with portable identity checks."""
     if len(publication.metrics) > _METRIC_LIMIT:
         raise ValueError("external provider metrics exceed their bound")
     if len({item.portable_metric_id for item in publication.metrics}) != len(publication.metrics):
@@ -518,6 +542,14 @@ def _publish_external_provider(
                 canonical_json(dict(metric.metadata)),
             ),
         )
+
+
+def _publish_provider_relations(
+    connection: sqlite3.Connection,
+    tool_run_id: int,
+    publication: ExternalProviderPublication,
+) -> None:
+    """Persist bounded relations with portable identity and version checks."""
     if len(publication.relations) > _RELATION_LIMIT:
         raise ValueError("external provider relations exceed their bound")
     if len({item.portable_relation_id for item in publication.relations}) != len(
@@ -554,6 +586,35 @@ def _publish_external_provider(
                 canonical_json(dict(relation.metadata)),
             ),
         )
+
+
+def _publish_external_provider(
+    connection: sqlite3.Connection,
+    analysis_run_id: int,
+    publication: ExternalProviderPublication,
+) -> int:
+    """Publish one provider beneath a running Code owner transaction."""
+    descriptor = publication.descriptor
+    tool_run_id = _publish_provider_run_and_contract(
+        connection,
+        analysis_run_id,
+        publication,
+    )
+    _publish_provider_inputs_and_counters(connection, tool_run_id, publication)
+    if _publish_provider_replay(connection, tool_run_id, publication):
+        return tool_run_id
+    _delete_provider_projection(connection, source=descriptor.source)
+    if publication.publication.status != "completed":
+        return tool_run_id
+    if publication.result_digest != external_provider_result_digest(
+        publication.findings,
+        publication.metrics,
+        publication.relations,
+    ):
+        raise ValueError("external provider result digest is inconsistent")
+    _publish_provider_findings(connection, tool_run_id, publication)
+    _publish_provider_metrics(connection, tool_run_id, publication)
+    _publish_provider_relations(connection, tool_run_id, publication)
     return tool_run_id
 
 

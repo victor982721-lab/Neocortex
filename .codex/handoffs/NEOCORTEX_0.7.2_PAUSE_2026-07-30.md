@@ -115,6 +115,18 @@ hotspot. El diff v9 contra v7 quedó `ready` y
 retirado y 0 llamadas corregidas o perdidas. La siguiente recomendación
 publicada es `external_evidence_store._publish_external_provider`.
 
+El corte siguiente separa la publicación del proveedor externo en creación del
+run/contrato, entradas y contadores, replay y proyecciones de findings,
+métricas y relaciones, conservando la publicación bajo SAVEPOINT, el rollback
+atómico y el orden de validaciones. La suite focal de publicación, arquitectura,
+supply-chain y plataforma pasó 36 pruebas; Ruff y Mypy local quedaron limpios.
+El autoanálisis aislado v10 procesó 607 archivos, 579 candidatos, cero errores
+de inventario y cero errores Code; su review quedó `ready` y retiró el hotspot.
+El diff v10 contra v9 quedó `ready` y `equivalent_under_observed_metrics`, con
+0 hotspots añadidos, 0 cambiados, 1 retirado y 0 llamadas corregidas o
+perdidas. La siguiente recomendación publicada es
+`external_mutation_cosmic_ray.execute_cosmic_ray_mutation`.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
@@ -1557,9 +1569,9 @@ ausentes y su candidate limit, no evidencia inventada.
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
 5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
-   `external_evidence_store._publish_external_provider` con regresiones de
-   rollback, reintento, reanudación y trabajo acotado; conservar la publicación
-   atómica y el estado sólo publicado.
+   `external_mutation_cosmic_ray.execute_cosmic_ray_mutation` con regresiones de
+   orden de fases y cancelación; conservar la publicación atómica y el estado
+   sólo publicado.
    Mantener la evidencia de proveedores ausentes como abstención; no convertirla
    en una autorización de mutación ni en una instalación global.
 6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
