@@ -75,6 +75,20 @@ quedaron limpios. El replay aislado final quedó `ready`, retiró
 `cli_validation.apply_self_analysis_preset` del paquete de trabajo y dejó como
 siguiente recomendación `external_supply_chain_audit.execute_installed_package_inventory`.
 
+El siguiente corte descompone `external_supply_chain_audit.execute_installed_package_inventory`
+en preparación de contexto, construcción de métricas/relaciones de paquetes,
+relaciones de dependencias y publicación de resultados, sin cambiar la firma ni
+la evidencia emitida. La suite focal de supply-chain pasó 12 pruebas; Ruff y
+Mypy local del módulo quedaron limpios. El autoanálisis aislado v6 con el runtime
+completo procesó 607 archivos, 579 candidatos, cero errores de inventario y cero
+errores Code; su review quedó `ready` y retiró el hotspot objetivo. El diff
+v6 contra v4 quedó `ready`, con 0 hotspots añadidos, 0 cambiados, 1 retirado
+(el objetivo) y 0 resoluciones de llamadas perdidas; el veredicto global es
+`incomparable` porque v4 tenía proveedores externos ausentes y v6 los ejecutó.
+La siguiente recomendación publicada es
+`bounded_subprocess.run_bounded_capture`; las abstenciones de proveedores se
+conservan como evidencia advisory, no como autorización de mutación.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
@@ -1517,10 +1531,10 @@ ausentes y su candidate limit, no evidencia inventada.
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
 5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
-   `external_supply_chain_audit.execute_installed_package_inventory` con sus
-   regresiones de fase, cancelación y diff de publicación. Mantener la evidencia
-   de proveedores ausentes como abstención; no convertirla en una autorización
-   de mutación ni en una instalación global.
+   `bounded_subprocess.run_bounded_capture` con regresiones de timeout,
+   interrupción y limpieza; comparar la publicación y exigir replay incremental.
+   Mantener la evidencia de proveedores ausentes como abstención; no convertirla
+   en una autorización de mutación ni en una instalación global.
 6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**
    Diff ya separa relocations, pero los findings realmente `added/resolved` aún
    exponen conteos y no ejemplos tipados públicos. Esta aceptación necesitó una
