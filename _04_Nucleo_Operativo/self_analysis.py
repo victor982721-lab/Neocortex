@@ -8,6 +8,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from _02_Deduplicacion import InventoryExclusionPolicy
+from _02_Deduplicacion.inventory import (
+    DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
+    DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+)
 
 from .code_contracts import (
     _legacy_deep_configuration_payload,
@@ -137,6 +141,8 @@ def build_self_analysis_inventory_policy(
     return InventoryExclusionPolicy.compile(
         explicit_roots,
         directory_names=_EXCLUDED_DIRECTORY_NAMES,
+        directory_prefixes=DEFAULT_GENERATED_DIRECTORY_PREFIXES,
+        directory_fragments=DEFAULT_GENERATED_DIRECTORY_FRAGMENTS,
         file_names=_EXCLUDED_FILE_NAMES,
         file_suffixes=_EXCLUDED_FILE_SUFFIXES,
     )

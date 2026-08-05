@@ -152,7 +152,13 @@ def _canonical_explicit_roots(value: object) -> tuple[str, ...]:
 
 def _recorded_rule_groups(
     policy: Mapping[str, object],
-) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+]:
     directory_names = _normalize_recorded_rules(
         _string_list(
             policy.get("directory_names"),
@@ -160,6 +166,22 @@ def _recorded_rule_groups(
             maximum_items=MAX_INVENTORY_EXCLUSION_RULES,
         ),
         label="directory-name exclusion",
+    )
+    directory_prefixes = _normalize_recorded_rules(
+        _string_list(
+            policy.get("directory_prefixes"),
+            label="manifest directory prefixes",
+            maximum_items=MAX_INVENTORY_EXCLUSION_RULES,
+        ),
+        label="directory-prefix exclusion",
+    )
+    directory_fragments = _normalize_recorded_rules(
+        _string_list(
+            policy.get("directory_fragments"),
+            label="manifest directory fragments",
+            maximum_items=MAX_INVENTORY_EXCLUSION_RULES,
+        ),
+        label="directory-fragment exclusion",
     )
     file_names = _normalize_recorded_rules(
         _string_list(
@@ -178,7 +200,13 @@ def _recorded_rule_groups(
         label="file-suffix exclusion",
         suffixes=True,
     )
-    return directory_names, file_names, file_suffixes
+    return (
+        directory_names,
+        directory_prefixes,
+        directory_fragments,
+        file_names,
+        file_suffixes,
+    )
 
 
 def _validate_recorded_policy(policy: Mapping[str, object]) -> None:
@@ -189,10 +217,18 @@ def _validate_recorded_policy(policy: Mapping[str, object]) -> None:
             "manifest policy signature version is unsupported"
         )
     root_keys = _canonical_explicit_roots(policy.get("explicit_roots"))
-    directory_names, file_names, file_suffixes = _recorded_rule_groups(policy)
+    (
+        directory_names,
+        directory_prefixes,
+        directory_fragments,
+        file_names,
+        file_suffixes,
+    ) = _recorded_rule_groups(policy)
     signature_payload = json.dumps(
         {
             "directory_names": directory_names,
+            "directory_prefixes": directory_prefixes,
+            "directory_fragments": directory_fragments,
             "explicit_root_keys": root_keys,
             "file_names": file_names,
             "file_suffixes": file_suffixes,
@@ -348,6 +384,8 @@ def _validate_inventory(manifest: Mapping[str, object], *, schema: str) -> None:
                 "signature_version",
                 "explicit_roots",
                 "directory_names",
+                "directory_prefixes",
+                "directory_fragments",
                 "file_names",
                 "file_suffixes",
             }
