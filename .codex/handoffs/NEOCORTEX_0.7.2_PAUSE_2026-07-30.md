@@ -101,6 +101,20 @@ El diff v7 contra v6 quedó `ready` y `equivalent_under_observed_metrics`, con
 La siguiente recomendación publicada es
 `semantic_image_index.index_image_embeddings`.
 
+El corte siguiente separa `semantic_image_index.index_image_embeddings` en
+preparación de modelos/generaciones, staging de registros, finalización de
+staging y ejecución de generaciones, sin cambiar el orden de publicación,
+cancelación, cursores ni los espacios vectoriales imagen/imagen-OCR. Las
+regresiones de Semantic imagen/OCR y CLI pasaron 116 pruebas; Ruff y Mypy local
+quedaron limpios. La aserción restante de `test_semantic_service_facade.py` es
+una deuda previa de firmas de fachada (`progress`) y el módulo modificado no la
+usa. El autoanálisis aislado v9 procesó 607 archivos, 579 candidatos, cero
+errores de inventario y cero errores Code; su review quedó `ready` y retiró el
+hotspot. El diff v9 contra v7 quedó `ready` y
+`equivalent_under_observed_metrics`, con 0 hotspots añadidos, 0 cambiados, 1
+retirado y 0 llamadas corregidas o perdidas. La siguiente recomendación
+publicada es `external_evidence_store._publish_external_provider`.
+
 Una interrupción conserva el último lote inventariado y finaliza la generación
 como `partial`. El arranque real siguiente recuperó automáticamente la corrida
 27 cancelada y abrió la 28; ésta recorrió 115 200 archivos pero terminó
@@ -1543,9 +1557,9 @@ ausentes y su candidate limit, no evidencia inventada.
    head, embeddings, errores, tiempo y cobertura faltante. Si se interrumpe,
    repetir el mismo `--all`: la generación es durable y reanudable.
 5. **Retomar el siguiente work package publicado.** Caracterizar y reducir
-   `semantic_image_index.index_image_embeddings` con regresiones de orden de
-   fases, cancelación y diff de publicación; conservar separados los espacios
-   vectoriales de imagen y texto.
+   `external_evidence_store._publish_external_provider` con regresiones de
+   rollback, reintento, reanudación y trabajo acotado; conservar la publicación
+   atómica y el estado sólo publicado.
    Mantener la evidencia de proveedores ausentes como abstención; no convertirla
    en una autorización de mutación ni en una instalación global.
 6. **Cerrar la siguiente brecha de actionability sólo cuando bloquee el paquete.**

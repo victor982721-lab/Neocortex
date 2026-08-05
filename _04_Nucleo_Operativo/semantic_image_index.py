@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from _03_Progreso import ProgressCallback, ProgressEvent, ProgressMetric, emit_progress
 
 from .semantic_chunking import TextChunkingConfig, TextTokenCounter, iter_text_chunks
+from .semantic_backends import EmbeddingBackend
 from .semantic_config import (
     SEMANTIC_PIPELINE_VERSION,
     clip_image_model,
@@ -66,6 +67,29 @@ from .semantic_work_budget import (
 
 ImageRecordIterator = Callable[[Path], Iterator[ImageSourceRecord]]
 SEMANTIC_PROGRESS_ITEM_INTERVAL = 25
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageIndexSetup:
+    database: Path
+    image_model: EmbeddingModelSpec
+    text_model: EmbeddingModelSpec
+    image_backend: EmbeddingBackend
+    text_backend: EmbeddingBackend | None
+    active_chunking: TextChunkingConfig
+    token_counter: TextTokenCounter | None
+    image_generation_id: int
+    ocr_generation_id: int | None
+    initial_cursor: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageStageResult:
+    items_staged: int
+    chunks_staged: int
+    image_queued: int
+    ocr_queued: int
+    enumeration_complete: bool
 
 
 # region [01] Bounded image and OCR staging
@@ -218,7 +242,7 @@ def _start_image_generations(
     return image_generation_id, ocr_generation_id
 
 
-def index_image_embeddings(
+def _prepare_image_index(
     state_directory: Path,
     *,
     model_cache_override: Path | None,
@@ -228,15 +252,7 @@ def index_image_embeddings(
     ocr_model: EmbeddingModelSpec | None,
     chunking: TextChunkingConfig | None,
     backend_factory: BackendFactory,
-    source_record_iterator: ImageRecordIterator,
-    generation_runner: GenerationRunner,
-    work_budget: SemanticWorkBudget | None = None,
-    progress: ProgressCallback | None = None,
-) -> SemanticIndexResult:
-    """Index visual CLIP vectors and retained OCR in separate compatible spaces."""
-
-    budget = work_budget or unlimited_semantic_work_budget()
-    new_jobs_before = budget.new_jobs_admitted
+) -> _ImageIndexSetup:
     require_source_databases(state_directory, (IMAGE_SOURCE_KIND,))
     image_model = clip_image_model()
     query_model = clip_text_model()
@@ -299,8 +315,31 @@ def index_image_embeddings(
             ocr_generation_id,
             cursor=initial_cursor,
         )
+    return _ImageIndexSetup(
+        database,
+        image_model,
+        text_model,
+        image_backend,
+        text_backend,
+        active_chunking,
+        exact_token_counter,
+        image_generation_id,
+        ocr_generation_id,
+        initial_cursor,
+    )
 
-    refresh_token = f"generation:{image_generation_id}:source:image"
+
+def _stage_image_records(
+    state_directory: Path,
+    setup: _ImageIndexSetup,
+    *,
+    embed_ocr_text: bool,
+    source_record_iterator: ImageRecordIterator,
+    work_budget: SemanticWorkBudget,
+    new_jobs_before: int,
+    progress: ProgressCallback | None,
+) -> _ImageStageResult:
+    refresh_token = f"generation:{setup.image_generation_id}:source:image"
     items_staged = chunks_staged = 0
     image_queued = ocr_queued = 0
     records = source_record_iterator(state_directory)
@@ -322,21 +361,21 @@ def index_image_embeddings(
         ),
     )
     for record in records:
-        if not budget.try_admit_item():
+        if not work_budget.try_admit_item():
             enumeration_complete = False
             break
-        item_new_jobs_before = budget.new_jobs_admitted
-        item_rebounds_before = budget.rebound_members
+        item_new_jobs_before = work_budget.new_jobs_admitted
+        item_rebounds_before = work_budget.rebound_members
         item_count, chunk_count, queued_images, queued_ocr = stage_image_batch(
-            database,
+            setup.database,
             (record,),
             refresh_token=refresh_token,
-            image_generation_id=image_generation_id,
-            ocr_generation_id=ocr_generation_id,
+            image_generation_id=setup.image_generation_id,
+            ocr_generation_id=setup.ocr_generation_id,
             include_ocr_text=embed_ocr_text,
-            chunking=active_chunking,
-            token_counter=exact_token_counter,
-            work_budget=budget,
+            chunking=setup.active_chunking,
+            token_counter=setup.token_counter,
+            work_budget=work_budget,
         )
         items_staged += item_count
         chunks_staged += chunk_count
@@ -357,33 +396,57 @@ def index_image_embeddings(
                         ProgressMetric("queued_work", image_queued + ocr_queued),
                         ProgressMetric(
                             "new_jobs",
-                            budget.new_jobs_admitted - new_jobs_before,
+                            work_budget.new_jobs_admitted - new_jobs_before,
                         ),
                     ),
                 ),
             )
-        if budget.truncated:
+        if work_budget.truncated:
             enumeration_complete = False
             break
         if (
-            budget.new_jobs_admitted == item_new_jobs_before
-            and budget.rebound_members == item_rebounds_before
+            work_budget.new_jobs_admitted == item_new_jobs_before
+            and work_budget.rebound_members == item_rebounds_before
         ):
-            budget.refund_replayed_item()
-    if enumeration_complete and budget.deadline_expired():
+            work_budget.refund_replayed_item()
+    return _ImageStageResult(
+        items_staged,
+        chunks_staged,
+        image_queued,
+        ocr_queued,
+        enumeration_complete,
+    )
+
+
+def _finalize_image_staging(
+    setup: _ImageIndexSetup,
+    stage: _ImageStageResult,
+    *,
+    embed_ocr_text: bool,
+    work_budget: SemanticWorkBudget,
+    new_jobs_before: int,
+    progress: ProgressCallback | None,
+) -> _ImageStageResult:
+    enumeration_complete = stage.enumeration_complete
+    refresh_token = f"generation:{setup.image_generation_id}:source:image"
+    items_staged = stage.items_staged
+    chunks_staged = stage.chunks_staged
+    image_queued = stage.image_queued
+    ocr_queued = stage.ocr_queued
+    if enumeration_complete and work_budget.deadline_expired():
         enumeration_complete = False
     if enumeration_complete:
         finalize_semantic_item_refresh(
-            database,
+            setup.database,
             source_kind=IMAGE_SOURCE_KIND,
             refresh_token=refresh_token,
         )
-        if budget.deadline_expired():
+        if work_budget.deadline_expired():
             enumeration_complete = False
     if enumeration_complete:
         update_embedding_generation_cursor(
-            database,
-            image_generation_id,
+            setup.database,
+            setup.image_generation_id,
             cursor={
                 "protocol": "bounded-v1",
                 "enumeration_complete": True,
@@ -394,19 +457,19 @@ def index_image_embeddings(
         )
     else:
         paused_cursor = {
-            **initial_cursor,
-            "truncation_reason": budget.truncation_reason,
+            **setup.initial_cursor,
+            "truncation_reason": work_budget.truncation_reason,
             "items": items_staged,
         }
         update_embedding_generation_cursor(
-            database,
-            image_generation_id,
+            setup.database,
+            setup.image_generation_id,
             cursor=paused_cursor,
         )
-        if ocr_generation_id is not None:
+        if setup.ocr_generation_id is not None:
             update_embedding_generation_cursor(
-                database,
-                ocr_generation_id,
+                setup.database,
+                setup.ocr_generation_id,
                 cursor=paused_cursor,
             )
     emit_progress(
@@ -428,88 +491,176 @@ def index_image_embeddings(
                 ProgressMetric("queued_work", image_queued + ocr_queued),
                 ProgressMetric(
                     "new_jobs",
-                    budget.new_jobs_admitted - new_jobs_before,
+                    work_budget.new_jobs_admitted - new_jobs_before,
                 ),
             ),
         ),
     )
+    return replace(stage, enumeration_complete=enumeration_complete)
+
+
+def _stage_image_sources(
+    state_directory: Path,
+    setup: _ImageIndexSetup,
+    *,
+    embed_ocr_text: bool,
+    source_record_iterator: ImageRecordIterator,
+    work_budget: SemanticWorkBudget,
+    new_jobs_before: int,
+    progress: ProgressCallback | None,
+) -> _ImageStageResult:
+    staged = _stage_image_records(
+        state_directory,
+        setup,
+        embed_ocr_text=embed_ocr_text,
+        source_record_iterator=source_record_iterator,
+        work_budget=work_budget,
+        new_jobs_before=new_jobs_before,
+        progress=progress,
+    )
+    return _finalize_image_staging(
+        setup,
+        staged,
+        embed_ocr_text=embed_ocr_text,
+        work_budget=work_budget,
+        new_jobs_before=new_jobs_before,
+        progress=progress,
+    )
+
+
+def _run_image_generation(
+    setup: _ImageIndexSetup,
+    generation_id: int,
+    backend: EmbeddingBackend,
+    *,
+    queued: int,
+    enumeration_complete: bool,
+    work_budget: SemanticWorkBudget,
+    generation_runner: GenerationRunner,
+) -> GenerationWorkResult:
     try:
-        image_reused = prepare_embedding_generation(
-            database,
-            image_generation_id,
+        reused = prepare_embedding_generation(
+            setup.database,
+            generation_id,
             enumeration_complete=enumeration_complete,
-            work_budget=budget,
+            work_budget=work_budget,
         )
     except SemanticIndexDeadlineExceeded:
-        image_result = GenerationWorkResult(
-            generation_summary(database, image_generation_id),
-            image_queued,
+        return GenerationWorkResult(
+            generation_summary(setup.database, generation_id),
+            queued,
             0,
             0,
             0,
         )
-    else:
-        image_result = (
-            GenerationWorkResult(image_reused, 0, 0, 0, 0)
-            if image_reused is not None
-            else generation_runner(
-                database,
-                image_generation_id,
-                image_backend,
-                queued=image_queued,
-                work_budget=budget,
-                publish_if_complete=enumeration_complete,
-            )
-        )
+    if reused is not None:
+        return GenerationWorkResult(reused, 0, 0, 0, 0)
+    return generation_runner(
+        setup.database,
+        generation_id,
+        backend,
+        queued=queued,
+        work_budget=work_budget,
+        publish_if_complete=enumeration_complete,
+    )
+
+
+def _run_image_generations(
+    setup: _ImageIndexSetup,
+    stage: _ImageStageResult,
+    *,
+    embed_ocr_text: bool,
+    work_budget: SemanticWorkBudget,
+    generation_runner: GenerationRunner,
+) -> tuple[GenerationWorkResult, ...]:
+    image_result = _run_image_generation(
+        setup,
+        setup.image_generation_id,
+        setup.image_backend,
+        queued=stage.image_queued,
+        enumeration_complete=stage.enumeration_complete,
+        work_budget=work_budget,
+        generation_runner=generation_runner,
+    )
     generation_results = [image_result]
-    if ocr_generation_id is not None and text_backend is not None:
-        if enumeration_complete:
+    if setup.ocr_generation_id is not None and setup.text_backend is not None and embed_ocr_text:
+        if stage.enumeration_complete:
             update_embedding_generation_cursor(
-                database,
-                ocr_generation_id,
+                setup.database,
+                setup.ocr_generation_id,
                 cursor={
                     "protocol": "bounded-v1",
                     "enumeration_complete": True,
                     "selected_sources": ["image", "image-ocr"],
                     "completed_source": "image-ocr",
-                    "chunks": chunks_staged,
+                    "chunks": stage.chunks_staged,
                 },
             )
-        try:
-            ocr_reused = prepare_embedding_generation(
-                database,
-                ocr_generation_id,
-                work_budget=budget,
-                enumeration_complete=enumeration_complete,
+        generation_results.append(
+            _run_image_generation(
+                setup,
+                setup.ocr_generation_id,
+                setup.text_backend,
+                queued=stage.ocr_queued,
+                enumeration_complete=stage.enumeration_complete,
+                work_budget=work_budget,
+                generation_runner=generation_runner,
             )
-        except SemanticIndexDeadlineExceeded:
-            ocr_result = GenerationWorkResult(
-                generation_summary(database, ocr_generation_id),
-                ocr_queued,
-                0,
-                0,
-                0,
-            )
-        else:
-            ocr_result = (
-                GenerationWorkResult(ocr_reused, 0, 0, 0, 0)
-                if ocr_reused is not None
-                else generation_runner(
-                    database,
-                    ocr_generation_id,
-                    text_backend,
-                    queued=ocr_queued,
-                    work_budget=budget,
-                    publish_if_complete=enumeration_complete,
-                )
-            )
-        generation_results.append(ocr_result)
+        )
+    return tuple(generation_results)
+
+
+def index_image_embeddings(
+    state_directory: Path,
+    *,
+    model_cache_override: Path | None,
+    local_files_only: bool,
+    threads: int | None,
+    embed_ocr_text: bool,
+    ocr_model: EmbeddingModelSpec | None,
+    chunking: TextChunkingConfig | None,
+    backend_factory: BackendFactory,
+    source_record_iterator: ImageRecordIterator,
+    generation_runner: GenerationRunner,
+    work_budget: SemanticWorkBudget | None = None,
+    progress: ProgressCallback | None = None,
+) -> SemanticIndexResult:
+    """Index visual CLIP vectors and retained OCR in separate compatible spaces."""
+
+    budget = work_budget or unlimited_semantic_work_budget()
+    new_jobs_before = budget.new_jobs_admitted
+    setup = _prepare_image_index(
+        state_directory,
+        model_cache_override=model_cache_override,
+        local_files_only=local_files_only,
+        threads=threads,
+        embed_ocr_text=embed_ocr_text,
+        ocr_model=ocr_model,
+        chunking=chunking,
+        backend_factory=backend_factory,
+    )
+    stage = _stage_image_sources(
+        state_directory,
+        setup,
+        embed_ocr_text=embed_ocr_text,
+        source_record_iterator=source_record_iterator,
+        work_budget=budget,
+        new_jobs_before=new_jobs_before,
+        progress=progress,
+    )
+    generation_results = _run_image_generations(
+        setup,
+        stage,
+        embed_ocr_text=embed_ocr_text,
+        work_budget=budget,
+        generation_runner=generation_runner,
+    )
     return SemanticIndexResult(
-        database,
+        setup.database,
         ("image", "image-ocr") if embed_ocr_text else ("image",),
-        items_staged,
-        chunks_staged,
-        tuple(generation_results),
+        stage.items_staged,
+        stage.chunks_staged,
+        generation_results,
         new_jobs_staged=budget.new_jobs_admitted - new_jobs_before,
         truncated=budget.truncated,
         truncation_reason=budget.truncation_reason,
